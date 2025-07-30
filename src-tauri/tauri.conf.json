@@ -1,0 +1,48 @@
+{
+	"$schema": "https://schema.tauri.app/config/2",
+	"productName": "Realtr",
+	"version": "1.0.0",
+	"identifier": "com.gumeq.realtr",
+	"build": {
+		"beforeDevCommand": "npm run dev",
+		"devUrl": "http://localhost:1420",
+		"beforeBuildCommand": "npm run build",
+		"frontendDist": "../build"
+	},
+	"app": {
+		"windows": [
+			{
+				"title": "Realtr",
+				"width": 1200,
+				"height": 800,
+				"minWidth": 800,
+				"minHeight": 600
+			}
+		],
+		"security": {
+			"csp": null
+		}
+	},
+	"bundle": {
+		"active": true,
+		"category": "Productivity",
+		"copyright": "© 2025 Gumeq",
+		"longDescription": "Professional photo management workflow for real estate photography",
+		"shortDescription": "Photo workflow management",
+		"targets": "all",
+		"windows": {
+			"certificateThumbprint": null,
+			"digestAlgorithm": "sha256",
+			"timestampUrl": ""
+		},
+		"linux": {
+			"deb": {
+				"depends": []
+			}
+		},
+		"macOS": {
+			"frameworks": [],
+			"minimumSystemVersion": "10.15"
+		}
+	}
+}
