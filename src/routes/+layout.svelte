@@ -3,6 +3,7 @@
   import { page } from '$app/stores'
   import { onMount } from 'svelte'
   import { browser } from '$app/environment'
+	import { checkForUpdates } from '$lib/utils/updater';
 
   let { children } = $props();
   let isDarkMode = $state(false);
@@ -33,6 +34,7 @@
       isDarkMode = saved ? saved === 'true' : window.matchMedia('(prefers-color-scheme: dark)').matches;
       document.documentElement.classList.toggle('dark', isDarkMode);
     }
+    setTimeout(() => checkForUpdates(false), 5000);
   });
 </script>
 
