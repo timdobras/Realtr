@@ -57,9 +57,7 @@
   "plugins": {
     "updater": {
       "active": true,
-      "endpoints": [
-        "https://github.com/timdobras/realtor-photo-manager/releases/latest/download/latest.json"
-      ],
+      "endpoints": ["https://github.com/timdobras/Realtr/releases/latest/download/latest.json"],
       "dialog": true,
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE5QkVCNDZEODU0Njc4RjIKUldUeWVFYUZiYlMrcVV5WFZaRlBiQXdROFdSNGRVYUNtb3JxeU02YklaNGI2bUdheGppZWFjekcK"
     }
