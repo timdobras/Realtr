@@ -47,13 +47,13 @@
 
     try {
       // Get list of image filenames
-      const response = await invoke('list_original_images', { 
+      const response = await invoke('list_original_images', {
         folderPath: property.folder_path
       });
-      
+
       if (Array.isArray(response)) {
         // Initialize array with filenames and loading states
-        originalImages = response.map(filename => ({
+        originalImages = response.map((filename) => ({
           filename,
           dataUrl: '',
           loading: true
@@ -70,12 +70,17 @@
 
             // Determine MIME type based on file extension
             const ext = image.filename.split('.').pop()?.toLowerCase() || '';
-            const mimeType = ['jpg', 'jpeg'].includes(ext) ? 'image/jpeg'
-                          : ext === 'png' ? 'image/png'
-                          : ext === 'gif' ? 'image/gif'
-                          : ext === 'webp' ? 'image/webp'
-                          : ext === 'bmp' ? 'image/bmp'
-                          : 'image/jpeg'; // default
+            const mimeType = ['jpg', 'jpeg'].includes(ext)
+              ? 'image/jpeg'
+              : ext === 'png'
+                ? 'image/png'
+                : ext === 'gif'
+                  ? 'image/gif'
+                  : ext === 'webp'
+                    ? 'image/webp'
+                    : ext === 'bmp'
+                      ? 'image/bmp'
+                      : 'image/jpeg'; // default
 
             // Update the image with base64 data
             originalImages[i] = {
@@ -104,11 +109,8 @@
     if (!property) return;
 
     try {
-      const result = await DatabaseService.openImagesInFolder(
-        property.folder_path,
-        filename
-      );
-      
+      const result = await DatabaseService.openImagesInFolder(property.folder_path, filename);
+
       if (!result.success) {
         error = result.error || 'Failed to open image';
       }
@@ -125,7 +127,7 @@
       const result = await invoke('open_property_folder', {
         folderPath: property.folder_path
       });
-      
+
       if (result.success) {
         showFolderMessage('Folder opened successfully!', 'success');
       } else {
@@ -145,7 +147,7 @@
       const result = await invoke('get_full_property_path', {
         folderPath: property.folder_path
       });
-      
+
       if (result.success && result.data?.full_path) {
         await navigator.clipboard.writeText(result.data.full_path);
         showFolderMessage('Path copied to clipboard!', 'success');
@@ -169,7 +171,7 @@
   function showFolderMessage(message: string, type: 'success' | 'error') {
     folderMessage = message;
     folderMessageType = type;
-    
+
     // Clear message after 3 seconds
     setTimeout(() => {
       folderMessage = '';
@@ -179,60 +181,64 @@
 </script>
 
 {#if loading}
-  <div class="flex items-center justify-center h-64">
+  <div class="flex h-64 items-center justify-center">
     <div class="text-center">
-      <div class="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+      <div
+        class="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent"
+      ></div>
       <p class="text-foreground-600">Loading property data...</p>
     </div>
   </div>
 {:else if error}
   <div class="p-6">
-    <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+    <div class="rounded-lg border border-red-200 bg-red-50 p-4">
       <div class="flex items-center space-x-2">
         <span class="text-red-600">❌</span>
-        <p class="text-red-800 font-medium">{error}</p>
+        <p class="font-medium text-red-800">{error}</p>
       </div>
     </div>
   </div>
 {:else if property}
   <div class="space-y-6 p-6">
     <!-- Property Details -->
-    <section class="bg-background-100 rounded-xl shadow-sm border border-background-200 p-6">
-      <div class="flex items-start justify-between mb-4">
+    <section class="bg-background-100 border-background-200 rounded-xl border p-6 shadow-sm">
+      <div class="mb-4 flex items-start justify-between">
         <div class="flex-1">
-          <h1 class="text-3xl font-bold text-foreground-900 mb-3">{property.name}</h1>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <h1 class="text-foreground-900 mb-3 text-3xl font-bold">{property.name}</h1>
+          <div class="mb-4 grid grid-cols-1 gap-4 md:grid-cols-2">
             <div class="flex items-center space-x-2">
               <span class="text-lg">📍</span>
-              <span class="font-medium text-foreground-700">City:</span>
+              <span class="text-foreground-700 font-medium">City:</span>
               <span class="text-foreground-600">{property.city}</span>
             </div>
             <div class="flex items-center space-x-2">
               <span class="text-lg">{property.completed ? '✅' : '🔄'}</span>
-              <span class="font-medium text-foreground-700">Status:</span>
-              <span class="px-2 py-1 text-xs font-medium rounded-full {property.completed 
-                ? 'bg-green-100 text-green-700' 
-                : 'bg-orange-100 text-orange-700'}">
+              <span class="text-foreground-700 font-medium">Status:</span>
+              <span
+                class="rounded-full px-2 py-1 text-xs font-medium {property.completed
+                  ? 'bg-green-100 text-green-700'
+                  : 'bg-orange-100 text-orange-700'}"
+              >
                 {property.completed ? 'Completed' : 'In Progress'}
               </span>
             </div>
           </div>
         </div>
-        
+
         <!-- Action Buttons -->
         <div class="flex flex-col space-y-2">
           <button
             onclick={openPropertyFolder}
-            class="flex items-center space-x-2 px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-all duration-200 text-sm font-medium border border-blue-200"
+            class="flex items-center space-x-2 rounded-lg border border-blue-200 bg-blue-100 px-4 py-2 text-sm font-medium text-blue-700 transition-all duration-200 hover:bg-blue-200"
             title="Open Property Folder"
           >
             <span>📁</span>
             <span>Open Folder</span>
           </button>
-          
+
           <button
             onclick={copyFolderPath}
-            class="flex items-center space-x-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-all duration-200 text-sm font-medium border border-gray-200"
+            class="flex items-center space-x-2 rounded-lg border border-gray-200 bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 transition-all duration-200 hover:bg-gray-200"
             title="Copy Folder Path"
           >
             <span>📋</span>
@@ -242,20 +248,24 @@
       </div>
 
       <!-- Folder Path Display -->
-      <div class="bg-background-50 border border-background-200 rounded-lg p-4 mb-4">
+      <div class="bg-background-50 border-background-200 mb-4 rounded-lg border p-4">
         <div class="flex items-center justify-between">
           <div>
-            <p class="text-xs text-foreground-500 uppercase tracking-wide font-medium mb-1">Folder Path</p>
-            <p class="text-sm text-foreground-700 font-mono break-all">{property.folder_path}</p>
+            <p class="text-foreground-500 mb-1 text-xs font-medium tracking-wide uppercase">
+              Folder Path
+            </p>
+            <p class="text-foreground-700 font-mono text-sm break-all">{property.folder_path}</p>
           </div>
         </div>
       </div>
 
       <!-- Success/Error Message -->
       {#if folderMessage}
-        <div class="mb-4 p-3 rounded-lg border {folderMessageType === 'success' 
-          ? 'bg-green-50 border-green-200 text-green-800' 
-          : 'bg-red-50 border-red-200 text-red-800'}">
+        <div
+          class="mb-4 rounded-lg border p-3 {folderMessageType === 'success'
+            ? 'border-green-200 bg-green-50 text-green-800'
+            : 'border-red-200 bg-red-50 text-red-800'}"
+        >
           <div class="flex items-center space-x-2">
             <span>{folderMessageType === 'success' ? '✅' : '❌'}</span>
             <span class="text-sm font-medium">{folderMessage}</span>
@@ -265,21 +275,23 @@
 
       <!-- Notes -->
       {#if property.notes}
-        <div class="bg-background-50 border border-background-200 rounded-lg p-4 mb-4">
-          <p class="text-xs text-foreground-500 uppercase tracking-wide font-medium mb-2">Notes</p>
+        <div class="bg-background-50 border-background-200 mb-4 rounded-lg border p-4">
+          <p class="text-foreground-500 mb-2 text-xs font-medium tracking-wide uppercase">Notes</p>
           <p class="text-foreground-700 whitespace-pre-wrap">{property.notes}</p>
         </div>
       {/if}
 
       <!-- Timestamps -->
-      <div class="flex items-center space-x-6 text-xs text-foreground-500 pt-4 border-t border-background-200">
+      <div
+        class="text-foreground-500 border-background-200 flex items-center space-x-6 border-t pt-4 text-xs"
+      >
         <div class="flex items-center space-x-2">
-          <span class="w-1.5 h-1.5 bg-green-400 rounded-full"></span>
+          <span class="h-1.5 w-1.5 rounded-full bg-green-400"></span>
           <span>Created: {formatDate(property.created_at)}</span>
         </div>
         {#if property.updated_at !== property.created_at}
           <div class="flex items-center space-x-2">
-            <span class="w-1.5 h-1.5 bg-blue-400 rounded-full"></span>
+            <span class="h-1.5 w-1.5 rounded-full bg-blue-400"></span>
             <span>Updated: {formatDate(property.updated_at)}</span>
           </div>
         {/if}
@@ -287,12 +299,12 @@
     </section>
 
     <!-- Workflow Steps Navigation -->
-    <section class="bg-background-100 rounded-xl shadow-sm border border-background-200 p-6">
-      <h2 class="text-lg font-semibold text-foreground-900 mb-4">Workflow Steps</h2>
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <a 
-          href="/properties/{property.id}/step1" 
-          class="flex items-center space-x-3 p-4 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
+    <section class="bg-background-100 border-background-200 rounded-xl border p-6 shadow-sm">
+      <h2 class="text-foreground-900 mb-4 text-lg font-semibold">Workflow Steps</h2>
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-4">
+        <a
+          href="/properties/{property.id}/step1"
+          class="flex items-center space-x-3 rounded-lg border border-blue-200 bg-blue-50 p-4 transition-colors hover:bg-blue-100"
         >
           <span class="text-2xl">📁</span>
           <div>
@@ -300,10 +312,10 @@
             <p class="text-sm text-blue-700">Copy to INTERNET</p>
           </div>
         </a>
-        
-        <a 
-          href="/properties/{property.id}/step2" 
-          class="flex items-center space-x-3 p-4 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition-colors"
+
+        <a
+          href="/properties/{property.id}/step2"
+          class="flex items-center space-x-3 rounded-lg border border-purple-200 bg-purple-50 p-4 transition-colors hover:bg-purple-100"
         >
           <span class="text-2xl">🔢</span>
           <div>
@@ -311,10 +323,10 @@
             <p class="text-sm text-purple-700">Order & Rename</p>
           </div>
         </a>
-        
-        <a 
-          href="/properties/{property.id}/step3" 
-          class="flex items-center space-x-3 p-4 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors"
+
+        <a
+          href="/properties/{property.id}/step3"
+          class="flex items-center space-x-3 rounded-lg border border-indigo-200 bg-indigo-50 p-4 transition-colors hover:bg-indigo-100"
         >
           <span class="text-2xl">✏️</span>
           <div>
@@ -322,10 +334,10 @@
             <p class="text-sm text-indigo-700">Copy to AGGELIA</p>
           </div>
         </a>
-        
-        <a 
-          href="/properties/{property.id}/step4" 
-          class="flex items-center space-x-3 p-4 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors"
+
+        <a
+          href="/properties/{property.id}/step4"
+          class="flex items-center space-x-3 rounded-lg border border-amber-200 bg-amber-50 p-4 transition-colors hover:bg-amber-100"
         >
           <span class="text-2xl">🏷️</span>
           <div>
@@ -337,40 +349,44 @@
     </section>
 
     <!-- Original Images Gallery -->
-    <section class="bg-background-100 rounded-xl shadow-sm border border-background-200 p-6">
-      <div class="flex items-center justify-between mb-6">
-        <h2 class="text-xl font-semibold text-foreground-900">
+    <section class="bg-background-100 border-background-200 rounded-xl border p-6 shadow-sm">
+      <div class="mb-6 flex items-center justify-between">
+        <h2 class="text-foreground-900 text-xl font-semibold">
           Original Images ({originalImages.length})
         </h2>
         {#if originalImages.length > 0}
-          <div class="text-sm text-foreground-500">
-            Click images to open in system viewer
-          </div>
+          <div class="text-foreground-500 text-sm">Click images to open in system viewer</div>
         {/if}
       </div>
 
       {#if originalImages.length === 0}
-        <div class="text-center py-16">
-          <div class="w-24 h-24 bg-background-200 rounded-full flex items-center justify-center mx-auto mb-4">
+        <div class="py-16 text-center">
+          <div
+            class="bg-background-200 mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full"
+          >
             <span class="text-3xl">📷</span>
           </div>
-          <h3 class="text-lg font-medium text-foreground-700 mb-2">No original images found</h3>
-          <p class="text-foreground-500 mb-6">Upload some images to get started with your workflow.</p>
+          <h3 class="text-foreground-700 mb-2 text-lg font-medium">No original images found</h3>
+          <p class="text-foreground-500 mb-6">
+            Upload some images to get started with your workflow.
+          </p>
         </div>
       {:else}
-        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+        <div class="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
           {#each originalImages as image}
-            <div class="relative group">
-              <button 
-                class="w-full aspect-square bg-background-100 rounded-xl overflow-hidden border border-background-300 hover:border-background-400 hover:shadow-lg transition-all duration-200" 
+            <div class="group relative">
+              <button
+                class="bg-background-100 border-background-300 hover:border-background-400 aspect-square w-full overflow-hidden rounded-xl border transition-all duration-200 hover:shadow-lg"
                 onclick={() => openImage(image.filename)}
               >
                 {#if image.loading}
                   <!-- Loading state -->
-                  <div class="w-full h-full bg-background-100 flex items-center justify-center">
+                  <div class="bg-background-100 flex h-full w-full items-center justify-center">
                     <div class="text-center">
-                      <div class="animate-spin w-6 h-6 border-3 border-blue-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-                      <span class="text-xs text-foreground-500">Loading...</span>
+                      <div
+                        class="mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-3 border-blue-500 border-t-transparent"
+                      ></div>
+                      <span class="text-foreground-500 text-xs">Loading...</span>
                     </div>
                   </div>
                 {:else if image.dataUrl}
@@ -379,21 +395,23 @@
                     src={image.dataUrl}
                     alt={image.filename}
                     loading="lazy"
-                    class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                   />
                 {:else}
                   <!-- Error fallback -->
-                  <div class="w-full h-full bg-red-100 flex items-center justify-center">
+                  <div class="flex h-full w-full items-center justify-center bg-red-100">
                     <div class="text-center text-red-500">
-                      <span class="text-2xl block mb-2">❌</span>
+                      <span class="mb-2 block text-2xl">❌</span>
                       <span class="text-xs">Failed to load</span>
                     </div>
                   </div>
                 {/if}
-                
+
                 <!-- Filename overlay -->
-                <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/60 to-transparent p-3 pt-6">
-                  <p class="text-white text-xs font-medium truncate" title={image.filename}>
+                <div
+                  class="absolute right-0 bottom-0 left-0 bg-gradient-to-t from-black/80 via-black/60 to-transparent p-3 pt-6"
+                >
+                  <p class="truncate text-xs font-medium text-white" title={image.filename}>
                     {image.filename}
                   </p>
                 </div>

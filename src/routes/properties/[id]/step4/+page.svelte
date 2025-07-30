@@ -32,10 +32,10 @@
         const match = filename.match(/^(\d+)/);
         return match ? parseInt(match[1]) : Infinity;
       };
-      
+
       const numA = getNumericValue(a);
       const numB = getNumericValue(b);
-      
+
       if (numA !== Infinity && numB !== Infinity) {
         return numA - numB;
       } else {
@@ -88,13 +88,13 @@
 
     try {
       // Load WATERMARK images
-      const watermarkList = await invoke('list_watermark_images', { 
+      const watermarkList = await invoke('list_watermark_images', {
         folderPath: property.folder_path
       });
-      
+
       if (Array.isArray(watermarkList)) {
         const sortedWatermarkList = sortImagesByNumericFilename(watermarkList);
-        watermarkImages = sortedWatermarkList.map(filename => ({
+        watermarkImages = sortedWatermarkList.map((filename) => ({
           filename,
           dataUrl: '',
           loading: true
@@ -125,13 +125,13 @@
       }
 
       // Load WATERMARK/AGGELIA images
-      const aggeliaList = await invoke('list_watermark_aggelia_images', { 
+      const aggeliaList = await invoke('list_watermark_aggelia_images', {
         folderPath: property.folder_path
       });
-      
+
       if (Array.isArray(aggeliaList)) {
         const sortedAggeliaList = sortImagesByNumericFilename(aggeliaList);
-        watermarkAggeliaImages = sortedAggeliaList.map(filename => ({
+        watermarkAggeliaImages = sortedAggeliaList.map((filename) => ({
           filename,
           dataUrl: '',
           loading: true
@@ -167,12 +167,17 @@
   }
 
   function getMimeType(ext: string): string {
-    return ['jpg', 'jpeg'].includes(ext) ? 'image/jpeg'
-         : ext === 'png' ? 'image/png'
-         : ext === 'gif' ? 'image/gif'
-         : ext === 'webp' ? 'image/webp'
-         : ext === 'bmp' ? 'image/bmp'
-         : 'image/jpeg';
+    return ['jpg', 'jpeg'].includes(ext)
+      ? 'image/jpeg'
+      : ext === 'png'
+        ? 'image/png'
+        : ext === 'gif'
+          ? 'image/gif'
+          : ext === 'webp'
+            ? 'image/webp'
+            : ext === 'bmp'
+              ? 'image/bmp'
+              : 'image/jpeg';
   }
 
   async function applyWatermarksToAllImages() {
@@ -181,8 +186,9 @@
       return;
     }
 
-    const confirmMessage = 'This will copy images from INTERNET folders to WATERMARK folders and apply watermark to them. This may take a while. Continue?';
-    
+    const confirmMessage =
+      'This will copy images from INTERNET folders to WATERMARK folders and apply watermark to them. This may take a while. Continue?';
+
     if (!confirm(confirmMessage)) {
       return;
     }
@@ -239,7 +245,11 @@
   }
 
   async function clearWatermarkFolders() {
-    if (!confirm('Are you sure you want to clear all watermarked images? This action cannot be undone.')) {
+    if (
+      !confirm(
+        'Are you sure you want to clear all watermarked images? This action cannot be undone.'
+      )
+    ) {
       return;
     }
 
@@ -263,12 +273,12 @@
 
     try {
       const result = await invoke('open_images_in_folder', {
-        folderPath: fromAggelia 
+        folderPath: fromAggelia
           ? `${property.folder_path}/WATERMARK/AGGELIA`
           : `${property.folder_path}/WATERMARK`,
         selectedImage: filename
       });
-      
+
       if (!result.success) {
         error = result.error || 'Failed to open image';
       }
@@ -283,41 +293,48 @@
 </script>
 
 {#if loading}
-  <div class="flex items-center justify-center h-64">
+  <div class="flex h-64 items-center justify-center">
     <div class="text-center">
-      <div class="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+      <div
+        class="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent"
+      ></div>
       <p class="text-foreground-600">Loading watermark data...</p>
     </div>
   </div>
 {:else if error}
   <div class="p-6">
-    <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+    <div class="rounded-lg border border-red-200 bg-red-50 p-4">
       <div class="flex items-center space-x-2">
         <span class="text-red-600">❌</span>
-        <p class="text-red-800 font-medium">{error}</p>
+        <p class="font-medium text-red-800">{error}</p>
       </div>
     </div>
   </div>
 {:else if property}
   <div class="space-y-6 p-6">
-
     <!-- Processing Progress -->
     {#if processingWatermarksVar || processingProgress > 0}
-      <div class="bg-blue-50 rounded-xl p-6 border border-blue-200">
-        <div class="flex items-center space-x-4 mb-4">
-          <div class="animate-spin w-6 h-6 border-3 border-blue-500 border-t-transparent rounded-full"></div>
+      <div class="rounded-xl border border-blue-200 bg-blue-50 p-6">
+        <div class="mb-4 flex items-center space-x-4">
+          <div
+            class="h-6 w-6 animate-spin rounded-full border-3 border-blue-500 border-t-transparent"
+          ></div>
           <div class="flex-1">
-            <p class="font-medium text-blue-900">{processingStatus || 'Processing watermarks...'}</p>
-            <p class="text-sm text-blue-700">Please wait while we apply watermarks to your images.</p>
+            <p class="font-medium text-blue-900">
+              {processingStatus || 'Processing watermarks...'}
+            </p>
+            <p class="text-sm text-blue-700">
+              Please wait while we apply watermarks to your images.
+            </p>
           </div>
         </div>
-        <div class="w-full bg-blue-200 rounded-full h-4">
-          <div 
-            class="bg-blue-600 h-4 rounded-full transition-all duration-300 ease-out"
+        <div class="h-4 w-full rounded-full bg-blue-200">
+          <div
+            class="h-4 rounded-full bg-blue-600 transition-all duration-300 ease-out"
             style="width: {processingProgress}%"
           ></div>
         </div>
-        <div class="flex justify-between mt-2 text-xs text-blue-600">
+        <div class="mt-2 flex justify-between text-xs text-blue-600">
           <span>Processing...</span>
           <span>{Math.round(processingProgress)}%</span>
         </div>
@@ -325,88 +342,100 @@
     {/if}
 
     <!-- Statistics Dashboard -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <div class="bg-background-100 rounded-xl shadow-sm border border-background-200 p-6">
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+      <div class="bg-background-100 border-background-200 rounded-xl border p-6 shadow-sm">
         <div class="flex items-center space-x-3">
-          <div class="w-12 h-12 bg-amber-100 rounded-lg flex items-center justify-center">
+          <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-amber-100">
             <span class="text-2xl">🏷️</span>
           </div>
           <div>
-            <p class="text-2xl font-bold text-foreground-900">{watermarkImages.length}</p>
-            <p class="text-sm text-foreground-600">Watermarked Images</p>
+            <p class="text-foreground-900 text-2xl font-bold">{watermarkImages.length}</p>
+            <p class="text-foreground-600 text-sm">Watermarked Images</p>
           </div>
         </div>
       </div>
 
-      <div class="bg-background-100 rounded-xl shadow-sm border border-background-200 p-6">
+      <div class="bg-background-100 border-background-200 rounded-xl border p-6 shadow-sm">
         <div class="flex items-center space-x-3">
-          <div class="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+          <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-purple-100">
             <span class="text-2xl">🎨</span>
           </div>
           <div>
-            <p class="text-2xl font-bold text-foreground-900">{watermarkAggeliaImages.length}</p>
-            <p class="text-sm text-foreground-600">Advanced + Watermark</p>
+            <p class="text-foreground-900 text-2xl font-bold">{watermarkAggeliaImages.length}</p>
+            <p class="text-foreground-600 text-sm">Advanced + Watermark</p>
           </div>
         </div>
       </div>
 
-      <div class="bg-background-100 rounded-xl shadow-sm border border-background-200 p-6">
+      <div class="bg-background-100 border-background-200 rounded-xl border p-6 shadow-sm">
         <div class="flex items-center space-x-3">
-          <div class="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+          <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-green-100">
             <span class="text-2xl">📊</span>
           </div>
           <div>
-            <p class="text-2xl font-bold text-foreground-900">{totalWatermarkedImages}</p>
-            <p class="text-sm text-foreground-600">Total Ready</p>
+            <p class="text-foreground-900 text-2xl font-bold">{totalWatermarkedImages}</p>
+            <p class="text-foreground-600 text-sm">Total Ready</p>
           </div>
         </div>
       </div>
-
     </div>
 
     <!-- Watermark Configuration Display -->
-    <div class="bg-background-100 rounded-xl shadow-sm p-6 border border-background-200">
-      <h2 class="text-lg font-semibold mb-6 text-foreground-900">Watermark Configuration</h2>
+    <div class="bg-background-100 border-background-200 rounded-xl border p-6 shadow-sm">
+      <h2 class="text-foreground-900 mb-6 text-lg font-semibold">Watermark Configuration</h2>
       {#if watermarkConfig?.imagePath}
         <div class="flex items-center space-x-6">
-          <div class="w-20 h-20 bg-background-100 border-2 border-background-300 rounded-xl flex items-center justify-center overflow-hidden shadow-inner">
-            <img 
-              src={`file://${watermarkConfig.imagePath}`} 
+          <div
+            class="bg-background-100 border-background-300 flex h-20 w-20 items-center justify-center overflow-hidden rounded-xl border-2 shadow-inner"
+          >
+            <img
+              src={`file://${watermarkConfig.imagePath}`}
               alt="Watermark preview"
-              class="max-w-full max-h-full object-contain"
+              class="max-h-full max-w-full object-contain"
               style="opacity: {watermarkConfig.opacity}"
               onerror={() => {}}
             />
           </div>
           <div class="flex-1">
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
               <div class="bg-background-50 rounded-lg p-4">
-                <p class="text-xs text-foreground-500 uppercase tracking-wide font-medium">Status</p>
+                <p class="text-foreground-500 text-xs font-medium tracking-wide uppercase">
+                  Status
+                </p>
                 <p class="text-sm font-semibold text-green-600">✅ Configured</p>
               </div>
               <div class="bg-background-50 rounded-lg p-4">
-                <p class="text-xs text-foreground-500 uppercase tracking-wide font-medium">Opacity</p>
-                <p class="text-sm font-semibold text-foreground-900">{Math.round(watermarkConfig.opacity * 100)}%</p>
+                <p class="text-foreground-500 text-xs font-medium tracking-wide uppercase">
+                  Opacity
+                </p>
+                <p class="text-foreground-900 text-sm font-semibold">
+                  {Math.round(watermarkConfig.opacity * 100)}%
+                </p>
               </div>
               <div class="bg-background-50 rounded-lg p-4">
-                <p class="text-xs text-foreground-500 uppercase tracking-wide font-medium">Position</p>
-                <p class="text-sm font-semibold text-foreground-900">Center</p>
+                <p class="text-foreground-500 text-xs font-medium tracking-wide uppercase">
+                  Position
+                </p>
+                <p class="text-foreground-900 text-sm font-semibold">Center</p>
               </div>
             </div>
           </div>
         </div>
       {:else}
-        <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-6">
+        <div class="rounded-xl border border-yellow-200 bg-yellow-50 p-6">
           <div class="flex items-center space-x-3">
-            <div class="w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center">
+            <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-yellow-100">
               <span class="text-2xl">⚠️</span>
             </div>
             <div class="flex-1">
-              <h3 class="font-medium text-yellow-900 mb-1">Watermark Not Configured</h3>
-              <p class="text-sm text-yellow-800 mb-3">
+              <h3 class="mb-1 font-medium text-yellow-900">Watermark Not Configured</h3>
+              <p class="mb-3 text-sm text-yellow-800">
                 Please configure your watermark image and opacity before applying watermarks.
               </p>
-              <a href="/settings" class="inline-flex items-center space-x-2 bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium">
+              <a
+                href="/settings"
+                class="inline-flex items-center space-x-2 rounded-lg bg-yellow-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-yellow-700"
+              >
                 <span>⚙️</span>
                 <span>Go to Settings</span>
               </a>
@@ -417,36 +446,40 @@
     </div>
 
     <!-- Action Controls -->
-    <div class="bg-background-100 rounded-xl shadow-sm p-6 border border-background-200">
-      <h2 class="text-lg font-semibold mb-6 text-foreground-900">Watermark Actions</h2>
-      
-      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between space-y-4 lg:space-y-0 lg:space-x-6">
+    <div class="bg-background-100 border-background-200 rounded-xl border p-6 shadow-sm">
+      <h2 class="text-foreground-900 mb-6 text-lg font-semibold">Watermark Actions</h2>
+
+      <div
+        class="flex flex-col space-y-4 lg:flex-row lg:items-center lg:justify-between lg:space-y-0 lg:space-x-6"
+      >
         <div class="flex-1">
           <p class="text-foreground-700 mb-2">
             Apply watermarks to all images from INTERNET and INTERNET/AGGELIA folders.
           </p>
-          <p class="text-sm text-foreground-500">
+          <p class="text-foreground-500 text-sm">
             This will create watermarked copies in WATERMARK and WATERMARK/AGGELIA folders.
           </p>
         </div>
 
-        <div class="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4">
+        <div class="flex flex-col space-y-3 sm:flex-row sm:space-y-0 sm:space-x-4">
           <button
             onclick={applyWatermarksToAllImages}
             disabled={processingWatermarksVar || !watermarkConfig?.imagePath}
-            class="btn-primary disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 px-6 py-3 bg-blue-700 cursor-pointer rounded-lg "
+            class="btn-primary flex cursor-pointer items-center justify-center space-x-2 rounded-lg bg-blue-700 px-6 py-3 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <span class="text-lg">🏷️</span>
             <span>Apply Watermarks</span>
             {#if processingWatermarksVar}
-              <div class="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full ml-2"></div>
+              <div
+                class="ml-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
+              ></div>
             {/if}
           </button>
-          
+
           <button
             onclick={clearWatermarkFolders}
             disabled={processingWatermarksVar || totalWatermarkedImages === 0}
-            class="bg-red-600 hover:bg-red-700 text-white font-medium px-6 py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+            class="flex items-center justify-center space-x-2 rounded-lg bg-red-600 px-6 py-3 font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <span>🗑️</span>
             <span>Clear All</span>
@@ -455,43 +488,46 @@
       </div>
     </div>
 
-
     <!-- WATERMARK Images Section -->
-    <section class="bg-background-100 rounded-xl shadow-sm border border-background-200">
+    <section class="bg-background-100 border-background-200 rounded-xl border shadow-sm">
       <div class="p-6">
-        <div class="flex items-center justify-between mb-6">
-          <h2 class="text-xl font-semibold text-foreground-900">
+        <div class="mb-6 flex items-center justify-between">
+          <h2 class="text-foreground-900 text-xl font-semibold">
             WATERMARK Folder ({watermarkImages.length})
           </h2>
           {#if watermarkImages.length > 0}
-            <div class="text-sm text-foreground-500">
-              Click images to view • Publication ready
-            </div>
+            <div class="text-foreground-500 text-sm">Click images to view • Publication ready</div>
           {/if}
         </div>
-        
+
         {#if watermarkImages.length === 0}
-          <div class="text-center py-16">
-            <div class="w-24 h-24 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <div class="py-16 text-center">
+            <div
+              class="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-amber-100"
+            >
               <span class="text-3xl">🏷️</span>
             </div>
-            <h3 class="text-lg font-medium text-foreground-700 mb-2">No watermarked images yet</h3>
-            <p class="text-foreground-500 mb-6">Click "Apply Watermarks" to create watermarked copies of your images.</p>
+            <h3 class="text-foreground-700 mb-2 text-lg font-medium">No watermarked images yet</h3>
+            <p class="text-foreground-500 mb-6">
+              Click "Apply Watermarks" to create watermarked copies of your images.
+            </p>
           </div>
         {:else}
-          <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+          <div class="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
             {#each watermarkImages as image}
-              <div class="relative group">
-                <button 
-                  class="w-full aspect-square bg-background-100 rounded-xl overflow-hidden border-2 border-amber-300 shadow-amber-100 shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200" 
+              <div class="group relative">
+                <button
+                  class="bg-background-100 aspect-square w-full overflow-hidden rounded-xl border-2 border-amber-300 shadow-lg shadow-amber-100 transition-all duration-200 hover:scale-105 hover:shadow-xl"
                   onclick={() => openWatermarkedImage(image.filename, false)}
                   disabled={processingWatermarksVar}
                 >
                   {#if image.loading}
-                    <div class="w-full h-full bg-background-100 flex items-center justify-center">
+                    <div class="bg-background-100 flex h-full w-full items-center justify-center">
                       <div class="text-center">
-                        <div class="animate-spin w-6 h-6 border-3 border-amber-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-                        <p class="text-xs text-foreground-500">Loading...</p>
+                        <div
+                          class="mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-3 border-amber-500 border-t-transparent"
+                        ></div>
+                        <p class="text-foreground-500 text-xs">Loading...</p>
                       </div>
                     </div>
                   {:else if image.dataUrl}
@@ -499,26 +535,30 @@
                       src={image.dataUrl}
                       alt={image.filename}
                       loading="lazy"
-                      class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                     />
                   {:else}
-                    <div class="w-full h-full bg-red-100 flex items-center justify-center">
+                    <div class="flex h-full w-full items-center justify-center bg-red-100">
                       <div class="text-center text-red-500">
-                        <span class="text-2xl block mb-2">❌</span>
+                        <span class="mb-2 block text-2xl">❌</span>
                         <p class="text-xs">Failed to load</p>
                       </div>
                     </div>
                   {/if}
 
                   <!-- Watermark indicator -->
-                  <div class="absolute top-2 right-2 bg-amber-500 text-white text-xs px-2 py-1 rounded-full shadow-lg flex items-center space-x-1">
+                  <div
+                    class="absolute top-2 right-2 flex items-center space-x-1 rounded-full bg-amber-500 px-2 py-1 text-xs text-white shadow-lg"
+                  >
                     <span>🏷️</span>
                     <span class="hidden sm:inline">Watermarked</span>
                   </div>
 
                   <!-- Filename -->
-                  <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-amber-900/80 via-amber-800/60 to-transparent p-3 pt-6">
-                    <p class="text-white text-xs font-medium truncate" title={image.filename}>
+                  <div
+                    class="absolute right-0 bottom-0 left-0 bg-gradient-to-t from-amber-900/80 via-amber-800/60 to-transparent p-3 pt-6"
+                  >
+                    <p class="truncate text-xs font-medium text-white" title={image.filename}>
                       {image.filename}
                     </p>
                   </div>
@@ -531,41 +571,47 @@
     </section>
 
     <!-- WATERMARK/AGGELIA Images Section -->
-    <section class="bg-background-100 rounded-xl shadow-sm border border-background-200">
+    <section class="bg-background-100 border-background-200 rounded-xl border shadow-sm">
       <div class="p-6">
-        <div class="flex items-center justify-between mb-6">
-          <h2 class="text-xl font-semibold text-foreground-900">
+        <div class="mb-6 flex items-center justify-between">
+          <h2 class="text-foreground-900 text-xl font-semibold">
             WATERMARK/AGGELIA Folder ({watermarkAggeliaImages.length})
           </h2>
           {#if watermarkAggeliaImages.length > 0}
-            <div class="text-sm text-foreground-500">
-              Advanced edited + watermarked images
-            </div>
+            <div class="text-foreground-500 text-sm">Advanced edited + watermarked images</div>
           {/if}
         </div>
-        
+
         {#if watermarkAggeliaImages.length === 0}
-          <div class="text-center py-16">
-            <div class="w-24 h-24 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <div class="py-16 text-center">
+            <div
+              class="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-purple-100"
+            >
               <span class="text-3xl">🎨</span>
             </div>
-            <h3 class="text-lg font-medium text-foreground-700 mb-2">No advanced watermarked images yet</h3>
-            <p class="text-foreground-500 mb-6">Advanced edited images with watermarks will appear here.</p>
+            <h3 class="text-foreground-700 mb-2 text-lg font-medium">
+              No advanced watermarked images yet
+            </h3>
+            <p class="text-foreground-500 mb-6">
+              Advanced edited images with watermarks will appear here.
+            </p>
           </div>
         {:else}
-          <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+          <div class="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
             {#each watermarkAggeliaImages as image}
-              <div class="relative group">
-                <button 
-                  class="w-full aspect-square bg-background-100 rounded-xl overflow-hidden border-2 border-indigo-400 shadow-indigo-100 shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200" 
+              <div class="group relative">
+                <button
+                  class="bg-background-100 aspect-square w-full overflow-hidden rounded-xl border-2 border-indigo-400 shadow-lg shadow-indigo-100 transition-all duration-200 hover:scale-105 hover:shadow-xl"
                   onclick={() => openWatermarkedImage(image.filename, true)}
                   disabled={processingWatermarksVar}
                 >
                   {#if image.loading}
-                    <div class="w-full h-full bg-background-100 flex items-center justify-center">
+                    <div class="bg-background-100 flex h-full w-full items-center justify-center">
                       <div class="text-center">
-                        <div class="animate-spin w-6 h-6 border-3 border-indigo-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-                        <p class="text-xs text-foreground-500">Loading...</p>
+                        <div
+                          class="mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-3 border-indigo-500 border-t-transparent"
+                        ></div>
+                        <p class="text-foreground-500 text-xs">Loading...</p>
                       </div>
                     </div>
                   {:else if image.dataUrl}
@@ -573,26 +619,30 @@
                       src={image.dataUrl}
                       alt={image.filename}
                       loading="lazy"
-                      class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                     />
                   {:else}
-                    <div class="w-full h-full bg-red-100 flex items-center justify-center">
+                    <div class="flex h-full w-full items-center justify-center bg-red-100">
                       <div class="text-center text-red-500">
-                        <span class="text-2xl block mb-2">❌</span>
+                        <span class="mb-2 block text-2xl">❌</span>
                         <p class="text-xs">Failed to load</p>
                       </div>
                     </div>
                   {/if}
 
                   <!-- Advanced + Watermark indicator -->
-                  <div class="absolute top-2 right-2 bg-indigo-500 text-white text-xs px-2 py-1 rounded-full shadow-lg flex items-center space-x-1">
+                  <div
+                    class="absolute top-2 right-2 flex items-center space-x-1 rounded-full bg-indigo-500 px-2 py-1 text-xs text-white shadow-lg"
+                  >
                     <span>🎨🏷️</span>
                     <span class="hidden sm:inline">Pro</span>
                   </div>
 
                   <!-- Filename -->
-                  <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-indigo-900/80 via-indigo-800/60 to-transparent p-3 pt-6">
-                    <p class="text-white text-xs font-medium truncate" title={image.filename}>
+                  <div
+                    class="absolute right-0 bottom-0 left-0 bg-gradient-to-t from-indigo-900/80 via-indigo-800/60 to-transparent p-3 pt-6"
+                  >
+                    <p class="truncate text-xs font-medium text-white" title={image.filename}>
                       {image.filename}
                     </p>
                   </div>
@@ -605,28 +655,28 @@
     </section>
 
     <!-- Completion Section -->
-    <div class="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-8 border border-green-200">
+    <div
+      class="rounded-xl border border-green-200 bg-gradient-to-r from-green-50 to-emerald-50 p-8"
+    >
       <div class="text-center">
-        <div class="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
-          <span class="text-2xl ">🎉</span>
+        <div
+          class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-500"
+        >
+          <span class="text-2xl">🎉</span>
         </div>
-        <h3 class="text-2xl font-bold text-green-900 mb-3">Workflow Complete!</h3>
-        <p class="text-green-700 mb-6 max-w-2xl mx-auto">
-          Congratulations! Your images have been processed through all workflow steps. 
-          The WATERMARK folders contain your final, publication-ready images with professional watermarks applied.
+        <h3 class="mb-3 text-2xl font-bold text-green-900">Workflow Complete!</h3>
+        <p class="mx-auto mb-6 max-w-2xl text-green-700">
+          Congratulations! Your images have been processed through all workflow steps. The WATERMARK
+          folders contain your final, publication-ready images with professional watermarks applied.
         </p>
-        <div class="flex flex-col sm:flex-row items-center justify-center space-y-3 sm:space-y-0 sm:space-x-4 text-green-800">
-          <a 
-            href="/properties/{property.id}" 
-            class="btn-primary flex items-center space-x-2"
-          >
+        <div
+          class="flex flex-col items-center justify-center space-y-3 text-green-800 sm:flex-row sm:space-y-0 sm:space-x-4"
+        >
+          <a href="/properties/{property.id}" class="btn-primary flex items-center space-x-2">
             <span>👁️</span>
             <span>View Property Overview</span>
           </a>
-          <a 
-            href="/" 
-            class="btn-secondary flex items-center space-x-2"
-          >
+          <a href="/" class="btn-secondary flex items-center space-x-2">
             <span>🏠</span>
             <span>Back to Dashboard</span>
           </a>
@@ -637,5 +687,4 @@
 {/if}
 
 <style>
-
 </style>

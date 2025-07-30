@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+.svelte-kit/
+
+# Rust directory
+src-tauri/
+
+# Generated files
+*.min.css

@@ -9,7 +9,15 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "lint": "prettier --check src/ && eslint src/",
+    "lint:fix": "eslint src/ --fix && prettier --write src/",
+    "format": "prettier --write src/",
+    "lint:css": "stylelint \"src/**/*.{css,svelte}\"",
+    "rust:fmt": "cd src-tauri && cargo fmt",
+    "rust:clippy": "cd src-tauri && cargo clippy -- -D warnings",
+    "lint:all": "npm run lint && npm run rust:clippy",
+    "format:all": "npm run format && npm run rust:fmt"
   },
   "license": "MIT",
   "dependencies": {
@@ -24,13 +32,25 @@
     "svelte-dnd-action": "^0.9.64"
   },
   "devDependencies": {
+    "@eslint/js": "^9.32.0",
     "@sveltejs/adapter-static": "^3.0.6",
     "@sveltejs/kit": "^2.9.0",
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@tailwindcss/vite": "^4.1.11",
     "@tauri-apps/cli": "^2",
+    "@typescript-eslint/eslint-plugin": "^8.38.0",
+    "@typescript-eslint/parser": "^8.38.0",
+    "eslint": "^9.32.0",
+    "eslint-plugin-svelte": "^3.11.0",
+    "eslint-plugin-tailwindcss": "^3.18.2",
+    "prettier": "^3.6.2",
+    "prettier-plugin-organize-imports": "^4.2.0",
+    "prettier-plugin-svelte": "^3.4.0",
+    "prettier-plugin-tailwindcss": "^0.6.14",
+    "stylelint": "^16.23.0",
+    "stylelint-config-standard": "^39.0.0",
     "svelte": "^5.0.0",
-    "svelte-check": "^4.0.0",
+    "svelte-check": "^4.3.0",
     "tailwindcss": "^4.1.11",
     "typescript": "~5.6.2",
     "vite": "^6.0.3"

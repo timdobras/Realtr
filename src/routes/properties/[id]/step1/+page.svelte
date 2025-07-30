@@ -59,12 +59,12 @@
   async function loadOriginalImages() {
     if (!property) return;
 
-    const response = await invoke('list_original_images', { 
+    const response = await invoke('list_original_images', {
       folderPath: property.folder_path
     });
-    
+
     if (Array.isArray(response)) {
-      originalImages = response.map(filename => ({
+      originalImages = response.map((filename) => ({
         filename,
         dataUrl: '',
         loading: true
@@ -98,12 +98,12 @@
     if (!property) return;
 
     try {
-      const response = await invoke('list_internet_images', { 
+      const response = await invoke('list_internet_images', {
         folderPath: property.folder_path
       });
-      
+
       if (Array.isArray(response)) {
-        internetImages = response.map(filename => ({
+        internetImages = response.map((filename) => ({
           filename,
           dataUrl: '',
           loading: true
@@ -138,12 +138,17 @@
   }
 
   function getMimeType(ext: string): string {
-    return ['jpg', 'jpeg'].includes(ext) ? 'image/jpeg'
-         : ext === 'png' ? 'image/png'
-         : ext === 'gif' ? 'image/gif'
-         : ext === 'webp' ? 'image/webp'
-         : ext === 'bmp' ? 'image/bmp'
-         : 'image/jpeg';
+    return ['jpg', 'jpeg'].includes(ext)
+      ? 'image/jpeg'
+      : ext === 'png'
+        ? 'image/png'
+        : ext === 'gif'
+          ? 'image/gif'
+          : ext === 'webp'
+            ? 'image/webp'
+            : ext === 'bmp'
+              ? 'image/bmp'
+              : 'image/jpeg';
   }
 
   async function copyAllToInternet() {
@@ -179,7 +184,7 @@
         filename,
         isFromInternet
       });
-      
+
       if (!result.success) {
         error = result.error || 'Failed to open image in editor';
       }
@@ -189,7 +194,11 @@
   }
 
   async function clearInternetFolder() {
-    if (!confirm('Are you sure you want to clear all images from the INTERNET folder? This action cannot be undone.')) {
+    if (
+      !confirm(
+        'Are you sure you want to clear all images from the INTERNET folder? This action cannot be undone.'
+      )
+    ) {
       return;
     }
 
@@ -210,16 +219,18 @@
 </script>
 
 {#if loading}
-  <div class="p-6 text-center text-foreground-600">Loading property data...</div>
+  <div class="text-foreground-600 p-6 text-center">Loading property data...</div>
 {:else if error}
-  <div class="p-6 text-red-600 font-semibold">{error}</div>
+  <div class="p-6 font-semibold text-red-600">{error}</div>
 {:else if property}
-  <div class="space-y-6 p-6 min-h-full ">
+  <div class="min-h-full space-y-6 p-6">
     <!-- Progress Section -->
     {#if copyingImages}
-      <div class="bg-blue-50 rounded-lg p-4 border border-blue-200">
+      <div class="rounded-lg border border-blue-200 bg-blue-50 p-4">
         <div class="flex items-center space-x-3">
-          <div class="animate-spin w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full"></div>
+          <div
+            class="h-5 w-5 animate-spin rounded-full border-2 border-blue-500 border-t-transparent"
+          ></div>
           <div>
             <p class="font-medium text-blue-900">Copying images to INTERNET folder...</p>
             <p class="text-sm text-blue-700">
@@ -292,54 +303,61 @@
     </section> -->
 
     <!-- INTERNET Images Section -->
-    <section class="bg-background-100 p-6 rounded-lg shadow">
-      <div class="w-full flex flex-row items-center justify-between mb-8">
+    <section class="bg-background-100 rounded-lg p-6 shadow">
+      <div class="mb-8 flex w-full flex-row items-center justify-between">
         <h2 class="text-xl font-semibold">INTERNET Folder ({internetImages.length})</h2>
-        <button class=" p-2 px-4 bg-background-100 hover:bg-background-300 cursor-pointer rounded flex items-center justify-center" onclick={loadInternetImages}>Refresh</button>
-      </div>
-      
-      
-      {#if internetImages.length === 0}
-        <div class="text-center py-8">
-          <span class="text-4xl block mb-4">📁</span>
-          <p class=" mb-2">No images in INTERNET folder yet.</p>
-          <p class="text-sm text-foreground-700 mb-6">Click "Copy All to INTERNET" to copy original images here for editing.</p>
-          <button
-          onclick={copyAllToInternet}
-          disabled={copyingImages || originalImages.length === 0}
-          class="px-4 py-2 bg-blue-700 rounded disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+        <button
+          class=" bg-background-100 hover:bg-background-300 flex cursor-pointer items-center justify-center rounded p-2 px-4"
+          onclick={loadInternetImages}>Refresh</button
         >
-          Copy All to INTERNET
-        </button>
+      </div>
+
+      {#if internetImages.length === 0}
+        <div class="py-8 text-center">
+          <span class="mb-4 block text-4xl">📁</span>
+          <p class=" mb-2">No images in INTERNET folder yet.</p>
+          <p class="text-foreground-700 mb-6 text-sm">
+            Click "Copy All to INTERNET" to copy original images here for editing.
+          </p>
+          <button
+            onclick={copyAllToInternet}
+            disabled={copyingImages || originalImages.length === 0}
+            class="cursor-pointer rounded bg-blue-700 px-4 py-2 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Copy All to INTERNET
+          </button>
         </div>
       {:else}
-        <div class="flex flex-row gap-4 flex-wrap w-full">
+        <div class="flex w-full flex-row flex-wrap gap-4">
           {#each internetImages as image}
-            <button 
-              class="relative cursor-pointer h-64 aspect-square group rounded-lg overflow-hidden hover:shadow-lg flex-shrink-0 transition-shadow bg-background-100 " 
+            <button
+              class="group bg-background-100 relative aspect-square h-64 flex-shrink-0 cursor-pointer overflow-hidden rounded-lg transition-shadow hover:shadow-lg"
               onclick={() => openImageInEditor(image.filename, true)}
             >
               {#if image.loading}
-                <div class="w-full h-32 bg-gray-200 flex items-center justify-center">
-                  <div class="animate-spin w-4 h-4 border-2 border-green-500 border-t-transparent rounded-full"></div>
+                <div class="flex h-32 w-full items-center justify-center bg-gray-200">
+                  <div
+                    class="h-4 w-4 animate-spin rounded-full border-2 border-green-500 border-t-transparent"
+                  ></div>
                 </div>
               {:else if image.dataUrl}
                 <img
                   src={image.dataUrl}
                   alt={image.filename}
                   loading="lazy"
-                  class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                  class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                 />
               {:else}
-                <div class="w-full h-32 bg-red-100 flex items-center justify-center">
-                  <span class="text-red-600 text-xs">Error</span>
+                <div class="flex h-32 w-full items-center justify-center bg-red-100">
+                  <span class="text-xs text-red-600">Error</span>
                 </div>
               {/if}
-              
-              <div class="absolute bottom-0 left-0 right-0 bg-background-200 bg-opacity-80 text-white text-xs p-1 truncate">
+
+              <div
+                class="bg-background-200 bg-opacity-80 absolute right-0 bottom-0 left-0 truncate p-1 text-xs text-white"
+              >
                 {image.filename}
               </div>
-              
             </button>
           {/each}
         </div>
@@ -347,15 +365,17 @@
     </section>
 
     <!-- Next Step Navigation -->
-    <div class="bg-background-100 rounded-lg shadow p-6">
+    <div class="bg-background-100 rounded-lg p-6 shadow">
       <div class="flex items-center justify-between">
         <div>
-          <h3 class="font-semibold text-foreground-900">Ready for the next step?</h3>
-          <p class="text-sm text-foreground-600 mt-1">Once you've edited your images, proceed to step 2 for ordering and renaming.</p>
+          <h3 class="text-foreground-900 font-semibold">Ready for the next step?</h3>
+          <p class="text-foreground-600 mt-1 text-sm">
+            Once you've edited your images, proceed to step 2 for ordering and renaming.
+          </p>
         </div>
-        <a 
-          href="/properties/{property.id}/step2" 
-          class="btn-primary {internetImages.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}"
+        <a
+          href="/properties/{property.id}/step2"
+          class="btn-primary {internetImages.length === 0 ? 'cursor-not-allowed opacity-50' : ''}"
           class:disabled={internetImages.length === 0}
         >
           Step 2: Order & Rename →
