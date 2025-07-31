@@ -219,166 +219,418 @@
 </script>
 
 {#if loading}
-  <div class="text-foreground-600 p-6 text-center">Loading property data...</div>
+  <div class="flex h-64 items-center justify-center">
+    <div class="text-center">
+      <div
+        class="border-accent-500 mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-t-transparent"
+      ></div>
+      <p class="text-foreground-600 font-medium">Loading property data...</p>
+    </div>
+  </div>
 {:else if error}
-  <div class="p-6 font-semibold text-red-600">{error}</div>
+  <div class="p-6">
+    <div class="rounded-lg border border-red-200 bg-red-50 p-4">
+      <div class="flex items-center space-x-3">
+        <svg class="h-5 w-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+        </svg>
+        <p class="font-semibold text-red-800">{error}</p>
+      </div>
+    </div>
+  </div>
 {:else if property}
-  <div class="min-h-full space-y-6 p-6">
+  <div class="min-h-full space-y-8 p-6">
+    <!-- Step Header -->
+    <!-- <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
+      <div class="mb-4 flex items-center space-x-4">
+        <div class="bg-accent-100 flex h-12 w-12 items-center justify-center rounded-lg">
+          <svg
+            class="text-accent-600 h-6 w-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+            />
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-foreground-900 text-2xl font-bold">Step 1: Copy to INTERNET</h1>
+          <p class="text-foreground-600">
+            Copy your original images to the INTERNET folder for editing
+          </p>
+        </div>
+      </div>
+
+      <div class="bg-background-100 border-background-200 rounded-lg border p-4">
+        <div class="flex items-start space-x-3">
+          <svg
+            class="text-accent-600 mt-0.5 h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+          <div>
+            <p class="text-foreground-700 mb-1 text-sm font-medium">How this step works:</p>
+            <ul class="text-foreground-600 space-y-1 text-sm">
+              <li>• Original images are duplicated to the INTERNET folder</li>
+              <li>• Click on any image to open it in your preferred editor</li>
+              <li>• Edit images as needed for web publication</li>
+              <li>• Proceed to Step 2 when editing is complete</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div> -->
+
     <!-- Progress Section -->
     {#if copyingImages}
-      <div class="rounded-lg border border-blue-200 bg-blue-50 p-4">
-        <div class="flex items-center space-x-3">
+      <div class="bg-accent-50 border-accent-200 rounded-xl border p-6">
+        <div class="flex items-center space-x-4">
           <div
-            class="h-5 w-5 animate-spin rounded-full border-2 border-blue-500 border-t-transparent"
+            class="border-accent-500 h-6 w-6 animate-spin rounded-full border-2 border-t-transparent"
           ></div>
           <div>
-            <p class="font-medium text-blue-900">Copying images to INTERNET folder...</p>
-            <p class="text-sm text-blue-700">
+            <p class="text-accent-900 font-semibold">Copying images to INTERNET folder...</p>
+            <p class="text-accent-700 text-sm">
               {copyProgress.current} of {copyProgress.total} images copied
             </p>
           </div>
         </div>
+        <div class="bg-accent-200 mt-4 h-2 w-full overflow-hidden rounded-full">
+          <div
+            class="bg-accent-500 h-full rounded-full transition-all duration-300"
+            style="width: {copyProgress.total > 0
+              ? (copyProgress.current / copyProgress.total) * 100
+              : 0}%"
+          ></div>
+        </div>
       </div>
     {/if}
 
-    <!-- Action Buttons -->
-    <!-- <div class="bg-background-100 rounded-lg shadow p-6">
-      <h2 class="text-lg font-semibold mb-4">Actions</h2>
-      <div class="flex space-x-4">
-        <button
-          onclick={copyAllToInternet}
-          disabled={copyingImages || originalImages.length === 0}
-          class="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          Copy All to INTERNET ({originalImages.length} images)
-        </button>
-        
-        <button
-          onclick={clearInternetFolder}
-          disabled={copyingImages || internetImages.length === 0}
-          class="bg-red-600 hover:bg-red-700 text-white font-medium px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          🗑️ Clear INTERNET Folder
-        </button>
-      </div>
-    </div> -->
-
-    <!-- Original Images Section -->
-    <!-- <section class="bg-background-100 rounded-lg shadow p-6">
-      <h2 class="text-xl font-semibold mb-4">Original Images ({originalImages.length})</h2>
-      
-      {#if originalImages.length === 0}
-        <p class="text-foreground-500">No original images found.</p>
-      {:else}
-        <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-          {#each originalImages as image}
-            <button 
-              class="relative cursor-pointer group rounded-lg overflow-hidden border border-gray-200 hover:shadow-lg transition-shadow" 
-              onclick={() => openImageInEditor(image.filename, false)}
+    <!-- Statistics Summary -->
+    <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
+      <div class="bg-background-50 border-background-200 rounded-xl border p-6">
+        <div class="flex items-center space-x-3">
+          <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100">
+            <svg
+              class="h-5 w-5 text-green-600"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
             >
-              {#if image.loading}
-                <div class="w-full h-32 bg-gray-200 flex items-center justify-center">
-                  <div class="animate-spin w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full"></div>
-                </div>
-              {:else if image.dataUrl}
-                <img
-                  src={image.dataUrl}
-                  alt={image.filename}
-                  loading="lazy"
-                  class="w-full h-32 object-cover group-hover:scale-105 transition-transform duration-300"
-                />
-              {:else}
-                <div class="w-full h-32 bg-red-100 flex items-center justify-center">
-                  <span class="text-red-600 text-xs">Error</span>
-                </div>
-              {/if}
-              
-              <div class="absolute bottom-0 left-0 right-0 bg-black bg-opacity-70 text-white text-xs p-1 truncate">
-                {image.filename}
-              </div>
-            </button>
-          {/each}
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+              />
+            </svg>
+          </div>
+          <div>
+            <p class="text-foreground-500 text-sm font-medium">Original Images</p>
+            <p class="text-foreground-900 text-2xl font-bold">{originalImages.length}</p>
+          </div>
         </div>
-      {/if}
-    </section> -->
+      </div>
+
+      <div class="bg-background-50 border-background-200 rounded-xl border p-6">
+        <div class="flex items-center space-x-3">
+          <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
+            <svg
+              class="text-accent-600 h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
+              />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M8 5a2 2 0 012-2h4a2 2 0 012 2v6H8V5z"
+              />
+            </svg>
+          </div>
+          <div>
+            <p class="text-foreground-500 text-sm font-medium">INTERNET Folder</p>
+            <p class="text-foreground-900 text-2xl font-bold">{internetImages.length}</p>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- INTERNET Images Section -->
-    <section class="bg-background-100 rounded-lg p-6 shadow">
-      <div class="mb-8 flex w-full flex-row items-center justify-between">
-        <h2 class="text-xl font-semibold">INTERNET Folder ({internetImages.length})</h2>
-        <button
-          class=" bg-background-100 hover:bg-background-300 flex cursor-pointer items-center justify-center rounded p-2 px-4"
-          onclick={loadInternetImages}>Refresh</button
-        >
+    <section class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
+      <div class="mb-6 flex items-center justify-between">
+        <div class="flex items-center space-x-3">
+          <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
+            <svg
+              class="text-accent-600 h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
+              />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M8 5a2 2 0 012-2h4a2 2 0 012 2v6H8V5z"
+              />
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-foreground-900 text-xl font-semibold">
+              INTERNET Folder ({internetImages.length})
+            </h2>
+            <p class="text-foreground-600 text-sm">Click images to open in your editor</p>
+          </div>
+        </div>
+
+        <div class="flex items-center space-x-3">
+          {#if internetImages.length > 0}
+            <button
+              onclick={clearInternetFolder}
+              disabled={copyingImages}
+              class="flex items-center space-x-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                />
+              </svg>
+              <span>Clear Folder</span>
+            </button>
+          {/if}
+
+          <button
+            onclick={loadInternetImages}
+            class="border-background-300 bg-background-100 text-foreground-700 hover:bg-background-200 flex items-center space-x-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors"
+          >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+            <span>Refresh</span>
+          </button>
+        </div>
       </div>
 
       {#if internetImages.length === 0}
-        <div class="py-8 text-center">
-          <span class="mb-4 block text-4xl">📁</span>
-          <p class=" mb-2">No images in INTERNET folder yet.</p>
-          <p class="text-foreground-700 mb-6 text-sm">
-            Click "Copy All to INTERNET" to copy original images here for editing.
+        <div class="py-16 text-center">
+          <div
+            class="bg-background-100 mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full"
+          >
+            <svg
+              class="text-foreground-400 h-10 w-10"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
+              />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M8 5a2 2 0 012-2h4a2 2 0 012 2v6H8V5z"
+              />
+            </svg>
+          </div>
+          <h3 class="text-foreground-900 mb-2 text-lg font-semibold">INTERNET folder is empty</h3>
+          <p class="text-foreground-500 mx-auto mb-6 max-w-md">
+            Copy your original images to the INTERNET folder to start editing them for web
+            publication.
           </p>
           <button
             onclick={copyAllToInternet}
             disabled={copyingImages || originalImages.length === 0}
-            class="cursor-pointer rounded bg-blue-700 px-4 py-2 disabled:cursor-not-allowed disabled:opacity-50"
+            class="bg-accent-500 hover:bg-accent-600 inline-flex items-center space-x-2 rounded-lg px-6 py-3 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Copy All to INTERNET
+            {#if copyingImages}
+              <div
+                class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
+              ></div>
+              <span>Copying...</span>
+            {:else}
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                />
+              </svg>
+              <span>Copy All to INTERNET ({originalImages.length} images)</span>
+            {/if}
           </button>
         </div>
       {:else}
-        <div class="flex w-full flex-row flex-wrap gap-4">
+        <div class="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           {#each internetImages as image}
-            <button
-              class="group bg-background-100 relative aspect-square h-64 flex-shrink-0 cursor-pointer overflow-hidden rounded-lg transition-shadow hover:shadow-lg"
-              onclick={() => openImageInEditor(image.filename, true)}
-            >
-              {#if image.loading}
-                <div class="flex h-32 w-full items-center justify-center bg-gray-200">
-                  <div
-                    class="h-4 w-4 animate-spin rounded-full border-2 border-green-500 border-t-transparent"
-                  ></div>
-                </div>
-              {:else if image.dataUrl}
-                <img
-                  src={image.dataUrl}
-                  alt={image.filename}
-                  loading="lazy"
-                  class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                />
-              {:else}
-                <div class="flex h-32 w-full items-center justify-center bg-red-100">
-                  <span class="text-xs text-red-600">Error</span>
-                </div>
-              {/if}
-
-              <div
-                class="bg-background-200 bg-opacity-80 absolute right-0 bottom-0 left-0 truncate p-1 text-xs text-white"
+            <div class="group relative">
+              <button
+                class="border-background-200 bg-background-100 hover:border-accent-200 aspect-square w-full overflow-hidden rounded-xl border transition-all duration-200 hover:scale-[1.02] hover:shadow-lg"
+                onclick={() => openImageInEditor(image.filename, true)}
               >
-                {image.filename}
-              </div>
-            </button>
+                {#if image.loading}
+                  <!-- Loading state -->
+                  <div class="bg-background-100 flex h-full w-full items-center justify-center">
+                    <div class="text-center">
+                      <div
+                        class="border-accent-500 mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-2 border-t-transparent"
+                      ></div>
+                      <span class="text-foreground-500 text-xs font-medium">Loading...</span>
+                    </div>
+                  </div>
+                {:else if image.dataUrl}
+                  <!-- Actual image -->
+                  <img
+                    src={image.dataUrl}
+                    alt={image.filename}
+                    loading="lazy"
+                    class="h-full w-full object-cover transition-transform duration-300"
+                  />
+                {:else}
+                  <!-- Error fallback -->
+                  <div class="flex h-full w-full items-center justify-center bg-red-50">
+                    <div class="text-center text-red-500">
+                      <svg
+                        class="mx-auto mb-2 h-8 w-8"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                        />
+                      </svg>
+                      <span class="text-xs font-medium">Failed to load</span>
+                    </div>
+                  </div>
+                {/if}
+
+                <!-- Filename overlay -->
+                <div
+                  class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/60 to-transparent p-3 pt-8 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+                >
+                  <p class="truncate text-xs font-medium text-white" title={image.filename}>
+                    {image.filename}
+                  </p>
+                </div>
+
+                <!-- Edit indicator -->
+                <div
+                  class="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+                >
+                  <div class="rounded-full bg-white/90 p-3">
+                    <svg
+                      class="text-foreground-900 h-5 w-5"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                      />
+                    </svg>
+                  </div>
+                </div>
+              </button>
+            </div>
           {/each}
         </div>
       {/if}
     </section>
 
     <!-- Next Step Navigation -->
-    <div class="bg-background-100 rounded-lg p-6 shadow">
+    <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
       <div class="flex items-center justify-between">
-        <div>
-          <h3 class="text-foreground-900 font-semibold">Ready for the next step?</h3>
-          <p class="text-foreground-600 mt-1 text-sm">
-            Once you've edited your images, proceed to step 2 for ordering and renaming.
-          </p>
+        <div class="flex items-center space-x-4">
+          <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-green-100">
+            <svg
+              class="h-6 w-6 text-green-600"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+          </div>
+          <div>
+            <h3 class="text-foreground-900 font-semibold">Ready for the next step?</h3>
+            <p class="text-foreground-600 text-sm">
+              Once you've finished editing your images, proceed to step 2 for ordering and renaming.
+            </p>
+          </div>
         </div>
+
         <a
           href="/properties/{property.id}/step2"
-          class="btn-primary {internetImages.length === 0 ? 'cursor-not-allowed opacity-50' : ''}"
-          class:disabled={internetImages.length === 0}
+          class="inline-flex items-center space-x-2 rounded-lg px-6 py-3 font-medium transition-colors {internetImages.length ===
+          0
+            ? 'bg-background-200 text-foreground-500 cursor-not-allowed'
+            : 'bg-accent-500 hover:bg-accent-600 text-white'}"
+          class:pointer-events-none={internetImages.length === 0}
         >
-          Step 2: Order & Rename →
+          <span>Step 2: Order & Rename</span>
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M9 5l7 7-7 7"
+            />
+          </svg>
         </a>
       </div>
     </div>

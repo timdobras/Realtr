@@ -296,97 +296,219 @@
   <div class="flex h-64 items-center justify-center">
     <div class="text-center">
       <div
-        class="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent"
+        class="border-accent-500 mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-t-transparent"
       ></div>
-      <p class="text-foreground-600">Loading watermark data...</p>
+      <p class="text-foreground-600 font-medium">Loading watermark data...</p>
     </div>
   </div>
 {:else if error}
   <div class="p-6">
     <div class="rounded-lg border border-red-200 bg-red-50 p-4">
-      <div class="flex items-center space-x-2">
-        <span class="text-red-600">❌</span>
+      <div class="flex items-center space-x-3">
+        <svg class="h-5 w-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+        </svg>
         <p class="font-medium text-red-800">{error}</p>
       </div>
     </div>
   </div>
 {:else if property}
-  <div class="space-y-6 p-6">
+  <div class="min-h-full space-y-8 p-6">
+    <!-- Step Header -->
+    <!-- <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
+      <div class="mb-4 flex items-center space-x-4">
+        <div class="bg-accent-100 flex h-12 w-12 items-center justify-center rounded-lg">
+          <svg
+            class="text-accent-600 h-6 w-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"
+            />
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-foreground-900 text-2xl font-bold">Step 4: Add Watermark</h1>
+          <p class="text-foreground-600">Apply professional watermarks to your final images</p>
+        </div>
+      </div>
+
+      <div class="bg-background-100 border-background-200 rounded-lg border p-4">
+        <div class="flex items-start space-x-3">
+          <svg
+            class="text-accent-600 mt-0.5 h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+          <div>
+            <p class="text-foreground-700 mb-1 text-sm font-medium">Final step workflow:</p>
+            <ul class="text-foreground-600 space-y-1 text-sm">
+              <li>• Apply watermarks to all processed images</li>
+              <li>• Creates publication-ready copies with branding</li>
+              <li>• Maintains original aspect ratios and quality</li>
+              <li>• Final images ready for web publication</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div> -->
+
     <!-- Processing Progress -->
     {#if processingWatermarksVar || processingProgress > 0}
-      <div class="rounded-xl border border-blue-200 bg-blue-50 p-6">
+      <div class="bg-accent-50 border-accent-200 rounded-xl border p-6">
         <div class="mb-4 flex items-center space-x-4">
           <div
-            class="h-6 w-6 animate-spin rounded-full border-3 border-blue-500 border-t-transparent"
+            class="border-accent-500 h-6 w-6 animate-spin rounded-full border-2 border-t-transparent"
           ></div>
           <div class="flex-1">
-            <p class="font-medium text-blue-900">
+            <p class="text-accent-900 font-semibold">
               {processingStatus || 'Processing watermarks...'}
             </p>
-            <p class="text-sm text-blue-700">
+            <p class="text-accent-700 text-sm">
               Please wait while we apply watermarks to your images.
             </p>
           </div>
         </div>
-        <div class="h-4 w-full rounded-full bg-blue-200">
+        <div class="bg-accent-200 h-3 w-full overflow-hidden rounded-full">
           <div
-            class="h-4 rounded-full bg-blue-600 transition-all duration-300 ease-out"
+            class="bg-accent-500 h-full rounded-full transition-all duration-300 ease-out"
             style="width: {processingProgress}%"
           ></div>
         </div>
-        <div class="mt-2 flex justify-between text-xs text-blue-600">
-          <span>Processing...</span>
-          <span>{Math.round(processingProgress)}%</span>
+        <div class="text-accent-700 mt-3 flex justify-between text-sm">
+          <span>Processing watermarks...</span>
+          <span class="font-medium">{Math.round(processingProgress)}%</span>
         </div>
       </div>
     {/if}
 
     <!-- Statistics Dashboard -->
-    <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-      <div class="bg-background-100 border-background-200 rounded-xl border p-6 shadow-sm">
+    <div class="grid grid-cols-1 gap-6 md:grid-cols-3">
+      <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
         <div class="flex items-center space-x-3">
-          <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-amber-100">
-            <span class="text-2xl">🏷️</span>
+          <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-orange-100">
+            <svg
+              class="h-6 w-6 text-orange-600"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"
+              />
+            </svg>
           </div>
           <div>
             <p class="text-foreground-900 text-2xl font-bold">{watermarkImages.length}</p>
-            <p class="text-foreground-600 text-sm">Watermarked Images</p>
+            <p class="text-foreground-600 text-sm font-medium">Watermarked Images</p>
           </div>
         </div>
       </div>
 
-      <div class="bg-background-100 border-background-200 rounded-xl border p-6 shadow-sm">
+      <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
         <div class="flex items-center space-x-3">
           <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-purple-100">
-            <span class="text-2xl">🎨</span>
+            <svg
+              class="h-6 w-6 text-purple-600"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v1a2 2 0 002 2h6a2 2 0 012 2v8a4 4 0 01-4 4H7z"
+              />
+            </svg>
           </div>
           <div>
             <p class="text-foreground-900 text-2xl font-bold">{watermarkAggeliaImages.length}</p>
-            <p class="text-foreground-600 text-sm">Advanced + Watermark</p>
+            <p class="text-foreground-600 text-sm font-medium">Advanced + Watermark</p>
           </div>
         </div>
       </div>
 
-      <div class="bg-background-100 border-background-200 rounded-xl border p-6 shadow-sm">
+      <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
         <div class="flex items-center space-x-3">
           <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-green-100">
-            <span class="text-2xl">📊</span>
+            <svg
+              class="h-6 w-6 text-green-600"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+              />
+            </svg>
           </div>
           <div>
             <p class="text-foreground-900 text-2xl font-bold">{totalWatermarkedImages}</p>
-            <p class="text-foreground-600 text-sm">Total Ready</p>
+            <p class="text-foreground-600 text-sm font-medium">Total Ready</p>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Watermark Configuration Display -->
-    <div class="bg-background-100 border-background-200 rounded-xl border p-6 shadow-sm">
-      <h2 class="text-foreground-900 mb-6 text-lg font-semibold">Watermark Configuration</h2>
+    <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
+      <div class="mb-6 flex items-center space-x-3">
+        <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
+          <svg
+            class="text-accent-600 h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+            />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+            />
+          </svg>
+        </div>
+        <div>
+          <h2 class="text-foreground-900 text-lg font-semibold">Watermark Configuration</h2>
+          <p class="text-foreground-600 text-sm">Current watermark settings for your images</p>
+        </div>
+      </div>
+
       {#if watermarkConfig?.imagePath}
         <div class="flex items-center space-x-6">
           <div
-            class="bg-background-100 border-background-300 flex h-20 w-20 items-center justify-center overflow-hidden rounded-xl border-2 shadow-inner"
+            class="border-background-300 bg-background-100 flex h-20 w-20 items-center justify-center overflow-hidden rounded-xl border-2 shadow-inner"
           >
             <img
               src={`file://${watermarkConfig.imagePath}`}
@@ -398,24 +520,75 @@
           </div>
           <div class="flex-1">
             <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-              <div class="bg-background-50 rounded-lg p-4">
-                <p class="text-foreground-500 text-xs font-medium tracking-wide uppercase">
-                  Status
-                </p>
-                <p class="text-sm font-semibold text-green-600">✅ Configured</p>
+              <div class="bg-background-100 border-background-200 rounded-lg border p-4">
+                <div class="mb-2 flex items-center space-x-2">
+                  <svg
+                    class="h-4 w-4 text-green-600"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
+                  </svg>
+                  <p class="text-foreground-500 text-xs font-medium tracking-wide uppercase">
+                    Status
+                  </p>
+                </div>
+                <p class="text-sm font-semibold text-green-600">Configured</p>
               </div>
-              <div class="bg-background-50 rounded-lg p-4">
-                <p class="text-foreground-500 text-xs font-medium tracking-wide uppercase">
-                  Opacity
-                </p>
+              <div class="bg-background-100 border-background-200 rounded-lg border p-4">
+                <div class="mb-2 flex items-center space-x-2">
+                  <svg
+                    class="text-foreground-600 h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M13 10V3L4 14h7v7l9-11h-7z"
+                    />
+                  </svg>
+                  <p class="text-foreground-500 text-xs font-medium tracking-wide uppercase">
+                    Opacity
+                  </p>
+                </div>
                 <p class="text-foreground-900 text-sm font-semibold">
                   {Math.round(watermarkConfig.opacity * 100)}%
                 </p>
               </div>
-              <div class="bg-background-50 rounded-lg p-4">
-                <p class="text-foreground-500 text-xs font-medium tracking-wide uppercase">
-                  Position
-                </p>
+              <div class="bg-background-100 border-background-200 rounded-lg border p-4">
+                <div class="mb-2 flex items-center space-x-2">
+                  <svg
+                    class="text-foreground-600 h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
+                    />
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
+                    />
+                  </svg>
+                  <p class="text-foreground-500 text-xs font-medium tracking-wide uppercase">
+                    Position
+                  </p>
+                </div>
                 <p class="text-foreground-900 text-sm font-semibold">Center</p>
               </div>
             </div>
@@ -423,20 +596,46 @@
         </div>
       {:else}
         <div class="rounded-xl border border-yellow-200 bg-yellow-50 p-6">
-          <div class="flex items-center space-x-3">
+          <div class="flex items-center space-x-4">
             <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-yellow-100">
-              <span class="text-2xl">⚠️</span>
+              <svg
+                class="h-6 w-6 text-yellow-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                />
+              </svg>
             </div>
             <div class="flex-1">
-              <h3 class="mb-1 font-medium text-yellow-900">Watermark Not Configured</h3>
-              <p class="mb-3 text-sm text-yellow-800">
-                Please configure your watermark image and opacity before applying watermarks.
+              <h3 class="mb-1 font-semibold text-yellow-900">Watermark Not Configured</h3>
+              <p class="mb-4 text-sm text-yellow-800">
+                Please configure your watermark image and opacity in settings before applying
+                watermarks to your images.
               </p>
               <a
                 href="/settings"
                 class="inline-flex items-center space-x-2 rounded-lg bg-yellow-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-yellow-700"
               >
-                <span>⚙️</span>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+                  />
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                  />
+                </svg>
                 <span>Go to Settings</span>
               </a>
             </div>
@@ -446,18 +645,41 @@
     </div>
 
     <!-- Action Controls -->
-    <div class="bg-background-100 border-background-200 rounded-xl border p-6 shadow-sm">
-      <h2 class="text-foreground-900 mb-6 text-lg font-semibold">Watermark Actions</h2>
+    <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
+      <div class="mb-6 flex items-center space-x-3">
+        <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
+          <svg
+            class="text-accent-600 h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M13 10V3L4 14h7v7l9-11h-7z"
+            />
+          </svg>
+        </div>
+        <div>
+          <h2 class="text-foreground-900 text-lg font-semibold">Watermark Actions</h2>
+          <p class="text-foreground-600 text-sm">
+            Apply or manage watermarks on your processed images
+          </p>
+        </div>
+      </div>
 
       <div
-        class="flex flex-col space-y-4 lg:flex-row lg:items-center lg:justify-between lg:space-y-0 lg:space-x-6"
+        class="flex flex-col space-y-6 lg:flex-row lg:items-center lg:justify-between lg:space-y-0 lg:space-x-8"
       >
         <div class="flex-1">
-          <p class="text-foreground-700 mb-2">
-            Apply watermarks to all images from INTERNET and INTERNET/AGGELIA folders.
+          <p class="text-foreground-700 mb-2 font-medium">
+            Apply watermarks to all processed images
           </p>
           <p class="text-foreground-500 text-sm">
-            This will create watermarked copies in WATERMARK and WATERMARK/AGGELIA folders.
+            This will create watermarked copies in WATERMARK and WATERMARK/AGGELIA folders, ready
+            for publication.
           </p>
         </div>
 
@@ -465,59 +687,130 @@
           <button
             onclick={applyWatermarksToAllImages}
             disabled={processingWatermarksVar || !watermarkConfig?.imagePath}
-            class="btn-primary flex cursor-pointer items-center justify-center space-x-2 rounded-lg bg-blue-700 px-6 py-3 disabled:cursor-not-allowed disabled:opacity-50"
+            class="bg-accent-500 hover:bg-accent-600 flex items-center justify-center space-x-2 rounded-lg px-6 py-3 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <span class="text-lg">🏷️</span>
-            <span>Apply Watermarks</span>
             {#if processingWatermarksVar}
               <div
-                class="ml-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
+                class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
               ></div>
+              <span>Processing...</span>
+            {:else}
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"
+                />
+              </svg>
+              <span>Apply Watermarks</span>
             {/if}
           </button>
 
-          <button
-            onclick={clearWatermarkFolders}
-            disabled={processingWatermarksVar || totalWatermarkedImages === 0}
-            class="flex items-center justify-center space-x-2 rounded-lg bg-red-600 px-6 py-3 font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <span>🗑️</span>
-            <span>Clear All</span>
-          </button>
+          {#if totalWatermarkedImages > 0}
+            <button
+              onclick={clearWatermarkFolders}
+              disabled={processingWatermarksVar}
+              class="flex items-center justify-center space-x-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                />
+              </svg>
+              <span>Clear All</span>
+            </button>
+          {/if}
         </div>
       </div>
     </div>
 
     <!-- WATERMARK Images Section -->
-    <section class="bg-background-100 border-background-200 rounded-xl border shadow-sm">
+    <section class="bg-background-50 border-background-200 rounded-xl border shadow-sm">
       <div class="p-6">
         <div class="mb-6 flex items-center justify-between">
-          <h2 class="text-foreground-900 text-xl font-semibold">
-            WATERMARK Folder ({watermarkImages.length})
-          </h2>
+          <div class="flex items-center space-x-3">
+            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-100">
+              <svg
+                class="h-5 w-5 text-orange-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"
+                />
+              </svg>
+            </div>
+            <div>
+              <h2 class="text-foreground-900 text-xl font-semibold">
+                WATERMARK Folder ({watermarkImages.length})
+              </h2>
+              <p class="text-foreground-600 text-sm">
+                Publication-ready images with watermarks applied
+              </p>
+            </div>
+          </div>
+
           {#if watermarkImages.length > 0}
-            <div class="text-foreground-500 text-sm">Click images to view • Publication ready</div>
+            <div class="flex items-center space-x-2 text-sm text-orange-600">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                />
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                />
+              </svg>
+              <span>Click to view</span>
+            </div>
           {/if}
         </div>
 
         {#if watermarkImages.length === 0}
           <div class="py-16 text-center">
             <div
-              class="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-amber-100"
+              class="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-orange-100"
             >
-              <span class="text-3xl">🏷️</span>
+              <svg
+                class="h-10 w-10 text-orange-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"
+                />
+              </svg>
             </div>
-            <h3 class="text-foreground-700 mb-2 text-lg font-medium">No watermarked images yet</h3>
-            <p class="text-foreground-500 mb-6">
-              Click "Apply Watermarks" to create watermarked copies of your images.
+            <h3 class="text-foreground-900 mb-2 text-lg font-semibold">
+              No watermarked images yet
+            </h3>
+            <p class="text-foreground-500 mx-auto mb-6 max-w-md">
+              Click "Apply Watermarks" above to create watermarked copies of your processed images.
             </p>
           </div>
         {:else}
-          <div class="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+          <div class="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {#each watermarkImages as image}
               <div class="group relative">
                 <button
-                  class="bg-background-100 aspect-square w-full overflow-hidden rounded-xl border-2 border-amber-300 shadow-lg shadow-amber-100 transition-all duration-200 hover:scale-105 hover:shadow-xl"
+                  class="bg-background-100 aspect-square w-full overflow-hidden rounded-xl border-2 border-orange-300 shadow-lg shadow-orange-100 transition-all duration-200 hover:scale-105 hover:shadow-xl"
                   onclick={() => openWatermarkedImage(image.filename, false)}
                   disabled={processingWatermarksVar}
                 >
@@ -525,9 +818,9 @@
                     <div class="bg-background-100 flex h-full w-full items-center justify-center">
                       <div class="text-center">
                         <div
-                          class="mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-3 border-amber-500 border-t-transparent"
+                          class="mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-2 border-orange-500 border-t-transparent"
                         ></div>
-                        <p class="text-foreground-500 text-xs">Loading...</p>
+                        <p class="text-foreground-500 text-xs font-medium">Loading...</p>
                       </div>
                     </div>
                   {:else if image.dataUrl}
@@ -538,29 +831,75 @@
                       class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                     />
                   {:else}
-                    <div class="flex h-full w-full items-center justify-center bg-red-100">
+                    <div class="flex h-full w-full items-center justify-center bg-red-50">
                       <div class="text-center text-red-500">
-                        <span class="mb-2 block text-2xl">❌</span>
-                        <p class="text-xs">Failed to load</p>
+                        <svg
+                          class="mx-auto mb-2 h-8 w-8"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                          />
+                        </svg>
+                        <p class="text-xs font-medium">Failed to load</p>
                       </div>
                     </div>
                   {/if}
 
                   <!-- Watermark indicator -->
                   <div
-                    class="absolute top-2 right-2 flex items-center space-x-1 rounded-full bg-amber-500 px-2 py-1 text-xs text-white shadow-lg"
+                    class="absolute top-2 right-2 flex items-center space-x-1 rounded-lg bg-orange-500 px-2 py-1 text-xs text-white shadow-lg"
                   >
-                    <span>🏷️</span>
+                    <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"
+                      />
+                    </svg>
                     <span class="hidden sm:inline">Watermarked</span>
                   </div>
 
-                  <!-- Filename -->
+                  <!-- Filename overlay -->
                   <div
-                    class="absolute right-0 bottom-0 left-0 bg-gradient-to-t from-amber-900/80 via-amber-800/60 to-transparent p-3 pt-6"
+                    class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-orange-900/80 via-orange-800/60 to-transparent p-3 pt-8 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
                   >
                     <p class="truncate text-xs font-medium text-white" title={image.filename}>
                       {image.filename}
                     </p>
+                  </div>
+
+                  <!-- View indicator on hover -->
+                  <div
+                    class="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+                  >
+                    <div class="rounded-full bg-white/90 p-3">
+                      <svg
+                        class="text-foreground-900 h-5 w-5"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                        />
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                        />
+                      </svg>
+                    </div>
                   </div>
                 </button>
               </div>
@@ -571,37 +910,83 @@
     </section>
 
     <!-- WATERMARK/AGGELIA Images Section -->
-    <section class="bg-background-100 border-background-200 rounded-xl border shadow-sm">
+    <section class="bg-background-50 border-background-200 rounded-xl border shadow-sm">
       <div class="p-6">
         <div class="mb-6 flex items-center justify-between">
-          <h2 class="text-foreground-900 text-xl font-semibold">
-            WATERMARK/AGGELIA Folder ({watermarkAggeliaImages.length})
-          </h2>
+          <div class="flex items-center space-x-3">
+            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100">
+              <svg
+                class="h-5 w-5 text-purple-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v1a2 2 0 002 2h6a2 2 0 012 2v8a4 4 0 01-4 4H7z"
+                />
+              </svg>
+            </div>
+            <div>
+              <h2 class="text-foreground-900 text-xl font-semibold">
+                WATERMARK/AGGELIA Folder ({watermarkAggeliaImages.length})
+              </h2>
+              <p class="text-foreground-600 text-sm">
+                Advanced edited images with professional watermarks
+              </p>
+            </div>
+          </div>
+
           {#if watermarkAggeliaImages.length > 0}
-            <div class="text-foreground-500 text-sm">Advanced edited + watermarked images</div>
+            <div class="flex items-center space-x-2 text-sm text-purple-600">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v1a2 2 0 002 2h6a2 2 0 012 2v8a4 4 0 01-4 4H7z"
+                />
+              </svg>
+              <span>Premium quality</span>
+            </div>
           {/if}
         </div>
 
         {#if watermarkAggeliaImages.length === 0}
           <div class="py-16 text-center">
             <div
-              class="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-purple-100"
+              class="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-purple-100"
             >
-              <span class="text-3xl">🎨</span>
+              <svg
+                class="h-10 w-10 text-purple-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v1a2 2 0 002 2h6a2 2 0 012 2v8a4 4 0 01-4 4H7z"
+                />
+              </svg>
             </div>
-            <h3 class="text-foreground-700 mb-2 text-lg font-medium">
+            <h3 class="text-foreground-900 mb-2 text-lg font-semibold">
               No advanced watermarked images yet
             </h3>
-            <p class="text-foreground-500 mb-6">
-              Advanced edited images with watermarks will appear here.
+            <p class="text-foreground-500 mx-auto mb-6 max-w-md">
+              Advanced edited images with applied watermarks will appear here once processing is
+              complete.
             </p>
           </div>
         {:else}
-          <div class="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+          <div class="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {#each watermarkAggeliaImages as image}
               <div class="group relative">
                 <button
-                  class="bg-background-100 aspect-square w-full overflow-hidden rounded-xl border-2 border-indigo-400 shadow-lg shadow-indigo-100 transition-all duration-200 hover:scale-105 hover:shadow-xl"
+                  class="bg-background-100 aspect-square w-full overflow-hidden rounded-xl border-2 border-purple-400 shadow-lg shadow-purple-100 transition-all duration-200 hover:scale-105 hover:shadow-xl"
                   onclick={() => openWatermarkedImage(image.filename, true)}
                   disabled={processingWatermarksVar}
                 >
@@ -609,9 +994,9 @@
                     <div class="bg-background-100 flex h-full w-full items-center justify-center">
                       <div class="text-center">
                         <div
-                          class="mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-3 border-indigo-500 border-t-transparent"
+                          class="mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-2 border-purple-500 border-t-transparent"
                         ></div>
-                        <p class="text-foreground-500 text-xs">Loading...</p>
+                        <p class="text-foreground-500 text-xs font-medium">Loading...</p>
                       </div>
                     </div>
                   {:else if image.dataUrl}
@@ -622,29 +1007,75 @@
                       class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                     />
                   {:else}
-                    <div class="flex h-full w-full items-center justify-center bg-red-100">
+                    <div class="flex h-full w-full items-center justify-center bg-red-50">
                       <div class="text-center text-red-500">
-                        <span class="mb-2 block text-2xl">❌</span>
-                        <p class="text-xs">Failed to load</p>
+                        <svg
+                          class="mx-auto mb-2 h-8 w-8"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                          />
+                        </svg>
+                        <p class="text-xs font-medium">Failed to load</p>
                       </div>
                     </div>
                   {/if}
 
                   <!-- Advanced + Watermark indicator -->
                   <div
-                    class="absolute top-2 right-2 flex items-center space-x-1 rounded-full bg-indigo-500 px-2 py-1 text-xs text-white shadow-lg"
+                    class="absolute top-2 right-2 flex items-center space-x-1 rounded-lg bg-purple-500 px-2 py-1 text-xs text-white shadow-lg"
                   >
-                    <span>🎨🏷️</span>
+                    <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v1a2 2 0 002 2h6a2 2 0 012 2v8a4 4 0 01-4 4H7z"
+                      />
+                    </svg>
                     <span class="hidden sm:inline">Pro</span>
                   </div>
 
-                  <!-- Filename -->
+                  <!-- Filename overlay -->
                   <div
-                    class="absolute right-0 bottom-0 left-0 bg-gradient-to-t from-indigo-900/80 via-indigo-800/60 to-transparent p-3 pt-6"
+                    class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-purple-900/80 via-purple-800/60 to-transparent p-3 pt-8 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
                   >
                     <p class="truncate text-xs font-medium text-white" title={image.filename}>
                       {image.filename}
                     </p>
+                  </div>
+
+                  <!-- View indicator on hover -->
+                  <div
+                    class="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+                  >
+                    <div class="rounded-full bg-white/90 p-3">
+                      <svg
+                        class="text-foreground-900 h-5 w-5"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                        />
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                        />
+                      </svg>
+                    </div>
                   </div>
                 </button>
               </div>
@@ -656,35 +1087,66 @@
 
     <!-- Completion Section -->
     <div
-      class="rounded-xl border border-green-200 bg-gradient-to-r from-green-50 to-emerald-50 p-8"
+      class="rounded-xl border border-green-200 bg-gradient-to-r from-green-50 to-emerald-50 p-8 text-center"
     >
-      <div class="text-center">
-        <div
-          class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-500"
+      <div
+        class="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-green-500"
+      >
+        <svg class="h-8 w-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+        </svg>
+      </div>
+
+      <h3 class="mb-3 text-2xl font-bold text-green-900">Workflow Complete!</h3>
+      <p class="mx-auto mb-8 max-w-2xl text-green-700">
+        Congratulations! Your images have been processed through all workflow steps. The WATERMARK
+        folders contain your final, publication-ready images with professional watermarks applied.
+      </p>
+
+      <div
+        class="flex flex-col items-center justify-center space-y-4 sm:flex-row sm:space-y-0 sm:space-x-6"
+      >
+        <a
+          href="/properties/{property.id}"
+          class="inline-flex items-center space-x-2 rounded-lg bg-green-600 px-6 py-3 font-medium text-white transition-colors hover:bg-green-700"
         >
-          <span class="text-2xl">🎉</span>
-        </div>
-        <h3 class="mb-3 text-2xl font-bold text-green-900">Workflow Complete!</h3>
-        <p class="mx-auto mb-6 max-w-2xl text-green-700">
-          Congratulations! Your images have been processed through all workflow steps. The WATERMARK
-          folders contain your final, publication-ready images with professional watermarks applied.
-        </p>
-        <div
-          class="flex flex-col items-center justify-center space-y-3 text-green-800 sm:flex-row sm:space-y-0 sm:space-x-4"
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+            />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+            />
+          </svg>
+          <span>View Property Overview</span>
+        </a>
+
+        <a
+          href="/"
+          class="bg-background-200 text-foreground-700 hover:bg-background-300 inline-flex items-center space-x-2 rounded-lg px-6 py-3 font-medium transition-colors"
         >
-          <a href="/properties/{property.id}" class="btn-primary flex items-center space-x-2">
-            <span>👁️</span>
-            <span>View Property Overview</span>
-          </a>
-          <a href="/" class="btn-secondary flex items-center space-x-2">
-            <span>🏠</span>
-            <span>Back to Dashboard</span>
-          </a>
-        </div>
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
+            />
+          </svg>
+          <span>Back to Dashboard</span>
+        </a>
       </div>
     </div>
   </div>
 {/if}
-
-<style>
-</style>

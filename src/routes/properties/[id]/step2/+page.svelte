@@ -81,7 +81,7 @@
           filename,
           dataUrl: '',
           loading: true,
-          newName: `${index + 1}`
+          newName: baseFileName ? `${baseFileName}_${index + 1}` : `${index + 1}`
         }));
 
         // Load thumbnails
@@ -243,58 +243,245 @@
       error = `Failed to open image: ${e}`;
     }
   }
+
+  function autoNumberAll() {
+    internetImages = internetImages.map((image, index) => ({
+      ...image,
+      newName: baseFileName ? `${baseFileName}_${index + 1}` : `${index + 1}`
+    }));
+  }
 </script>
 
 {#if loading}
   <div class="flex h-64 items-center justify-center">
     <div class="text-center">
       <div
-        class="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent"
+        class="border-accent-500 mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-t-transparent"
       ></div>
-      <p class="text-foreground-600">Loading images...</p>
+      <p class="text-foreground-600 font-medium">Loading images...</p>
     </div>
   </div>
 {:else if error}
   <div class="p-6">
     <div class="rounded-lg border border-red-200 bg-red-50 p-4">
-      <div class="flex items-center space-x-2">
-        <span class="text-red-600">❌</span>
+      <div class="flex items-center space-x-3">
+        <svg class="h-5 w-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+        </svg>
         <p class="font-medium text-red-800">{error}</p>
       </div>
     </div>
   </div>
 {:else if property}
-  <div class="space-y-6 p-6">
+  <div class="min-h-full space-y-8 p-6">
+    <!-- Step Header -->
+    <!-- <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
+      <div class="mb-4 flex items-center space-x-4">
+        <div class="bg-accent-100 flex h-12 w-12 items-center justify-center rounded-lg">
+          <svg
+            class="text-accent-600 h-6 w-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"
+            />
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-foreground-900 text-2xl font-bold">Step 2: Order & Rename</h1>
+          <p class="text-foreground-600">
+            Arrange your images in the desired order and rename them
+          </p>
+        </div>
+      </div>
+
+      <div class="bg-background-100 border-background-200 rounded-lg border p-4">
+        <div class="flex items-start space-x-3">
+          <svg
+            class="text-accent-600 mt-0.5 h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+          <div>
+            <p class="text-foreground-700 mb-1 text-sm font-medium">How this step works:</p>
+            <ul class="text-foreground-600 space-y-1 text-sm">
+              <li>• Drag images to reorder them or use arrow buttons</li>
+              <li>• Set individual names for each image</li>
+              <li>• Use base filename to apply consistent naming</li>
+              <li>• Apply renaming when satisfied with the order</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div> -->
+
+    <!-- Naming Controls -->
+    <!-- <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
+      <div class="mb-4 flex items-center space-x-3">
+        <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
+          <svg
+            class="text-accent-600 h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4"
+            />
+          </svg>
+        </div>
+        <div>
+          <h2 class="text-foreground-900 text-lg font-semibold">Naming Options</h2>
+          <p class="text-foreground-600 text-sm">Set up consistent naming for your images</p>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
+        <div>
+          <label class="text-foreground-700 mb-2 block text-sm font-medium">
+            Base Filename (Optional)
+          </label>
+          <input
+            type="text"
+            bind:value={baseFileName}
+            oninput={updateNewNamesFromBase}
+            placeholder="e.g., property, apartment, house"
+            class="border-background-300 bg-background-100 text-foreground-900 placeholder-foreground-500 focus:ring-accent-500 focus:border-accent-500 w-full rounded-lg border px-4 py-3 transition-colors focus:ring-2 focus:outline-none"
+            disabled={isDragging || renamingImages}
+          />
+          <p class="text-foreground-500 mt-2 text-xs">
+            Images will be named: {baseFileName || 'image'}_1, {baseFileName || 'image'}_2, etc.
+          </p>
+        </div>
+
+        <div class="flex items-end">
+          <button
+            onclick={autoNumberAll}
+            disabled={internetImages.length === 0 || isDragging || renamingImages}
+            class="bg-background-200 text-foreground-700 hover:bg-background-300 w-full rounded-lg px-4 py-3 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Auto-Number All Images
+          </button>
+        </div>
+      </div>
+    </div> -->
+
+    <!-- Action Bar -->
+    {#if internetImages.length > 0}
+      <div class="bg-accent-50 border-accent-200 rounded-xl border p-6">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center space-x-4">
+            <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
+              <svg
+                class="text-accent-600 h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+            </div>
+            <div>
+              <p class="text-accent-900 font-semibold">Ready to apply changes?</p>
+              <p class="text-accent-700 text-sm">
+                Rename {internetImages.length} images with your new naming scheme
+              </p>
+            </div>
+          </div>
+
+          <button
+            onclick={applyRenaming}
+            disabled={renamingImages || internetImages.length === 0 || isDragging}
+            class="bg-accent-500 hover:bg-accent-600 flex items-center space-x-3 rounded-lg px-6 py-3 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {#if renamingImages}
+              <div
+                class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
+              ></div>
+              <span>Renaming...</span>
+            {:else}
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M9 12l2 2 4-4"
+                />
+              </svg>
+              <span>Apply Renaming</span>
+            {/if}
+          </button>
+        </div>
+      </div>
+    {/if}
+
     <!-- Images Grid -->
-    <div
-      class="bg-background-100 border-background-200 flex w-full flex-row gap-4 rounded-lg border shadow-sm"
-    >
-      <button
-        onclick={applyRenaming}
-        disabled={renamingImages || internetImages.length === 0 || isDragging}
-        class="btn-primary hover:bg-background-200 w-full cursor-pointer p-6 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {#if renamingImages}
-          <span class="flex items-center justify-center space-x-2">
-            <div
-              class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
-            ></div>
-            <span>Renaming...</span>
-          </span>
-        {:else}
-          ✅ Apply Renaming ({internetImages.length})
-        {/if}
-      </button>
-    </div>
-    <section class="bg-background-100 border-background-200 rounded-xl border shadow-sm">
+    <section class="bg-background-50 border-background-200 rounded-xl border shadow-sm">
       <div class="p-6">
         <div class="mb-6 flex items-center justify-between">
-          <h2 class="text-foreground-900 text-xl font-semibold">
-            INTERNET Folder Images ({internetImages.length})
-          </h2>
+          <div class="flex items-center space-x-3">
+            <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
+              <svg
+                class="text-accent-600 h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                />
+              </svg>
+            </div>
+            <div>
+              <h2 class="text-foreground-900 text-xl font-semibold">
+                Image Gallery ({internetImages.length})
+              </h2>
+              <p class="text-foreground-600 text-sm">
+                {isDragging ? 'Dragging in progress...' : 'Drag images to reorder or use controls'}
+              </p>
+            </div>
+          </div>
+
           {#if internetImages.length > 0}
-            <div class="text-foreground-500 text-sm">
-              {isDragging ? 'Dragging...' : 'Drag images to reorder them'}
+            <div class="text-foreground-500 flex items-center space-x-2 text-sm">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M7 16V4m0 0L3 8m4-4l4 4"
+                />
+              </svg>
+              <span>Drag & Drop Enabled</span>
             </div>
           {/if}
         </div>
@@ -302,23 +489,56 @@
         {#if internetImages.length === 0}
           <div class="py-16 text-center">
             <div
-              class="bg-background-200 mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full"
+              class="bg-background-100 mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full"
             >
-              <span class="text-3xl">📁</span>
+              <svg
+                class="text-foreground-400 h-10 w-10"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
+                />
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M8 5a2 2 0 012-2h4a2 2 0 012 2v6H8V5z"
+                />
+              </svg>
             </div>
-            <h3 class="text-foreground-700 mb-2 text-lg font-medium">
+            <h3 class="text-foreground-900 mb-2 text-lg font-semibold">
               No images in INTERNET folder
             </h3>
-            <p class="text-foreground-500 mb-6">Go back to Step 1 to copy images first.</p>
-            <a href="/properties/{property.id}/step1" class="btn-primary"> ← Back to Step 1 </a>
+            <p class="text-foreground-500 mx-auto mb-6 max-w-md">
+              You need to copy images from Step 1 before you can order and rename them.
+            </p>
+            <a
+              href="/properties/{property.id}/step1"
+              class="bg-accent-500 hover:bg-accent-600 inline-flex items-center space-x-2 rounded-lg px-6 py-3 font-medium text-white transition-colors"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M15 19l-7-7 7-7"
+                />
+              </svg>
+              <span>Back to Step 1</span>
+            </a>
           </div>
         {:else}
           <div
-            class="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-6"
+            class="grid grid-cols-2 gap-6 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
             use:dndzone={{
               items: internetImages,
               dragDisabled,
-              flipDurationMs: isDragging ? 0 : 300, // Disable flip during drag
+              flipDurationMs: isDragging ? 0 : 300,
               dropTargetStyle: {}
             }}
             onconsider={handleDndConsider}
@@ -326,9 +546,9 @@
           >
             {#each internetImages as image, index (image.id)}
               <div
-                class="bg-background-200 border-background-300 group overflow-hidden rounded-lg border-2 transition-all duration-200 hover:border-blue-300 hover:shadow-lg {isDragging
-                  ? 'pointer-events-none'
-                  : ''}"
+                class="bg-background-100 border-background-200 group overflow-hidden rounded-xl border transition-all duration-200 hover:shadow-lg {isDragging
+                  ? 'opacity-75'
+                  : 'hover:border-accent-200'}"
                 animate:flip={{ duration: isDragging ? 0 : 300 }}
               >
                 <!-- Image Preview -->
@@ -341,9 +561,9 @@
                     {#if image.loading}
                       <div class="text-center">
                         <div
-                          class="mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-3 border-blue-500 border-t-transparent"
+                          class="border-accent-500 mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-2 border-t-transparent"
                         ></div>
-                        <p class="text-foreground-500 text-xs">Loading...</p>
+                        <p class="text-foreground-500 text-xs font-medium">Loading...</p>
                       </div>
                     {:else if image.dataUrl}
                       <img
@@ -354,21 +574,54 @@
                       />
                     {:else}
                       <div class="text-center text-red-500">
-                        <span class="mb-2 block text-2xl">❌</span>
-                        <p class="text-xs">Failed to load</p>
+                        <svg
+                          class="mx-auto mb-2 h-8 w-8"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                          />
+                        </svg>
+                        <p class="text-xs font-medium">Failed to load</p>
                       </div>
                     {/if}
                   </button>
 
                   <!-- Order Badge -->
                   <div
-                    class="absolute top-3 left-3 flex h-8 w-8 items-center justify-center rounded-full bg-blue-500 text-sm font-bold text-white shadow-lg"
+                    class="bg-accent-500 absolute top-3 left-3 flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold text-white shadow-lg"
                   >
                     {index + 1}
                   </div>
+
+                  <!-- Edit Indicator on Hover -->
+                  <div
+                    class="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+                  >
+                    <div class="rounded-full bg-white/90 p-2">
+                      <svg
+                        class="text-foreground-900 h-4 w-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                        />
+                      </svg>
+                    </div>
+                  </div>
                 </div>
 
-                <!-- Image Info -->
+                <!-- Image Controls -->
                 <div class="p-4">
                   <p
                     class="text-foreground-800 mb-3 truncate text-sm font-medium"
@@ -384,7 +637,7 @@
                       <input
                         type="text"
                         bind:value={image.newName}
-                        class="border-background-300 flex-1 rounded-lg border px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                        class="border-background-300 bg-background-50 focus:ring-accent-500 focus:border-accent-500 flex-1 rounded-lg border px-3 py-2 text-sm transition-colors focus:ring-2 focus:outline-none"
                         placeholder="Enter name"
                         disabled={isDragging}
                       />
@@ -400,27 +653,49 @@
                       <button
                         onclick={() => moveUp(index)}
                         disabled={index === 0 || isDragging}
-                        class="text-foreground-400 hover:text-foreground-600 border-background-300 hover:bg-background-50 flex h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-30"
+                        class="border-background-300 bg-background-50 text-foreground-600 hover:bg-background-100 hover:text-foreground-900 flex h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-30"
                         title="Move up"
                       >
-                        ↑
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M7 14l5-5 5 5"
+                          />
+                        </svg>
                       </button>
                       <button
                         onclick={() => moveDown(index)}
                         disabled={index === internetImages.length - 1 || isDragging}
-                        class="text-foreground-400 hover:text-foreground-600 border-background-300 hover:bg-background-50 flex h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-30"
+                        class="border-background-300 bg-background-50 text-foreground-600 hover:bg-background-100 hover:text-foreground-900 flex h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-30"
                         title="Move down"
                       >
-                        ↓
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M17 10l-5 5-5-5"
+                          />
+                        </svg>
                       </button>
                     </div>
 
                     <button
                       onclick={(e) => openImageInEditor(image.filename, e)}
-                      class="text-xs font-medium text-blue-600 transition-colors hover:text-blue-700"
+                      class="text-accent-600 hover:text-accent-700 flex items-center space-x-1 text-xs font-medium transition-colors"
                       disabled={isDragging}
                     >
-                      Open in Editor
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                        />
+                      </svg>
+                      <span>Edit</span>
                     </button>
                   </div>
                 </div>
@@ -431,27 +706,52 @@
       </div>
     </section>
 
-    <!-- Next Step -->
-
-    <div class="bg-background-100 rounded-lg p-6 shadow">
+    <!-- Next Step Navigation -->
+    <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
       <div class="flex items-center justify-between">
-        <div>
-          <h3 class="text-foreground-900 font-semibold">Ready for the next step?</h3>
-          <p class="text-foreground-600 mt-1 text-sm">
-            Once you've ordered and renamed your images, proceed to Step 3 for copying to AGGELIA.
-          </p>
+        <div class="flex items-center space-x-4">
+          <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-green-100">
+            <svg
+              class="h-6 w-6 text-green-600"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+          </div>
+          <div>
+            <h3 class="text-foreground-900 font-semibold">Ready for the next step?</h3>
+            <p class="text-foreground-600 text-sm">
+              Once you've ordered and renamed your images, proceed to Step 3 for copying to AGGELIA.
+            </p>
+          </div>
         </div>
+
         <a
           href="/properties/{property.id}/step3"
-          class="btn-primary {internetImages.length === 0 ? 'cursor-not-allowed opacity-50' : ''}"
-          class:disabled={internetImages.length === 0}
+          class="inline-flex items-center space-x-2 rounded-lg px-6 py-3 font-medium transition-colors {internetImages.length ===
+          0
+            ? 'bg-background-200 text-foreground-500 cursor-not-allowed'
+            : 'bg-accent-500 hover:bg-accent-600 text-white'}"
+          class:pointer-events-none={internetImages.length === 0}
         >
-          Step 3: Copy to AGGELIA →
+          <span>Step 3: Copy to AGGELIA</span>
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M9 5l7 7-7 7"
+            />
+          </svg>
         </a>
       </div>
     </div>
   </div>
 {/if}
-
-<style>
-</style>
