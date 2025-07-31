@@ -69,7 +69,9 @@ Realtr streamlines the complex workflow of processing real estate photography fr
 <details>
 <summary>🏠 Property Management Dashboard</summary>
 
-![Property Dashboard](path/to/screenshot-dashboard.png)
+![Property Dashboard](static/images/dashboard-dark.png)
+*Main dashboard showing property overview and workflow status*
+![Property Dashboard](static/images/dashboard-light.png)
 *Main dashboard showing property overview and workflow status*
 
 </details>
@@ -77,7 +79,7 @@ Realtr streamlines the complex workflow of processing real estate photography fr
 <details>
 <summary>📂 Step 1: Import Original Images</summary>
 
-![Import Workflow](path/to/screenshot-step1.png)
+![Import Workflow](static/images/step1.png)
 *Import and organize original property images into the INTERNET folder*
 
 </details>
@@ -85,7 +87,7 @@ Realtr streamlines the complex workflow of processing real estate photography fr
 <details>
 <summary>🔢 Step 2: Order & Rename Images</summary>
 
-![Reorder Interface](path/to/screenshot-step2.png)
+![Reorder Interface](static/images/step2.png)
 *Drag-and-drop interface for reordering and renaming images*
 
 </details>
@@ -93,7 +95,7 @@ Realtr streamlines the complex workflow of processing real estate photography fr
 <details>
 <summary>✏️ Step 3: Advanced Editing Selection</summary>
 
-![AGGELIA Selection](path/to/screenshot-step3.png)
+![AGGELIA Selection](static/images/step3.png)
 *Select specific images for advanced editing in external applications*
 
 </details>
@@ -101,7 +103,7 @@ Realtr streamlines the complex workflow of processing real estate photography fr
 <details>
 <summary>🏷️ Step 4: Watermark Application</summary>
 
-![Watermark Process](path/to/screenshot-step4.png)
+![Watermark Process](static/images/step4.png)
 *Configure and apply watermarks to finalized images*
 
 </details>
@@ -109,7 +111,7 @@ Realtr streamlines the complex workflow of processing real estate photography fr
 <details>
 <summary>⚙️ Settings & Configuration</summary>
 
-![Settings Panel](path/to/screenshot-settings.png)
+![Settings Panel](static/images/settings.png)
 *Configure root paths, image editors, and watermark preferences*
 
 </details>
