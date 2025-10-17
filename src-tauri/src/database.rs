@@ -1877,15 +1877,22 @@ pub async fn copy_and_watermark_images(
         None => return Err("App configuration not found".into()),
     };
 
-    if config.watermark_image_path.is_none() {
-        return Ok(CommandResult {
-            success: false,
-            error: Some(
-                "Watermark image not configured. Please set it in settings first.".to_string(),
-            ),
-            data: None,
-        });
-    }
+    // Load watermark from app data
+    let watermark_path = crate::config::get_watermark_from_app_data(app.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    let watermark_img_path = match watermark_path {
+        Some(path) => PathBuf::from(path),
+        None => {
+            return Ok(CommandResult {
+                success: false,
+                error: Some(
+                    "Watermark image not configured. Please set it in settings first.".to_string(),
+                ),
+                data: None,
+            })
+        }
+    };
 
     let root_path = PathBuf::from(&config.root_path);
     let property_path = root_path.join(&folder_path);
@@ -1901,7 +1908,6 @@ pub async fn copy_and_watermark_images(
         .map_err(|e| format!("Failed to create WATERMARK/AGGELIA folder: {}", e))?;
 
     // Load watermark image once
-    let watermark_img_path = config.watermark_image_path.unwrap();
     let watermark_img = image::open(&watermark_img_path)
         .map_err(|e| format!("Failed to load watermark image: {}", e))?;
 
@@ -1910,11 +1916,11 @@ pub async fn copy_and_watermark_images(
 
     // Process INTERNET folder -> WATERMARK folder
     if internet_path.exists() {
-        match copy_and_process_folder(
+        match copy_and_process_folder_with_config(
             &internet_path,
             &watermark_path,
             &watermark_img,
-            config.watermark_opacity,
+            &config.watermark_config,
         ) {
             Ok(count) => processed_count += count,
             Err(e) => errors.push(format!("INTERNET folder: {}", e)),
@@ -1923,11 +1929,11 @@ pub async fn copy_and_watermark_images(
 
     // Process INTERNET/AGGELIA folder -> WATERMARK/AGGELIA folder
     if aggelia_path.exists() {
-        match copy_and_process_folder(
+        match copy_and_process_folder_with_config(
             &aggelia_path,
             &watermark_aggelia_path,
             &watermark_img,
-            config.watermark_opacity,
+            &config.watermark_config,
         ) {
             Ok(count) => processed_count += count,
             Err(e) => errors.push(format!("AGGELIA folder: {}", e)),
@@ -1959,11 +1965,11 @@ pub async fn copy_and_watermark_images(
     }
 }
 
-fn copy_and_process_folder(
+fn copy_and_process_folder_with_config(
     source_path: &PathBuf,
     dest_path: &PathBuf,
     watermark_img: &DynamicImage,
-    opacity: f32,
+    config: &crate::config::WatermarkConfig,
 ) -> Result<usize, String> {
     let mut processed_count = 0;
 
@@ -1978,8 +1984,13 @@ fn copy_and_process_folder(
                     if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
                         let dest_file = dest_path.join(filename);
 
-                        // Copy and watermark
-                        match apply_watermark_to_image(&path, &dest_file, watermark_img, opacity) {
+                        // Copy and watermark with config
+                        match apply_watermark_to_image_with_config(
+                            &path,
+                            &dest_file,
+                            watermark_img,
+                            config,
+                        ) {
                             Ok(_) => processed_count += 1,
                             Err(e) => return Err(format!("Failed to process {}: {}", filename, e)),
                         }
@@ -1990,6 +2001,248 @@ fn copy_and_process_folder(
     }
 
     Ok(processed_count)
+}
+
+fn apply_watermark_to_image_with_config(
+    source_path: &PathBuf,
+    dest_path: &PathBuf,
+    watermark_img: &DynamicImage,
+    config: &crate::config::WatermarkConfig,
+) -> Result<(), String> {
+    // Load source image
+    let mut base_img = image::open(source_path)
+        .map_err(|e| format!("Failed to open source image: {}", e))?
+        .to_rgba8();
+
+    // Apply watermark using config
+    apply_watermark_with_config(&mut base_img, watermark_img, config)?;
+
+    // Save watermarked image
+    base_img
+        .save(dest_path)
+        .map_err(|e| format!("Failed to save watermarked image: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn generate_watermark_preview(
+    app: tauri::AppHandle,
+    sample_image_base64: Option<String>,
+) -> Result<String, String> {
+    // Load watermark config
+    let config = crate::config::load_config(app.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    let config = match config {
+        Some(cfg) => cfg,
+        None => return Err("No configuration found".into()),
+    };
+
+    // Load watermark image from app data
+    let watermark_path = crate::config::get_watermark_from_app_data(app.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    let watermark_path = match watermark_path {
+        Some(path) => PathBuf::from(path),
+        None => return Err("No watermark image configured".into()),
+    };
+
+    let watermark_img =
+        image::open(&watermark_path).map_err(|e| format!("Failed to load watermark: {}", e))?;
+
+    // Create or use sample image
+    let mut base_img = if let Some(base64_data) = sample_image_base64 {
+        // Decode base64 and load as image
+        let image_data = general_purpose::STANDARD
+            .decode(base64_data)
+            .map_err(|e| format!("Failed to decode base64: {}", e))?;
+        image::load_from_memory(&image_data)
+            .map_err(|e| format!("Failed to load image from memory: {}", e))?
+            .to_rgba8()
+    } else {
+        // Create a sample gray image (800x600)
+        let mut img = RgbaImage::new(800, 600);
+        for pixel in img.pixels_mut() {
+            *pixel = image::Rgba([200, 200, 200, 255]);
+        }
+        img
+    };
+
+    // Apply watermark using current config
+    apply_watermark_with_config(&mut base_img, &watermark_img, &config.watermark_config)?;
+
+    // Encode result as base64
+    let mut buffer = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut buffer);
+    base_img
+        .write_to(&mut cursor, ImageFormat::Png)
+        .map_err(|e| format!("Failed to encode image: {}", e))?;
+
+    let base64_result = general_purpose::STANDARD.encode(&buffer);
+    Ok(base64_result)
+}
+
+fn apply_watermark_with_config(
+    base_img: &mut RgbaImage,
+    watermark_img: &DynamicImage,
+    config: &crate::config::WatermarkConfig,
+) -> Result<(), String> {
+    let (base_width, base_height) = base_img.dimensions();
+    let (wm_width, wm_height) = watermark_img.dimensions();
+
+    // Calculate watermark size based on size_mode
+    let (new_wm_width, new_wm_height) = match config.size_mode.as_str() {
+        "proportional" => {
+            let reference_size = match config.relative_to.as_str() {
+                "longest-side" => base_width.max(base_height),
+                "shortest-side" => base_width.min(base_height),
+                "width" => base_width,
+                "height" => base_height,
+                _ => base_width.max(base_height),
+            };
+
+            let max_size = (reference_size as f32 * config.size_percentage) as u32;
+            let scale_x = max_size as f32 / wm_width as f32;
+            let scale_y = max_size as f32 / wm_height as f32;
+            let scale = scale_x.min(scale_y).min(1.0);
+
+            (
+                (wm_width as f32 * scale) as u32,
+                (wm_height as f32 * scale) as u32,
+            )
+        }
+        "fit" => {
+            // Fit within image bounds while maintaining aspect ratio
+            let scale_x = base_width as f32 / wm_width as f32;
+            let scale_y = base_height as f32 / wm_height as f32;
+            let scale = scale_x.min(scale_y).min(1.0);
+
+            (
+                (wm_width as f32 * scale) as u32,
+                (wm_height as f32 * scale) as u32,
+            )
+        }
+        "stretch" => (base_width, base_height),
+        "tile" => (wm_width, wm_height), // Keep original size for tiling
+        _ => {
+            let max_size = (base_width.max(base_height) as f32 * config.size_percentage) as u32;
+            let scale = (max_size as f32 / wm_width.max(wm_height) as f32).min(1.0);
+            (
+                (wm_width as f32 * scale) as u32,
+                (wm_height as f32 * scale) as u32,
+            )
+        }
+    };
+
+    // Resize watermark
+    let resized_watermark = watermark_img
+        .resize_exact(
+            new_wm_width,
+            new_wm_height,
+            image::imageops::FilterType::Lanczos3,
+        )
+        .to_rgba8();
+
+    // Apply watermark based on mode
+    if config.size_mode == "tile" {
+        apply_tiled_watermark(base_img, &resized_watermark, config)?;
+    } else {
+        apply_single_watermark(base_img, &resized_watermark, config)?;
+    }
+
+    Ok(())
+}
+
+fn apply_single_watermark(
+    base_img: &mut RgbaImage,
+    watermark: &RgbaImage,
+    config: &crate::config::WatermarkConfig,
+) -> Result<(), String> {
+    let (base_width, base_height) = base_img.dimensions();
+    let (wm_width, wm_height) = watermark.dimensions();
+
+    // Calculate position based on anchor
+    let (base_x, base_y) = match config.position_anchor.as_str() {
+        "top-left" => (0, 0),
+        "top-center" => ((base_width - wm_width) / 2, 0),
+        "top-right" => (base_width - wm_width, 0),
+        "center-left" => (0, (base_height - wm_height) / 2),
+        "center" => ((base_width - wm_width) / 2, (base_height - wm_height) / 2),
+        "center-right" => (base_width - wm_width, (base_height - wm_height) / 2),
+        "bottom-left" => (0, base_height - wm_height),
+        "bottom-center" => ((base_width - wm_width) / 2, base_height - wm_height),
+        "bottom-right" => (base_width - wm_width, base_height - wm_height),
+        _ => ((base_width - wm_width) / 2, (base_height - wm_height) / 2),
+    };
+
+    // Apply offsets
+    let pos_x = (base_x as i32 + config.offset_x).max(0).min(base_width as i32 - wm_width as i32) as u32;
+    let pos_y = (base_y as i32 + config.offset_y).max(0).min(base_height as i32 - wm_height as i32) as u32;
+
+    // Apply watermark with opacity
+    blend_watermark(base_img, watermark, pos_x, pos_y, config.opacity, config.use_alpha_channel);
+
+    Ok(())
+}
+
+fn apply_tiled_watermark(
+    base_img: &mut RgbaImage,
+    watermark: &RgbaImage,
+    config: &crate::config::WatermarkConfig,
+) -> Result<(), String> {
+    let (base_width, base_height) = base_img.dimensions();
+    let (wm_width, wm_height) = watermark.dimensions();
+
+    let mut y = 0;
+    while y < base_height {
+        let mut x = 0;
+        while x < base_width {
+            blend_watermark(base_img, watermark, x, y, config.opacity, config.use_alpha_channel);
+            x += wm_width + config.offset_x.unsigned_abs();
+        }
+        y += wm_height + config.offset_y.unsigned_abs();
+    }
+
+    Ok(())
+}
+
+fn blend_watermark(
+    base_img: &mut RgbaImage,
+    watermark: &RgbaImage,
+    pos_x: u32,
+    pos_y: u32,
+    opacity: f32,
+    use_alpha: bool,
+) {
+    let (base_width, base_height) = base_img.dimensions();
+    let (wm_width, wm_height) = watermark.dimensions();
+
+    for y in 0..wm_height {
+        for x in 0..wm_width {
+            let base_x = pos_x + x;
+            let base_y = pos_y + y;
+
+            if base_x < base_width && base_y < base_height {
+                let base_pixel = base_img.get_pixel_mut(base_x, base_y);
+                let wm_pixel = watermark.get_pixel(x, y);
+
+                let wm_alpha = if use_alpha {
+                    (wm_pixel[3] as f32 / 255.0 * opacity).min(1.0)
+                } else {
+                    opacity
+                };
+
+                // Alpha blend
+                for c in 0..3 {
+                    let base_val = base_pixel[c] as f32 / 255.0;
+                    let wm_val = wm_pixel[c] as f32 / 255.0;
+                    let blended = base_val * (1.0 - wm_alpha) + wm_val * wm_alpha;
+                    base_pixel[c] = (blended * 255.0) as u8;
+                }
+            }
+        }
+    }
 }
 
 fn apply_watermark_to_image(

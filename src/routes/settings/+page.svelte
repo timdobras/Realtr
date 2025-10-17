@@ -4,7 +4,7 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { appDataDir } from '@tauri-apps/api/path';
   import { DatabaseService } from '$lib/services/databaseService';
-  import type { ScanResult } from '$lib/types/database';
+  import type { ScanResult, WatermarkConfig } from '$lib/types/database';
 
   // TypeScript interfaces
   interface AppConfig {
@@ -16,6 +16,7 @@
     complex_editor_path?: string;
     complex_editor_name?: string;
     watermark_image_path?: string;
+    watermarkConfig: WatermarkConfig;
     watermark_opacity?: number;
   }
 
@@ -34,12 +35,25 @@
     complex_editor_path: undefined,
     complex_editor_name: undefined,
     watermark_image_path: '',
-    watermark_opacity: 0.15
+    watermarkConfig: {
+      sizeMode: 'proportional',
+      sizePercentage: 0.35,
+      relativeTo: 'longest-side',
+      positionAnchor: 'center',
+      offsetX: 0,
+      offsetY: 0,
+      opacity: 0.15,
+      useAlphaChannel: true
+    }
   });
 
   let isLoading = $state<boolean>(false);
   let statusMessage = $state<string>('');
   let statusType = $state<'success' | 'error' | 'info'>('info');
+
+  // Watermark preview state
+  let watermarkPreviewUrl = $state<string>('');
+  let isGeneratingPreview = $state(false);
 
   // Load config on mount
   onMount(async () => {
@@ -144,7 +158,7 @@
           complex_editor_path: config.complex_editor_path,
           complex_editor_name: config.complex_editor_name,
           watermark_image_path: config.watermark_image_path,
-          watermark_opacity: config.watermark_opacity
+          watermarkConfig: config.watermarkConfig
         }
       });
 
@@ -333,9 +347,17 @@
       });
 
       if (selected && typeof selected === 'string') {
-        config.watermark_image_path = selected;
-        statusMessage = 'Watermark image selected successfully';
-        statusType = 'success';
+        // Copy to app data for persistence
+        await invoke('copy_watermark_to_app_data', { sourcePath: selected });
+
+        // Get the app data path
+        const appDataPath = await invoke<string | null>('get_watermark_from_app_data');
+        if (appDataPath) {
+          config.watermark_image_path = appDataPath;
+          await generatePreview();
+          statusMessage = 'Watermark image selected and saved';
+          statusType = 'success';
+        }
       }
     } catch (error) {
       console.error('Error selecting watermark image:', error);
@@ -344,10 +366,52 @@
     }
   }
 
+  // Generate watermark preview
+  async function generatePreview(): Promise<void> {
+    if (!config.watermark_image_path) {
+      watermarkPreviewUrl = '';
+      return;
+    }
+
+    try {
+      isGeneratingPreview = true;
+      const base64Preview = await invoke<string>('generate_watermark_preview', {
+        sampleImageBase64: null // null uses default gray sample image
+      });
+      watermarkPreviewUrl = `data:image/png;base64,${base64Preview}`;
+    } catch (error) {
+      console.error('Failed to generate preview:', error);
+      watermarkPreviewUrl = '';
+    } finally {
+      isGeneratingPreview = false;
+    }
+  }
+
+  // Debounced preview generation
+  let previewTimeout: number | null = null;
+  function schedulePreviewUpdate() {
+    if (previewTimeout) {
+      clearTimeout(previewTimeout);
+    }
+    previewTimeout = window.setTimeout(() => {
+      generatePreview();
+    }, 500);
+  }
+
   // Add function to clear watermark settings
   function clearWatermarkSettings(): void {
     config.watermark_image_path = '';
-    config.watermark_opacity = 0.15;
+    config.watermarkConfig = {
+      sizeMode: 'proportional',
+      sizePercentage: 0.35,
+      relativeTo: 'longest-side',
+      positionAnchor: 'center',
+      offsetX: 0,
+      offsetY: 0,
+      opacity: 0.15,
+      useAlphaChannel: true
+    };
+    watermarkPreviewUrl = '';
     statusMessage = 'Watermark settings cleared';
     statusType = 'info';
   }
@@ -842,7 +906,7 @@
       </div>
     </div>
 
-    <!-- Watermark Configuration -->
+    <!-- Enhanced Watermark Configuration -->
     <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
       <div class="mb-6 flex items-center space-x-3">
         <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
@@ -863,7 +927,7 @@
         <div>
           <h2 class="text-foreground-900 text-xl font-semibold">Watermark Configuration</h2>
           <p class="text-foreground-600 text-sm">
-            Set up your watermark image and opacity settings
+            Configure watermark image, size, position, and opacity
           </p>
         </div>
       </div>
@@ -881,11 +945,6 @@
                 class="text-foreground-900 border-background-300 bg-background-100 w-full rounded-lg border px-4 py-3 focus:outline-none"
                 placeholder="Select a watermark image"
               />
-              {#if config.watermark_image_path}
-                <p class="text-foreground-500 mt-1 font-mono text-xs break-all">
-                  {config.watermark_image_path}
-                </p>
-              {/if}
             </div>
             <button
               onclick={selectWatermarkImage}
@@ -904,82 +963,245 @@
             </button>
           </div>
           <p class="text-foreground-500 mt-2 text-sm">
-            Recommended: PNG with transparent background for best results
+            PNG with transparent background recommended. Image will be stored in app data.
           </p>
         </div>
 
-        <!-- Opacity Slider -->
-        <div>
-          <label class="text-foreground-700 mb-3 block text-sm font-medium">
-            Watermark Opacity: {Math.round(config.watermark_opacity * 100)}%
-          </label>
-          <div class="flex items-center space-x-4">
-            <span class="text-foreground-500 text-sm font-medium">0%</span>
-            <div class="flex-1">
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                bind:value={config.watermark_opacity}
-                class="bg-background-300 slider h-2 w-full cursor-pointer appearance-none rounded-lg"
-                style="background: linear-gradient(to right, #3b82f6 0%, #3b82f6 {config.watermark_opacity *
-                  100}%, #e5e7eb {config.watermark_opacity * 100}%, #e5e7eb 100%);"
-              />
-            </div>
-            <span class="text-foreground-500 text-sm font-medium">100%</span>
-          </div>
-          <p class="text-foreground-500 mt-2 text-sm">
-            Adjust the transparency of the watermark overlay
-          </p>
-        </div>
-
-        <!-- Preview Section -->
         {#if config.watermark_image_path}
+          <!-- Size Configuration -->
+          <div class="border-background-200 rounded-lg border p-4">
+            <h3 class="text-foreground-900 mb-4 font-medium">Size</h3>
+
+            <!-- Size Mode Radio Buttons -->
+            <div class="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+              <label class="flex cursor-pointer items-center space-x-2">
+                <input
+                  type="radio"
+                  name="sizeMode"
+                  value="proportional"
+                  bind:group={config.watermarkConfig.sizeMode}
+                  onchange={schedulePreviewUpdate}
+                  class="text-accent-600 focus:ring-accent-500 h-4 w-4"
+                />
+                <span class="text-foreground-700 text-sm">Proportional</span>
+              </label>
+              <label class="flex cursor-pointer items-center space-x-2">
+                <input
+                  type="radio"
+                  name="sizeMode"
+                  value="fit"
+                  bind:group={config.watermarkConfig.sizeMode}
+                  onchange={schedulePreviewUpdate}
+                  class="text-accent-600 focus:ring-accent-500 h-4 w-4"
+                />
+                <span class="text-foreground-700 text-sm">Fit</span>
+              </label>
+              <label class="flex cursor-pointer items-center space-x-2">
+                <input
+                  type="radio"
+                  name="sizeMode"
+                  value="stretch"
+                  bind:group={config.watermarkConfig.sizeMode}
+                  onchange={schedulePreviewUpdate}
+                  class="text-accent-600 focus:ring-accent-500 h-4 w-4"
+                />
+                <span class="text-foreground-700 text-sm">Stretch</span>
+              </label>
+              <label class="flex cursor-pointer items-center space-x-2">
+                <input
+                  type="radio"
+                  name="sizeMode"
+                  value="tile"
+                  bind:group={config.watermarkConfig.sizeMode}
+                  onchange={schedulePreviewUpdate}
+                  class="text-accent-600 focus:ring-accent-500 h-4 w-4"
+                />
+                <span class="text-foreground-700 text-sm">Tile</span>
+              </label>
+            </div>
+
+            <!-- Proportional Settings -->
+            {#if config.watermarkConfig.sizeMode === 'proportional'}
+              <div class="space-y-4">
+                <div>
+                  <label class="text-foreground-700 mb-2 block text-sm font-medium">
+                    Size: {Math.round(config.watermarkConfig.sizePercentage * 100)}%
+                  </label>
+                  <input
+                    type="range"
+                    min="0.05"
+                    max="1"
+                    step="0.05"
+                    bind:value={config.watermarkConfig.sizePercentage}
+                    oninput={schedulePreviewUpdate}
+                    class="bg-accent-200 h-2 w-full cursor-pointer appearance-none rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label class="text-foreground-700 mb-2 block text-sm">Relative to</label>
+                  <select
+                    bind:value={config.watermarkConfig.relativeTo}
+                    onchange={schedulePreviewUpdate}
+                    class="text-foreground-900 border-background-300 bg-background-100 w-full rounded-lg border px-3 py-2 focus:outline-none"
+                  >
+                    <option value="longest-side">Longest side</option>
+                    <option value="shortest-side">Shortest side</option>
+                    <option value="width">Width</option>
+                    <option value="height">Height</option>
+                  </select>
+                </div>
+              </div>
+            {/if}
+          </div>
+
+          <!-- Position Configuration -->
+          <div class="border-background-200 rounded-lg border p-4">
+            <h3 class="text-foreground-900 mb-4 font-medium">Position</h3>
+
+            <!-- Anchor Selection (9-point grid) -->
+            <div class="mb-4">
+              <label class="text-foreground-700 mb-3 block text-sm">Anchor</label>
+              <div class="grid grid-cols-3 gap-2">
+                {#each [
+                  ['top-left', 'TL'],
+                  ['top-center', 'TC'],
+                  ['top-right', 'TR'],
+                  ['center-left', 'CL'],
+                  ['center', 'C'],
+                  ['center-right', 'CR'],
+                  ['bottom-left', 'BL'],
+                  ['bottom-center', 'BC'],
+                  ['bottom-right', 'BR']
+                ] as [value, label]}
+                  <button
+                    type="button"
+                    onclick={() => {
+                      config.watermarkConfig.positionAnchor = value;
+                      schedulePreviewUpdate();
+                    }}
+                    class="border-background-300 hover:bg-accent-100 flex h-12 items-center justify-center rounded-lg border text-sm font-medium transition-colors {config.watermarkConfig.positionAnchor === value
+                      ? 'bg-accent-500 text-white'
+                      : 'bg-background-50 text-foreground-700'}"
+                  >
+                    {label}
+                  </button>
+                {/each}
+              </div>
+            </div>
+
+            <!-- Offset Controls -->
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-foreground-700 mb-2 block text-sm">Offset X</label>
+                <input
+                  type="number"
+                  bind:value={config.watermarkConfig.offsetX}
+                  oninput={schedulePreviewUpdate}
+                  class="text-foreground-900 border-background-300 bg-background-100 w-full rounded-lg border px-3 py-2 focus:outline-none"
+                  placeholder="0"
+                />
+              </div>
+              <div>
+                <label class="text-foreground-700 mb-2 block text-sm">Offset Y</label>
+                <input
+                  type="number"
+                  bind:value={config.watermarkConfig.offsetY}
+                  oninput={schedulePreviewUpdate}
+                  class="text-foreground-900 border-background-300 bg-background-100 w-full rounded-lg border px-3 py-2 focus:outline-none"
+                  placeholder="0"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- Opacity Configuration -->
+          <div class="border-background-200 rounded-lg border p-4">
+            <h3 class="text-foreground-900 mb-4 font-medium">Opacity</h3>
+
+            <div class="mb-4">
+              <label class="text-foreground-700 mb-3 block text-sm font-medium">
+                Opacity: {Math.round(config.watermarkConfig.opacity * 100)}%
+              </label>
+              <div class="flex items-center space-x-4">
+                <span class="text-foreground-500 text-sm font-medium">0%</span>
+                <div class="flex-1">
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    bind:value={config.watermarkConfig.opacity}
+                    oninput={schedulePreviewUpdate}
+                    class="bg-accent-200 h-2 w-full cursor-pointer appearance-none rounded-lg"
+                  />
+                </div>
+                <span class="text-foreground-500 text-sm font-medium">100%</span>
+              </div>
+            </div>
+
+            <label class="flex cursor-pointer items-center space-x-2">
+              <input
+                type="checkbox"
+                bind:checked={config.watermarkConfig.useAlphaChannel}
+                onchange={schedulePreviewUpdate}
+                class="text-accent-600 focus:ring-accent-500 h-4 w-4 rounded"
+              />
+              <span class="text-foreground-700 text-sm">Use alpha channel (respect PNG transparency)</span>
+            </label>
+          </div>
+
+          <!-- Live Preview -->
           <div class="border-background-300 bg-background-100 rounded-lg border p-4">
-            <div class="mb-3 flex items-center space-x-2">
-              <svg
-                class="text-foreground-600 h-4 w-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-                />
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
-                />
-              </svg>
-              <h4 class="text-foreground-900 font-medium">Watermark Preview</h4>
+            <div class="mb-3 flex items-center justify-between">
+              <div class="flex items-center space-x-2">
+                <svg
+                  class="text-foreground-600 h-4 w-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                  />
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                  />
+                </svg>
+                <h4 class="text-foreground-900 font-medium">Live Preview</h4>
+              </div>
+              {#if isGeneratingPreview}
+                <div
+                  class="h-4 w-4 animate-spin rounded-full border-2 border-accent-600 border-t-transparent"
+                ></div>
+              {/if}
             </div>
-            <div class="flex items-center space-x-4">
-              <div
-                class="border-background-300 bg-background-50 flex h-16 w-16 items-center justify-center overflow-hidden rounded-lg border"
-              >
+
+            {#if watermarkPreviewUrl}
+              <div class="border-background-300 bg-background-50 overflow-hidden rounded-lg border">
                 <img
-                  src={`file://${config.watermark_image_path}`}
+                  src={watermarkPreviewUrl}
                   alt="Watermark preview"
-                  class="max-h-full max-w-full object-contain"
-                  style="opacity: {config.watermark_opacity}"
-                  onerror={() => {}}
+                  class="h-auto w-full"
                 />
               </div>
-              <div class="text-foreground-600 space-y-1 text-sm">
-                <p>
-                  <span class="font-medium">Opacity:</span>
-                  {Math.round(config.watermark_opacity * 100)}%
-                </p>
-                <p><span class="font-medium">Position:</span> Center</p>
-                <p><span class="font-medium">Size:</span> Auto-fitted to image</p>
+              <p class="text-foreground-500 mt-2 text-xs">
+                Preview shows how watermark will appear on images
+              </p>
+            {:else if isGeneratingPreview}
+              <div class="flex h-48 items-center justify-center">
+                <div class="text-foreground-500 text-sm">Generating preview...</div>
               </div>
-            </div>
+            {:else}
+              <div class="flex h-48 items-center justify-center">
+                <div class="text-foreground-500 text-sm">Configure settings to see preview</div>
+              </div>
+            {/if}
           </div>
         {/if}
 
@@ -1006,7 +1228,7 @@
                 ? 'bg-green-500'
                 : 'bg-background-300'}"
             ></div>
-            <span class="text-foreground-600 text-sm font-medium">Watermark Image</span>
+            <span class="text-foreground-600 text-sm font-medium">Watermark Configured</span>
           </div>
         </div>
       </div>

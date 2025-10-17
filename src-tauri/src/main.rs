@@ -3,16 +3,19 @@
 mod config;
 mod database;
 
-use config::{load_config, reset_config, save_config, setup_folder_structure};
+use config::{
+    copy_watermark_to_app_data, get_watermark_from_app_data, load_config, reset_config,
+    save_config, setup_folder_structure,
+};
 use database::{
     clear_aggelia_folder, clear_internet_folder, clear_watermark_folders,
     copy_and_watermark_images, copy_images_to_aggelia, copy_images_to_internet, create_property,
-    debug_database_dates, delete_property, get_aggelia_image_as_base64, get_cities,
-    get_full_property_path, get_image_as_base64, get_internet_image_as_base64, get_properties,
-    get_properties_by_status, get_property_by_id, get_watermark_image_as_base64, init_database,
-    list_aggelia_images, list_internet_images, list_original_images, list_watermark_aggelia_images,
-    list_watermark_images, open_image_in_advanced_editor, open_image_in_editor,
-    open_images_in_folder, open_property_folder, rename_internet_images,
+    debug_database_dates, delete_property, generate_watermark_preview, get_aggelia_image_as_base64,
+    get_cities, get_full_property_path, get_image_as_base64, get_internet_image_as_base64,
+    get_properties, get_properties_by_status, get_property_by_id, get_watermark_image_as_base64,
+    init_database, list_aggelia_images, list_internet_images, list_original_images,
+    list_watermark_aggelia_images, list_watermark_images, open_image_in_advanced_editor,
+    open_image_in_editor, open_images_in_folder, open_property_folder, rename_internet_images,
     reset_database_with_proper_dates, scan_and_import_properties, search_cities,
     update_property_status,
 };
@@ -50,6 +53,8 @@ pub fn run() {
             save_config,
             reset_config,
             setup_folder_structure,
+            copy_watermark_to_app_data,
+            get_watermark_from_app_data,
             create_property,
             get_properties,
             get_property_by_id,
@@ -81,7 +86,8 @@ pub fn run() {
             get_watermark_image_as_base64,
             clear_watermark_folders,
             open_property_folder,
-            get_full_property_path
+            get_full_property_path,
+            generate_watermark_preview
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
