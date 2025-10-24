@@ -5,7 +5,12 @@
       "Bash(cargo build:*)",
       "Bash(npm run tauri:*)",
       "Bash(git pull:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git tag:*)",
+      "Bash(git push:*)",
+      "Bash(git log -1 --format='%an %ae')",
+      "Bash(git commit -m \"$(cat <<''EOF''\nfix: Display complete watermark configuration in Step 4\n\nUpdated Step 4 page to properly load and display all watermark configuration settings including size mode, position anchor, and opacity. The backend was already correctly applying watermarks using the full configuration - this fix ensures the UI accurately reflects those settings.\n\nChanges:\n- Load all watermark config fields (sizeMode, positionAnchor, opacity)\n- Display size mode and position in configuration panel\n- Add TypeScript type annotations for config responses\n- Expand grid to 4 columns to show all settings\nEOF\n)\")",
+      "Bash(git commit -m \"chore: Bump version to 0.1.9\")"
     ],
     "deny": [],
     "ask": []

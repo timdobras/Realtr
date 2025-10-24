@@ -62,57 +62,37 @@
 
 <div class="font-plusjakarta bg-background-0 text-foreground-950 flex h-screen">
   <!-- Sidebar -->
-  <aside class="bg-background-50 border-background-200 flex w-64 flex-col border-r shadow-sm">
+  <aside class="bg-background-50 border-background-200 flex w-60 flex-col border-r">
     <!-- Logo Area -->
-    <div class="border-background-200 flex items-center space-x-3 border-b p-6">
-      <div class="bg-accent-500 flex h-10 w-10 items-center justify-center rounded-lg">
-        <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
-          />
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"
-          />
-        </svg>
-      </div>
-      <div>
-        <h1 class="text-foreground-900 text-xl font-bold">Realtr</h1>
-        <p class="text-foreground-500 text-xs font-medium">Property Management</p>
-      </div>
+    <div class="border-background-200 border-b px-6 py-5">
+      <h1 class="text-foreground-900 text-lg font-semibold tracking-tight">Realtr</h1>
+      <p class="text-foreground-500 mt-0.5 text-xs">Photo Manager</p>
     </div>
 
     <!-- Navigation -->
-    <nav class="flex-1 space-y-1 p-4">
+    <nav class="flex-1 space-y-0.5 px-3 py-4">
       {#each navItems as item}
         <a
           href={item.href}
-          class="flex items-center rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200
+          class="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors
             {isActive(item.href)
-            ? 'bg-accent-50 text-accent-700 border-accent-500 border-r-2'
+            ? 'bg-accent-500 text-white'
             : 'text-foreground-600 hover:bg-background-100 hover:text-foreground-900'}"
         >
-          <span class="flex-shrink-0">
-            {@html item.icon}
-          </span>
-          <span class="ml-3">{item.name}</span>
+          {@html item.icon}
+          <span>{item.name}</span>
         </a>
       {/each}
     </nav>
 
     <!-- Theme Toggle -->
-    <div class="border-background-200 border-t p-4">
+    <div class="border-background-200 border-t px-3 py-3">
       <button
         onclick={toggleTheme}
-        class="bg-background-100 hover:bg-background-200 text-foreground-700 flex w-full items-center justify-center space-x-2 rounded-lg p-2.5 text-sm font-medium transition-colors duration-200"
+        class="bg-background-100 hover:bg-background-200 text-foreground-700 flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors"
         aria-label="Toggle dark mode"
       >
-        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           {#if isDarkMode}
             <path
               stroke-linecap="round"
@@ -129,7 +109,7 @@
             />
           {/if}
         </svg>
-        <span>{isDarkMode ? 'Light Mode' : 'Dark Mode'}</span>
+        <span>{isDarkMode ? 'Light' : 'Dark'}</span>
       </button>
     </div>
   </aside>

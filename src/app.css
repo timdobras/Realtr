@@ -49,45 +49,45 @@
 
 @layer theme {
   .dark {
-    /* Blue-tinted foreground colors for dark mode */
-    --color-foreground-50: oklch(8% 0.012 240);
-    --color-foreground-100: oklch(15% 0.015 240);
-    --color-foreground-200: oklch(25% 0.018 240);
-    --color-foreground-300: oklch(35% 0.02 240);
-    --color-foreground-400: oklch(45% 0.022 240);
-    --color-foreground-500: oklch(55% 0.024 240);
-    --color-foreground-600: oklch(65% 0.022 240);
-    --color-foreground-700: oklch(75% 0.02 240);
-    --color-foreground-800: oklch(83% 0.018 240);
-    --color-foreground-900: oklch(90% 0.015 240);
-    --color-foreground-950: oklch(95% 0.012 240);
+    /* Professional gray foreground colors for dark mode - neutral, no blue tint */
+    --color-foreground-50: oklch(12% 0.002 0);
+    --color-foreground-100: oklch(18% 0.003 0);
+    --color-foreground-200: oklch(28% 0.004 0);
+    --color-foreground-300: oklch(38% 0.005 0);
+    --color-foreground-400: oklch(48% 0.006 0);
+    --color-foreground-500: oklch(58% 0.006 0);
+    --color-foreground-600: oklch(68% 0.005 0);
+    --color-foreground-700: oklch(78% 0.004 0);
+    --color-foreground-800: oklch(86% 0.003 0);
+    --color-foreground-900: oklch(92% 0.002 0);
+    --color-foreground-950: oklch(96% 0.001 0);
 
-    /* Blue-tinted backgrounds for cohesive aesthetic */
-    --color-background-0: oklch(4% 0.015 240); /* Deep blue-black base */
-    --color-background-50: oklch(8% 0.018 240); /* Main content areas with blue tint */
-    --color-background-100: oklch(15% 0.022 240); /* Card backgrounds - cool blue */
-    --color-background-200: oklch(22% 0.025 240); /* Elevated surfaces - blue tinted */
-    --color-background-300: oklch(30% 0.028 240); /* Borders and dividers - subtle blue */
-    --color-background-400: oklch(38% 0.03 240); /* Hover states - clear blue tint */
-    --color-background-500: oklch(46% 0.028 240); /* Active states */
-    --color-background-600: oklch(54% 0.025 240); /* Interactive elements */
-    --color-background-700: oklch(62% 0.022 240);
-    --color-background-800: oklch(70% 0.018 240);
-    --color-background-900: oklch(78% 0.015 240);
-    --color-background-950: oklch(85% 0.012 240);
+    /* Professional dark gray backgrounds - not black, easier on eyes */
+    --color-background-0: oklch(16% 0.003 0); /* Main background - dark gray */
+    --color-background-50: oklch(19% 0.004 0); /* Sidebar and headers */
+    --color-background-100: oklch(23% 0.005 0); /* Card backgrounds */
+    --color-background-200: oklch(28% 0.006 0); /* Elevated surfaces */
+    --color-background-300: oklch(35% 0.007 0); /* Borders and dividers */
+    --color-background-400: oklch(42% 0.008 0); /* Hover states */
+    --color-background-500: oklch(50% 0.008 0); /* Active states */
+    --color-background-600: oklch(58% 0.007 0);
+    --color-background-700: oklch(66% 0.006 0);
+    --color-background-800: oklch(74% 0.005 0);
+    --color-background-900: oklch(82% 0.004 0);
+    --color-background-950: oklch(88% 0.003 0);
 
-    /* Enhanced accent colors for dark mode */
-    --color-accent-50: oklch(18% 0.12 240);
-    --color-accent-100: oklch(25% 0.15 240);
-    --color-accent-200: oklch(32% 0.18 240);
-    --color-accent-300: oklch(40% 0.2 240);
-    --color-accent-400: oklch(48% 0.22 240);
-    --color-accent-500: oklch(58% 0.24 240);
-    --color-accent-600: oklch(68% 0.22 240);
-    --color-accent-700: oklch(76% 0.2 240);
-    --color-accent-800: oklch(84% 0.18 240);
-    --color-accent-900: oklch(90% 0.15 240);
-    --color-accent-950: oklch(95% 0.12 240);
+    /* Subtle accent colors for dark mode - professional blue */
+    --color-accent-50: oklch(20% 0.08 240);
+    --color-accent-100: oklch(28% 0.1 240);
+    --color-accent-200: oklch(36% 0.12 240);
+    --color-accent-300: oklch(44% 0.14 240);
+    --color-accent-400: oklch(52% 0.16 240);
+    --color-accent-500: oklch(60% 0.18 240);
+    --color-accent-600: oklch(68% 0.16 240);
+    --color-accent-700: oklch(76% 0.14 240);
+    --color-accent-800: oklch(84% 0.12 240);
+    --color-accent-900: oklch(90% 0.1 240);
+    --color-accent-950: oklch(95% 0.08 240);
   }
 }
 

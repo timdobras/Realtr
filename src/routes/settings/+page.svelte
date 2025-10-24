@@ -420,80 +420,33 @@
 <div class="bg-background-0 min-h-full">
   <!-- Header -->
   <div class="bg-background-50 border-background-200 border-b">
-    <div class="px-6 py-8">
+    <div class="px-8 py-6">
       <div class="mx-auto max-w-4xl">
-        <h1 class="text-foreground-900 text-3xl font-bold">Settings</h1>
-        <p class="text-foreground-600 mt-2">Configure your property management workspace</p>
+        <h1 class="text-foreground-900 text-2xl font-semibold">Settings</h1>
+        <p class="text-foreground-600 mt-1 text-sm">Configure your workspace</p>
       </div>
     </div>
   </div>
 
-  <div class="mx-auto max-w-4xl space-y-8 p-6">
+  <div class="mx-auto max-w-4xl space-y-6 p-8">
     <!-- Status Message -->
     {#if statusMessage}
       <div
-        class="rounded-lg border p-4 {statusType === 'success'
-          ? 'border-green-200 bg-green-50'
+        class="rounded-lg border px-4 py-3 {statusType === 'success'
+          ? 'border-green-300 bg-green-50'
           : statusType === 'error'
-            ? 'border-red-200 bg-red-50'
-            : 'border-accent-200 bg-accent-50'}"
+            ? 'border-red-300 bg-red-50'
+            : 'border-accent-300 bg-accent-50'}"
       >
-        <div class="flex items-center space-x-3">
-          <div class="flex-shrink-0">
-            {#if statusType === 'success'}
-              <svg
-                class="h-5 w-5 text-green-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-            {:else if statusType === 'error'}
-              <svg
-                class="h-5 w-5 text-red-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-            {:else}
-              <svg
-                class="text-accent-600 h-5 w-5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-            {/if}
-          </div>
-          <p
-            class="text-sm font-medium {statusType === 'success'
-              ? 'text-green-800'
-              : statusType === 'error'
-                ? 'text-red-800'
-                : 'text-accent-800'}"
-          >
-            {statusMessage}
-          </p>
-        </div>
+        <p
+          class="text-sm {statusType === 'success'
+            ? 'text-green-800'
+            : statusType === 'error'
+              ? 'text-red-800'
+              : 'text-accent-800'}"
+        >
+          {statusMessage}
+        </p>
       </div>
     {/if}
 
