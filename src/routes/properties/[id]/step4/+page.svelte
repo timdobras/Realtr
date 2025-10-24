@@ -18,7 +18,12 @@
   let error = '';
   let loading = true;
   let processingWatermarksVar = false;
-  let watermarkConfig: { imagePath?: string; opacity: number } | null = null;
+  let watermarkConfig: {
+    imagePath?: string;
+    opacity: number;
+    sizeMode: string;
+    positionAnchor: string;
+  } | null = null;
   let processingProgress = 0;
   let processingStatus = '';
 
@@ -71,11 +76,13 @@
 
   async function loadWatermarkConfig() {
     try {
-      const config = await invoke('load_config');
+      const config: any = await invoke('load_config');
       if (config) {
         watermarkConfig = {
           imagePath: config.watermark_image_path,
-          opacity: config.watermark_opacity || 0.15
+          opacity: config.watermarkConfig?.opacity || config.watermark_opacity || 0.15,
+          sizeMode: config.watermarkConfig?.sizeMode || 'proportional',
+          positionAnchor: config.watermarkConfig?.positionAnchor || 'center'
         };
       }
     } catch (e) {
@@ -213,7 +220,7 @@
         }
       }, 500);
 
-      const result = await invoke('copy_and_watermark_images', {
+      const result: any = await invoke('copy_and_watermark_images', {
         folderPath: property.folder_path
       });
 
@@ -254,8 +261,8 @@
     }
 
     try {
-      const result = await invoke('clear_watermark_folders', {
-        folderPath: property.folder_path
+      const result: any = await invoke('clear_watermark_folders', {
+        folderPath: property!.folder_path
       });
 
       if (result.success) {
@@ -272,10 +279,10 @@
     if (!property) return;
 
     try {
-      const result = await invoke('open_images_in_folder', {
+      const result: any = await invoke('open_images_in_folder', {
         folderPath: fromAggelia
-          ? `${property.folder_path}/WATERMARK/AGGELIA`
-          : `${property.folder_path}/WATERMARK`,
+          ? `${property!.folder_path}/WATERMARK/AGGELIA`
+          : `${property!.folder_path}/WATERMARK`,
         selectedImage: filename
       });
 
@@ -519,7 +526,7 @@
             />
           </div>
           <div class="flex-1">
-            <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
               <div class="bg-background-100 border-background-200 rounded-lg border p-4">
                 <div class="mb-2 flex items-center space-x-2">
                   <svg
@@ -576,6 +583,29 @@
                       stroke-linecap="round"
                       stroke-linejoin="round"
                       stroke-width="2"
+                      d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
+                    />
+                  </svg>
+                  <p class="text-foreground-500 text-xs font-medium tracking-wide uppercase">
+                    Size Mode
+                  </p>
+                </div>
+                <p class="text-foreground-900 text-sm font-semibold capitalize">
+                  {watermarkConfig.sizeMode}
+                </p>
+              </div>
+              <div class="bg-background-100 border-background-200 rounded-lg border p-4">
+                <div class="mb-2 flex items-center space-x-2">
+                  <svg
+                    class="text-foreground-600 h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
                       d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
                     />
                     <path
@@ -589,7 +619,9 @@
                     Position
                   </p>
                 </div>
-                <p class="text-foreground-900 text-sm font-semibold">Center</p>
+                <p class="text-foreground-900 text-sm font-semibold capitalize">
+                  {watermarkConfig.positionAnchor.replace('-', ' ')}
+                </p>
               </div>
             </div>
           </div>
