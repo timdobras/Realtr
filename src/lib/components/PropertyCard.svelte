@@ -73,13 +73,21 @@
 
 	async function copyPath() {
 		try {
-			const fullPath = await invoke<string>('get_full_property_path', {
-				folderPath: property.folder_path,
-				status: property.status
-			});
-			await navigator.clipboard.writeText(fullPath);
-			copySuccess = true;
-			setTimeout(() => (copySuccess = false), 2000);
+			const result = await invoke<{ success: boolean; data?: { full_path: string } }>(
+				'get_full_property_path',
+				{
+					folderPath: property.folder_path,
+					status: property.status
+				}
+			);
+			if (result.success && result.data?.full_path) {
+				await navigator.clipboard.writeText(result.data.full_path);
+				copySuccess = true;
+				setTimeout(() => (copySuccess = false), 2000);
+			} else {
+				openFolderError = 'Failed to get path';
+				setTimeout(() => (openFolderError = ''), 3000);
+			}
 		} catch (error) {
 			console.error('Failed to copy path:', error);
 			openFolderError = 'Failed to copy path';
