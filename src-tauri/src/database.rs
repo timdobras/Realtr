@@ -1,10 +1,12 @@
 use base64::{engine::general_purpose, Engine as _};
 use image::{DynamicImage, GenericImageView, ImageFormat, RgbaImage};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tauri::Manager;
 use tokio::process::Command;
 
@@ -13,13 +15,18 @@ pub struct Property {
     pub id: Option<i64>,
     pub name: String,
     pub city: String,
-    pub completed: bool,
+    pub status: String, // "NEW", "DONE", "NOT_FOUND", "ARCHIVE"
     pub folder_path: String,
     pub notes: Option<String>,
+    pub code: Option<String>, // Website listing code (e.g., "45164")
     #[serde(with = "chrono::serde::ts_milliseconds")]
     pub created_at: chrono::DateTime<chrono::Utc>,
     #[serde(with = "chrono::serde::ts_milliseconds")]
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    // Legacy field for backward compatibility during migration
+    #[serde(skip_serializing)]
+    #[serde(default)]
+    pub completed: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -32,6 +39,7 @@ pub struct City {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScanResult {
     pub found_properties: usize,
     pub new_properties: usize,
@@ -52,6 +60,85 @@ fn get_database_pool(app: &tauri::AppHandle) -> Result<&SqlitePool, String> {
         Some(pool) => Ok(pool.inner()),
         None => Err("Database not initialized. Please restart the application.".to_string()),
     }
+}
+
+// Helper function to get the base folder path for a given status
+fn get_base_path_for_status(config: &crate::config::AppConfig, status: &str) -> Result<PathBuf, String> {
+    let path_str = match status {
+        "NEW" => &config.new_folder_path,
+        "DONE" => &config.done_folder_path,
+        "NOT_FOUND" => &config.not_found_folder_path,
+        "ARCHIVE" => &config.archive_folder_path,
+        _ => return Err(format!("Invalid status: {}", status)),
+    };
+
+    if path_str.is_empty() {
+        return Err(format!("Folder path for status '{}' is not configured", status));
+    }
+
+    Ok(PathBuf::from(path_str))
+}
+
+// Helper function to generate a thumbnail from an image
+fn generate_thumbnail(
+    source_path: &PathBuf,
+    thumbnail_path: &PathBuf,
+    max_size: u32,
+) -> Result<(), String> {
+    // Load the image
+    let img = image::open(source_path)
+        .map_err(|e| format!("Failed to open image: {}", e))?;
+
+    // Calculate new dimensions while maintaining aspect ratio
+    let (width, height) = img.dimensions();
+    let (new_width, new_height) = if width > height {
+        let ratio = max_size as f32 / width as f32;
+        (max_size, (height as f32 * ratio) as u32)
+    } else {
+        let ratio = max_size as f32 / height as f32;
+        ((width as f32 * ratio) as u32, max_size)
+    };
+
+    // Resize the image (Triangle is fastest for thumbnails)
+    let thumbnail = img.resize(new_width, new_height, image::imageops::FilterType::Triangle);
+
+    // Save the thumbnail as JPEG to save space
+    thumbnail
+        .save_with_format(thumbnail_path, ImageFormat::Jpeg)
+        .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
+
+    Ok(())
+}
+
+// Helper function to construct full property path from config and property data
+fn construct_property_path_from_parts(
+    config: &crate::config::AppConfig,
+    status: &str,
+    city: &str,
+    name: &str,
+) -> Result<PathBuf, String> {
+    let base_path = get_base_path_for_status(config, status)?;
+    Ok(base_path.join(city).join(name))
+}
+
+// Helper function to construct relative folder_path for database storage
+fn get_relative_folder_path(city: &str, name: &str) -> String {
+    format!("{}/{}", city, name)
+}
+
+// Helper function to construct full property base path from config, folder_path and status
+async fn get_property_base_path(
+    app: &tauri::AppHandle,
+    folder_path: &str,
+    status: &str,
+) -> Result<PathBuf, String> {
+    let config = crate::config::load_config(app.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    let config = config.ok_or("App configuration not found")?;
+
+    let base_path = get_base_path_for_status(&config, status)?;
+    Ok(base_path.join(folder_path))
 }
 
 // Database initialization
@@ -153,6 +240,68 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), String> {
         .await
         .map_err(|e| format!("Failed to create cities name index: {}", e))?;
 
+    // Migration: Add status column if it doesn't exist
+    // First check if the column exists
+    let column_check = sqlx::query("PRAGMA table_info(properties)")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to check table info: {}", e))?;
+
+    let has_status_column = column_check.iter().any(|row| {
+        row.try_get::<String, _>("name")
+            .map(|name| name == "status")
+            .unwrap_or(false)
+    });
+
+    if !has_status_column {
+        // Add status column with default value 'NEW'
+        sqlx::query("ALTER TABLE properties ADD COLUMN status TEXT DEFAULT 'NEW'")
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to add status column: {}", e))?;
+
+        // Migrate existing data from completed boolean to status
+        sqlx::query(
+            r#"
+            UPDATE properties
+            SET status = CASE
+                WHEN completed = 1 THEN 'DONE'
+                ELSE 'NEW'
+            END
+            WHERE status IS NULL OR status = 'NEW'
+            "#
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to migrate completed to status: {}", e))?;
+
+        // Create index for status column
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_properties_status ON properties(status)")
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to create status index: {}", e))?;
+    }
+
+    // Migration: Add code column if it doesn't exist
+    let has_code_column = column_check.iter().any(|row| {
+        row.try_get::<String, _>("name")
+            .map(|name| name == "code")
+            .unwrap_or(false)
+    });
+
+    if !has_code_column {
+        sqlx::query("ALTER TABLE properties ADD COLUMN code TEXT")
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to add code column: {}", e))?;
+
+        // Create index for code column to enable fast searches
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_properties_code ON properties(code)")
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to create code index: {}", e))?;
+    }
+
     Ok(())
 }
 
@@ -166,7 +315,8 @@ pub async fn create_property(
 ) -> Result<CommandResult, String> {
     let pool = get_database_pool(&app)?;
 
-    let folder_path = format!("FOTOGRAFIES - NEW/{}/{}", city, name);
+    let status = "NEW";
+    let folder_path = get_relative_folder_path(&city, &name);
     let now = chrono::Utc::now();
     let now_timestamp = now.timestamp_millis();
 
@@ -179,7 +329,7 @@ pub async fn create_property(
     // Insert or update city
     sqlx::query(
         r#"
-        INSERT INTO cities (name, usage_count, created_at) 
+        INSERT INTO cities (name, usage_count, created_at)
         VALUES (?, 1, ?)
         ON CONFLICT(name) DO UPDATE SET usage_count = usage_count + 1
         "#,
@@ -193,13 +343,13 @@ pub async fn create_property(
     // Insert property
     let result = sqlx::query(
         r#"
-        INSERT INTO properties (name, city, completed, folder_path, notes, created_at, updated_at)
+        INSERT INTO properties (name, city, status, folder_path, notes, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&name)
     .bind(&city)
-    .bind(false)
+    .bind(status)
     .bind(&folder_path)
     .bind(&notes)
     .bind(now_timestamp)
@@ -219,18 +369,26 @@ pub async fn create_property(
             // Create the folder structure
             let config_result = crate::config::load_config(app.clone()).await;
             if let Ok(Some(config)) = config_result {
-                let root_path = PathBuf::from(&config.root_path);
-                let property_path = root_path.join("FOTOGRAFIES - NEW").join(&city).join(&name);
-
-                if let Err(e) = create_property_folder_structure(&property_path).await {
-                    return Ok(CommandResult {
-                        success: false,
-                        error: Some(format!(
-                            "Property created but folder creation failed: {}",
-                            e
-                        )),
-                        data: None,
-                    });
+                match construct_property_path_from_parts(&config, status, &city, &name) {
+                    Ok(property_path) => {
+                        if let Err(e) = create_property_folder_structure(&property_path).await {
+                            return Ok(CommandResult {
+                                success: false,
+                                error: Some(format!(
+                                    "Property created but folder creation failed: {}",
+                                    e
+                                )),
+                                data: None,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        return Ok(CommandResult {
+                            success: false,
+                            error: Some(format!("Failed to get property path: {}", e)),
+                            data: None,
+                        });
+                    }
                 }
             }
 
@@ -276,11 +434,13 @@ pub async fn get_properties(app: tauri::AppHandle) -> Result<CommandResult, Stri
             id: Some(row.get("id")),
             name: row.get("name"),
             city: row.get("city"),
-            completed: row.get("completed"),
+            status: row.get("status"),
             folder_path: row.get("folder_path"),
             notes: row.get("notes"),
+            code: row.get("code"),
             created_at,
             updated_at,
+            completed: None,
         };
 
         properties.push(property);
@@ -296,12 +456,12 @@ pub async fn get_properties(app: tauri::AppHandle) -> Result<CommandResult, Stri
 #[tauri::command]
 pub async fn get_properties_by_status(
     app: tauri::AppHandle,
-    completed: bool,
+    status: String,
 ) -> Result<CommandResult, String> {
     let pool = get_database_pool(&app)?;
 
-    let rows = sqlx::query("SELECT * FROM properties WHERE completed = ? ORDER BY created_at DESC")
-        .bind(completed)
+    let rows = sqlx::query("SELECT * FROM properties WHERE status = ? ORDER BY created_at DESC")
+        .bind(&status)
         .fetch_all(pool)
         .await
         .map_err(|e| format!("Failed to fetch properties: {}", e))?;
@@ -321,11 +481,13 @@ pub async fn get_properties_by_status(
             id: Some(row.get("id")),
             name: row.get("name"),
             city: row.get("city"),
-            completed: row.get("completed"),
+            status: row.get("status"),
             folder_path: row.get("folder_path"),
             notes: row.get("notes"),
+            code: row.get("code"),
             created_at,
             updated_at,
+            completed: None,
         };
 
         properties.push(property);
@@ -342,9 +504,18 @@ pub async fn get_properties_by_status(
 pub async fn update_property_status(
     app: tauri::AppHandle,
     property_id: i64,
-    completed: bool,
+    new_status: String,
 ) -> Result<CommandResult, String> {
     let pool = get_database_pool(&app)?;
+
+    // Validate status
+    if !["NEW", "DONE", "NOT_FOUND", "ARCHIVE"].contains(&new_status.as_str()) {
+        return Ok(CommandResult {
+            success: false,
+            error: Some(format!("Invalid status: {}", new_status)),
+            data: None,
+        });
+    }
 
     let now = chrono::Utc::now();
     let now_timestamp = now.timestamp_millis();
@@ -356,22 +527,18 @@ pub async fn update_property_status(
         .await
         .map_err(|e| format!("Property not found: {}", e))?;
 
-    let current_completed: bool = property_row.get("completed");
+    let current_status: String = property_row.get("status");
     let city: String = property_row.get("city");
     let name: String = property_row.get("name");
 
-    // Update folder path based on completion status
-    let new_folder_path = if completed {
-        format!("FOTOGRAFIES - DONE/{}/{}", city, name)
-    } else {
-        format!("FOTOGRAFIES - NEW/{}/{}", city, name)
-    };
+    // folder_path remains relative (city/name), no change needed
+    let folder_path = get_relative_folder_path(&city, &name);
 
     let result = sqlx::query(
-        "UPDATE properties SET completed = ?, folder_path = ?, updated_at = ? WHERE id = ?",
+        "UPDATE properties SET status = ?, folder_path = ?, updated_at = ? WHERE id = ?",
     )
-    .bind(completed)
-    .bind(&new_folder_path)
+    .bind(&new_status)
+    .bind(&folder_path)
     .bind(now_timestamp)
     .bind(property_id)
     .execute(pool)
@@ -379,35 +546,34 @@ pub async fn update_property_status(
 
     match result {
         Ok(_) => {
-            // Move folder if completion status changed
-            if current_completed != completed {
+            // Move folder if status changed
+            if current_status != new_status {
                 let config_result = crate::config::load_config(app.clone()).await;
                 if let Ok(Some(config)) = config_result {
-                    let root_path = PathBuf::from(&config.root_path);
-                    let old_path = root_path
-                        .join(if current_completed {
-                            "FOTOGRAFIES - DONE"
-                        } else {
-                            "FOTOGRAFIES - NEW"
-                        })
-                        .join(&city)
-                        .join(&name);
-                    let new_path = root_path
-                        .join(if completed {
-                            "FOTOGRAFIES - DONE"
-                        } else {
-                            "FOTOGRAFIES - NEW"
-                        })
-                        .join(&city)
-                        .join(&name);
-
-                    if old_path.exists() && old_path != new_path {
-                        if let Some(parent) = new_path.parent() {
-                            std::fs::create_dir_all(parent)
-                                .map_err(|e| format!("Failed to create parent directory: {}", e))?;
+                    match (
+                        construct_property_path_from_parts(&config, &current_status, &city, &name),
+                        construct_property_path_from_parts(&config, &new_status, &city, &name),
+                    ) {
+                        (Ok(old_path), Ok(new_path)) => {
+                            if old_path.exists() && old_path != new_path {
+                                // Create parent directory for new path
+                                if let Some(parent) = new_path.parent() {
+                                    std::fs::create_dir_all(parent).map_err(|e| {
+                                        format!("Failed to create parent directory: {}", e)
+                                    })?;
+                                }
+                                // Move the folder
+                                std::fs::rename(&old_path, &new_path)
+                                    .map_err(|e| format!("Failed to move folder: {}", e))?;
+                            }
                         }
-                        std::fs::rename(&old_path, &new_path)
-                            .map_err(|e| format!("Failed to move folder: {}", e))?;
+                        (Err(e), _) | (_, Err(e)) => {
+                            return Ok(CommandResult {
+                                success: false,
+                                error: Some(format!("Failed to get property path: {}", e)),
+                                data: None,
+                            });
+                        }
                     }
                 }
             }
@@ -421,6 +587,94 @@ pub async fn update_property_status(
         Err(e) => Ok(CommandResult {
             success: false,
             error: Some(format!("Failed to update property: {}", e)),
+            data: None,
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn set_property_code(
+    app: tauri::AppHandle,
+    property_id: i64,
+    code: String,
+) -> Result<CommandResult, String> {
+    let pool = get_database_pool(&app)?;
+
+    // Validate code is not empty
+    let code = code.trim();
+    if code.is_empty() {
+        return Ok(CommandResult {
+            success: false,
+            error: Some("Code cannot be empty".to_string()),
+            data: None,
+        });
+    }
+
+    let now = chrono::Utc::now();
+    let now_timestamp = now.timestamp_millis();
+
+    // Get current property info
+    let property_row = sqlx::query("SELECT * FROM properties WHERE id = ?")
+        .bind(property_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Property not found: {}", e))?;
+
+    let name: String = property_row.get("name");
+    let city: String = property_row.get("city");
+    let status: String = property_row.get("status");
+    let old_code: Option<String> = property_row.get("code");
+
+    // Calculate old and new folder names
+    let old_folder_name = match &old_code {
+        Some(c) if !c.is_empty() => format!("{} ({})", name, c),
+        _ => name.clone(),
+    };
+    let new_folder_name = format!("{} ({})", name, code);
+
+    // Calculate new folder path (relative) for database storage
+    let new_folder_path = format!("{}/{}", city, new_folder_name);
+
+    // Get config for absolute paths
+    let config = crate::config::load_config(app.clone())
+        .await
+        .map_err(|e| format!("Failed to load config: {}", e))?
+        .ok_or("App configuration not found")?;
+
+    let base_path = get_base_path_for_status(&config, &status)?;
+    let old_absolute_path = base_path.join(&city).join(&old_folder_name);
+    let new_absolute_path = base_path.join(&city).join(&new_folder_name);
+
+    // Only rename if paths are different and old path exists
+    if old_absolute_path != new_absolute_path && old_absolute_path.exists() {
+        // Rename the folder
+        std::fs::rename(&old_absolute_path, &new_absolute_path)
+            .map_err(|e| format!("Failed to rename folder: {}", e))?;
+    }
+
+    // Update database with new code and folder_path
+    let result = sqlx::query(
+        "UPDATE properties SET code = ?, folder_path = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(code)
+    .bind(&new_folder_path)
+    .bind(now_timestamp)
+    .bind(property_id)
+    .execute(pool)
+    .await;
+
+    match result {
+        Ok(_) => Ok(CommandResult {
+            success: true,
+            error: None,
+            data: Some(serde_json::json!({
+                "new_folder_path": new_folder_path,
+                "code": code
+            })),
+        }),
+        Err(e) => Ok(CommandResult {
+            success: false,
+            error: Some(format!("Failed to update property code: {}", e)),
             data: None,
         }),
     }
@@ -550,11 +804,13 @@ pub async fn get_property_by_id(
                 id: Some(row.get("id")),
                 name: row.get("name"),
                 city: row.get("city"),
-                completed: row.get("completed"),
+                status: row.get("status"),
                 folder_path: row.get("folder_path"),
                 notes: row.get("notes"),
+                code: row.get("code"),
                 created_at,
                 updated_at,
+                completed: None,
             };
 
             Ok(CommandResult {
@@ -597,16 +853,6 @@ pub async fn scan_and_import_properties(app: tauri::AppHandle) -> Result<Command
         }
     };
 
-    let root_path = PathBuf::from(&config.root_path);
-
-    if !root_path.exists() {
-        return Ok(CommandResult {
-            success: false,
-            error: Some("Root folder does not exist.".to_string()),
-            data: None,
-        });
-    }
-
     let mut scan_result = ScanResult {
         found_properties: 0,
         new_properties: 0,
@@ -625,16 +871,26 @@ pub async fn scan_and_import_properties(app: tauri::AppHandle) -> Result<Command
         }
     };
 
-    let folders_to_scan = [("FOTOGRAFIES - DONE", true), ("FOTOGRAFIES - NEW", false)];
+    // Scan all 4 status folders
+    let folders_to_scan = [
+        (&config.new_folder_path, "NEW"),
+        (&config.done_folder_path, "DONE"),
+        (&config.not_found_folder_path, "NOT_FOUND"),
+        (&config.archive_folder_path, "ARCHIVE"),
+    ];
 
-    for (folder_name, is_completed) in folders_to_scan {
-        let folder_path = root_path.join(folder_name);
-
-        if !folder_path.exists() {
-            continue;
+    for (folder_path_str, status) in folders_to_scan {
+        if folder_path_str.is_empty() {
+            continue; // Skip if folder path not configured
         }
 
-        match scan_folder_for_properties(&folder_path, is_completed, &existing_properties, pool)
+        let folder_path = PathBuf::from(folder_path_str);
+
+        if !folder_path.exists() {
+            continue; // Skip if folder doesn't exist
+        }
+
+        match scan_folder_for_properties(&folder_path, status, &existing_properties, pool)
             .await
         {
             Ok(folder_result) => {
@@ -646,7 +902,7 @@ pub async fn scan_and_import_properties(app: tauri::AppHandle) -> Result<Command
             Err(e) => {
                 scan_result
                     .errors
-                    .push(format!("Error scanning {}: {}", folder_name, e));
+                    .push(format!("Error scanning {} folder: {}", status, e));
             }
         }
     }
@@ -659,16 +915,16 @@ pub async fn scan_and_import_properties(app: tauri::AppHandle) -> Result<Command
 }
 
 async fn get_existing_properties_set(pool: &SqlitePool) -> Result<HashSet<String>, String> {
-    let rows = sqlx::query("SELECT city, name FROM properties")
+    // Use folder_path which contains the actual folder name on disk (including code if present)
+    let rows = sqlx::query("SELECT folder_path FROM properties")
         .fetch_all(pool)
         .await
         .map_err(|e| format!("Failed to fetch existing properties: {}", e))?;
 
     let mut existing = HashSet::new();
     for row in rows {
-        let city: String = row.get("city");
-        let name: String = row.get("name");
-        existing.insert(format!("{}/{}", city, name));
+        let folder_path: String = row.get("folder_path");
+        existing.insert(folder_path);
     }
 
     Ok(existing)
@@ -676,7 +932,7 @@ async fn get_existing_properties_set(pool: &SqlitePool) -> Result<HashSet<String
 
 async fn scan_folder_for_properties(
     folder_path: &PathBuf,
-    is_completed: bool,
+    status: &str,
     existing_properties: &HashSet<String>,
     pool: &SqlitePool,
 ) -> Result<ScanResult, String> {
@@ -743,7 +999,7 @@ async fn scan_folder_for_properties(
                 continue;
             }
 
-            let property_name = match property_path.file_name().and_then(|n| n.to_str()) {
+            let folder_name = match property_path.file_name().and_then(|n| n.to_str()) {
                 Some(name) => name.to_string(),
                 None => {
                     result
@@ -753,9 +1009,14 @@ async fn scan_folder_for_properties(
                 }
             };
 
+            // Parse folder name to extract property name and code
+            // e.g., "Apartment 85sqm (45164)" -> name: "Apartment 85sqm", code: Some("45164")
+            let (property_name, code) = parse_folder_name(&folder_name);
+
             result.found_properties += 1;
 
-            let property_key = format!("{}/{}", city_name, property_name);
+            // Use folder_name for the key since that's what's on disk
+            let property_key = format!("{}/{}", city_name, folder_name);
 
             if existing_properties.contains(&property_key) {
                 result.existing_properties += 1;
@@ -769,7 +1030,16 @@ async fn scan_folder_for_properties(
                 continue;
             }
 
-            match add_property_to_database(pool, &property_name, &city_name, is_completed).await {
+            match add_property_to_database(
+                pool,
+                &property_name,
+                &city_name,
+                status,
+                &folder_name,
+                code.as_deref(),
+            )
+            .await
+            {
                 Ok(_) => {
                     result.new_properties += 1;
                 }
@@ -786,20 +1056,44 @@ async fn scan_folder_for_properties(
 }
 
 fn is_valid_property_folder(property_path: &PathBuf) -> bool {
-    property_path.join("INTERNET").is_dir() && property_path.join("WATERMARK").is_dir()
+    // A valid property folder just needs to be a directory
+    // INTERNET and WATERMARK folders will be created when user starts working on it
+    property_path.is_dir()
+}
+
+/// Parse a folder name that may contain a code in the format "Property Name (12345)"
+/// Returns (property_name, code) where:
+/// - property_name: The name without the code suffix
+/// - code: The extracted code if present
+fn parse_folder_name(folder_name: &str) -> (String, Option<String>) {
+    // Check if folder name ends with pattern " (code)" where code is alphanumeric
+    if let Some(open_paren) = folder_name.rfind(" (") {
+        if folder_name.ends_with(')') {
+            let potential_code = &folder_name[open_paren + 2..folder_name.len() - 1];
+            // Check if the content in parentheses looks like a code (alphanumeric, not too long)
+            if !potential_code.is_empty()
+                && potential_code.len() <= 20
+                && potential_code.chars().all(|c| c.is_alphanumeric())
+            {
+                let property_name = folder_name[..open_paren].to_string();
+                return (property_name, Some(potential_code.to_string()));
+            }
+        }
+    }
+    // No code found, return the folder name as-is
+    (folder_name.to_string(), None)
 }
 
 async fn add_property_to_database(
     pool: &SqlitePool,
     property_name: &str,
     city_name: &str,
-    is_completed: bool,
+    status: &str,
+    folder_name: &str,
+    code: Option<&str>,
 ) -> Result<(), String> {
-    let folder_path = if is_completed {
-        format!("FOTOGRAFIES - DONE/{}/{}", city_name, property_name)
-    } else {
-        format!("FOTOGRAFIES - NEW/{}/{}", city_name, property_name)
-    };
+    // Use the folder_name for the path (keeps the code in the path if present)
+    let folder_path = get_relative_folder_path(city_name, folder_name);
 
     let now = chrono::Utc::now();
     let now_timestamp = now.timestamp_millis();
@@ -811,7 +1105,7 @@ async fn add_property_to_database(
 
     sqlx::query(
         r#"
-        INSERT INTO cities (name, usage_count, created_at) 
+        INSERT INTO cities (name, usage_count, created_at)
         VALUES (?, 1, ?)
         ON CONFLICT(name) DO UPDATE SET usage_count = usage_count + 1
         "#,
@@ -824,15 +1118,16 @@ async fn add_property_to_database(
 
     sqlx::query(
         r#"
-        INSERT INTO properties (name, city, completed, folder_path, notes, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO properties (name, city, status, folder_path, notes, code, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(property_name)
     .bind(city_name)
-    .bind(is_completed)
+    .bind(status)
     .bind(&folder_path)
     .bind("Imported from existing folder")
+    .bind(code)
     .bind(now_timestamp)
     .bind(now_timestamp)
     .execute(&mut *tx)
@@ -930,81 +1225,37 @@ pub async fn debug_database_dates(app: tauri::AppHandle) -> Result<CommandResult
 pub async fn reset_database_with_proper_dates(
     app: tauri::AppHandle,
 ) -> Result<CommandResult, String> {
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let database_path = app_data_dir.join("properties.db");
+    // Get the existing database pool from app state
+    let pool = get_database_pool(&app)?;
 
-    // Close any existing connections and remove the file
-    if database_path.exists() {
-        std::fs::remove_file(&database_path)
-            .map_err(|e| format!("Failed to remove old database: {}", e))?;
-    }
-
-    // Reinitialize the database
-    let pool = SqlitePool::connect_with(
-        sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(&database_path)
-            .create_if_missing(true)
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal),
-    )
-    .await
-    .map_err(|e| format!("Failed to connect to new database: {}", e))?;
-
-    // Create tables with proper INTEGER timestamps
-    sqlx::query(
-        r#"
-        CREATE TABLE properties (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            city TEXT NOT NULL,
-            completed BOOLEAN NOT NULL DEFAULT 0,
-            folder_path TEXT NOT NULL,
-            notes TEXT,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        )
-        "#,
-    )
-    .execute(&pool)
-    .await
-    .map_err(|e| format!("Failed to create properties table: {}", e))?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE cities (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            usage_count INTEGER NOT NULL DEFAULT 1,
-            created_at INTEGER NOT NULL
-        )
-        "#,
-    )
-    .execute(&pool)
-    .await
-    .map_err(|e| format!("Failed to create cities table: {}", e))?;
-
-    // Create indexes
-    sqlx::query("CREATE INDEX idx_properties_completed ON properties(completed)")
-        .execute(&pool)
+    // Delete all data from tables (this avoids file locking issues on Windows)
+    sqlx::query("DELETE FROM properties")
+        .execute(pool)
         .await
-        .map_err(|e| format!("Failed to create completed index: {}", e))?;
+        .map_err(|e| format!("Failed to clear properties table: {}", e))?;
 
-    sqlx::query("CREATE INDEX idx_properties_city ON properties(city)")
-        .execute(&pool)
+    sqlx::query("DELETE FROM cities")
+        .execute(pool)
         .await
-        .map_err(|e| format!("Failed to create city index: {}", e))?;
+        .map_err(|e| format!("Failed to clear cities table: {}", e))?;
 
-    sqlx::query("CREATE INDEX idx_cities_name ON cities(name)")
-        .execute(&pool)
+    // Reset SQLite auto-increment counters
+    sqlx::query("DELETE FROM sqlite_sequence WHERE name='properties' OR name='cities'")
+        .execute(pool)
         .await
-        .map_err(|e| format!("Failed to create cities name index: {}", e))?;
+        .ok(); // Ignore errors if sqlite_sequence doesn't exist
 
-    // Update the app's managed state with the new pool
-    app.manage(pool);
+    // Force WAL checkpoint to ensure all changes are written to the main database file
+    // This is important on Windows where WAL might not be immediately flushed
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(pool)
+        .await
+        .ok(); // Ignore errors if WAL is not enabled
 
     Ok(CommandResult {
         success: true,
         error: None,
-        data: Some(serde_json::json!({"message": "Database reset successfully"})),
+        data: Some(serde_json::json!({"message": "Database cleared successfully"})),
     })
 }
 
@@ -1012,20 +1263,19 @@ pub async fn reset_database_with_proper_dates(
 pub async fn list_original_images(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
 ) -> Result<Vec<String>, String> {
-    // Here, folder_path is relative to root folder selected by user
-    // We'll get the root folder from config, then join with folder_path
+    // folder_path is relative (city/name), status determines which base folder to use
 
-    // Load config to get root path
+    // Load config to get base path for status
     let config = crate::config::load_config(app.clone())
         .await
         .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(c) => PathBuf::from(c.root_path),
-        None => return Err("App root folder not configured".into()),
-    };
+    let config = config.ok_or("App configuration not found")?;
 
-    let full_path = root_path.join(&folder_path);
+    // Get base path for the property's status
+    let base_path = get_base_path_for_status(&config, &status)?;
+    let full_path = base_path.join(&folder_path);
     if !full_path.exists() || !full_path.is_dir() {
         return Err(format!("Folder not found: {}", full_path.display()));
     }
@@ -1062,18 +1312,11 @@ pub async fn list_original_images(
 pub async fn open_images_in_folder(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
     selected_image: String,
 ) -> Result<CommandResult, String> {
-    // Get the root path from config
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(cfg) => PathBuf::from(cfg.root_path),
-        None => return Err("App root path is not configured".into()),
-    };
-
-    let full_folder_path = root_path.join(&folder_path);
+    // Get the full absolute path using the property base path
+    let full_folder_path = get_property_base_path(&app, &folder_path, &status).await?;
     if !full_folder_path.exists() || !full_folder_path.is_dir() {
         return Ok(CommandResult {
             success: false,
@@ -1139,10 +1382,18 @@ pub async fn open_images_in_folder(
 
     // Open images based on operating system
     let result = if cfg!(target_os = "windows") {
-        // For Windows, try opening the selected image first
-        // This gives the best chance for Photos app to get folder context
+        // For Windows, first unblock the file to remove Zone.Identifier (security warning trigger)
+        // Then open it with the default application
+        let file_path = &paths_strs[0];
+
+        // Unblock the file using PowerShell (removes "downloaded from internet" marking)
+        let _ = Command::new("powershell")
+            .args(["-Command", &format!("Unblock-File -Path '{}'", file_path)])
+            .output(); // Run and ignore result (file might not be blocked)
+
+        // Now open with default application using start command
         Command::new("cmd")
-            .args(["/C", "start", "", &paths_strs[0]])
+            .args(["/C", "start", "", file_path])
             .spawn()
     } else if cfg!(target_os = "macos") {
         // macOS can handle multiple files
@@ -1173,18 +1424,12 @@ pub async fn open_images_in_folder(
 pub async fn get_image_as_base64(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
     filename: String,
 ) -> Result<String, String> {
-    // Get root path from config
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(cfg) => PathBuf::from(cfg.root_path),
-        None => return Err("App root path is not configured".into()),
-    };
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-    let full_path = root_path.join(&folder_path).join(&filename);
+    let full_path = property_path.join(&filename);
 
     if !full_path.exists() {
         return Err(format!("Image file not found: {}", full_path.display()));
@@ -1204,16 +1449,10 @@ pub async fn get_image_as_base64(
 pub async fn list_internet_images(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
 ) -> Result<Vec<String>, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(c) => PathBuf::from(c.root_path),
-        None => return Err("App root folder not configured".into()),
-    };
-
-    let internet_path = root_path.join(&folder_path).join("INTERNET");
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
+    let internet_path = property_path.join("INTERNET");
 
     if !internet_path.exists() {
         return Ok(Vec::new());
@@ -1244,20 +1483,11 @@ pub async fn list_internet_images(
 pub async fn get_internet_image_as_base64(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
     filename: String,
 ) -> Result<String, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(cfg) => PathBuf::from(cfg.root_path),
-        None => return Err("App root path is not configured".into()),
-    };
-
-    let full_path = root_path
-        .join(&folder_path)
-        .join("INTERNET")
-        .join(&filename);
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
+    let full_path = property_path.join("INTERNET").join(&filename);
 
     if !full_path.exists() {
         return Err(format!("Image file not found: {}", full_path.display()));
@@ -1274,16 +1504,9 @@ pub async fn get_internet_image_as_base64(
 pub async fn copy_images_to_internet(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
 ) -> Result<CommandResult, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(cfg) => PathBuf::from(cfg.root_path),
-        None => return Err("App root path is not configured".into()),
-    };
-
-    let property_path = root_path.join(&folder_path);
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
     let internet_path = property_path.join("INTERNET");
 
     // Ensure INTERNET folder exists
@@ -1308,7 +1531,9 @@ pub async fn copy_images_to_internet(
                         // Only copy if the file doesn't already exist
                         if !dest_path.exists() {
                             match fs::copy(&path, &dest_path) {
-                                Ok(_) => copied_count += 1,
+                                Ok(_) => {
+                                    copied_count += 1;
+                                }
                                 Err(e) => {
                                     errors.push(format!("Failed to copy {}: {}", filename, e))
                                 }
@@ -1343,19 +1568,103 @@ pub async fn copy_images_to_internet(
 }
 
 #[tauri::command]
+pub async fn list_thumbnails(
+    app: tauri::AppHandle,
+    folder_path: String,
+    status: String,
+) -> Result<Vec<String>, String> {
+    // List original images and return their names as .jpg (thumbnail format)
+    // The thumbnails will be generated on-demand when requested
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
+
+    let mut thumbnails = Vec::new();
+    for entry in fs::read_dir(&property_path).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                let ext_lc = ext.to_lowercase();
+                if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        // Return as .jpg since thumbnails are always JPEG
+                        thumbnails.push(format!("{}.jpg", stem));
+                    }
+                }
+            }
+        }
+    }
+
+    thumbnails.sort();
+    Ok(thumbnails)
+}
+
+#[tauri::command]
+pub async fn get_thumbnail_as_base64(
+    app: tauri::AppHandle,
+    folder_path: String,
+    status: String,
+    filename: String,
+) -> Result<String, String> {
+    // Get app data directory for thumbnails
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    let thumbnails_base = app_data_dir.join("thumbnails");
+    let safe_folder_name = folder_path.replace('/', "_").replace('\\', "_");
+    let thumbnails_dir = thumbnails_base.join(&safe_folder_name);
+    let thumbnail_path = thumbnails_dir.join(&filename);
+
+    // If thumbnail doesn't exist, generate it on-demand
+    if !thumbnail_path.exists() {
+        // Create thumbnails directory if it doesn't exist
+        fs::create_dir_all(&thumbnails_dir)
+            .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
+
+        // Get the original image path
+        let property_path = get_property_base_path(&app, &folder_path, &status).await?;
+
+        // Remove .jpg extension from filename to get original stem
+        let original_stem = filename.trim_end_matches(".jpg");
+
+        // Try to find the original image file with any supported extension
+        let supported_exts = ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"];
+        let mut original_path = None;
+
+        for ext in &supported_exts {
+            let potential_path = property_path.join(format!("{}.{}", original_stem, ext));
+            if potential_path.exists() {
+                original_path = Some(potential_path);
+                break;
+            }
+        }
+
+        if let Some(source_path) = original_path {
+            // Generate thumbnail (100x100 for fast generation)
+            generate_thumbnail(&source_path, &thumbnail_path, 100)
+                .map_err(|e| format!("Failed to generate thumbnail: {}", e))?;
+        } else {
+            return Err(format!("Original image not found for thumbnail: {}", original_stem));
+        }
+    }
+
+    let image_bytes =
+        fs::read(&thumbnail_path).map_err(|e| format!("Failed to read thumbnail file: {}", e))?;
+
+    let base64_string = general_purpose::STANDARD.encode(&image_bytes);
+    Ok(base64_string)
+}
+
+#[tauri::command]
 pub async fn clear_internet_folder(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
 ) -> Result<CommandResult, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(cfg) => PathBuf::from(cfg.root_path),
-        None => return Err("App root path is not configured".into()),
-    };
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-    let internet_path = root_path.join(&folder_path).join("INTERNET");
+    let internet_path = property_path.join("INTERNET");
 
     if !internet_path.exists() {
         return Ok(CommandResult {
@@ -1410,6 +1719,7 @@ pub async fn clear_internet_folder(
 pub async fn open_image_in_editor(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
     filename: String,
     is_from_internet: bool,
 ) -> Result<CommandResult, String> {
@@ -1421,14 +1731,11 @@ pub async fn open_image_in_editor(
         None => return Err("App configuration not found".into()),
     };
 
-    let root_path = PathBuf::from(&config.root_path);
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
     let image_path = if is_from_internet {
-        root_path
-            .join(&folder_path)
-            .join("INTERNET")
-            .join(&filename)
+        property_path.join("INTERNET").join(&filename)
     } else {
-        root_path.join(&folder_path).join(&filename)
+        property_path.join(&filename)
     };
 
     if !image_path.exists() {
@@ -1486,17 +1793,11 @@ pub struct RenameMapping {
 pub async fn rename_internet_images(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
     rename_map: Vec<RenameMapping>,
 ) -> Result<CommandResult, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(cfg) => PathBuf::from(cfg.root_path),
-        None => return Err("App root path is not configured".into()),
-    };
-
-    let internet_path = root_path.join(&folder_path).join("INTERNET");
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
+    let internet_path = property_path.join("INTERNET");
 
     if !internet_path.exists() {
         return Ok(CommandResult {
@@ -1580,19 +1881,10 @@ pub async fn rename_internet_images(
 pub async fn list_aggelia_images(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
 ) -> Result<Vec<String>, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(c) => PathBuf::from(c.root_path),
-        None => return Err("App root folder not configured".into()),
-    };
-
-    let aggelia_path = root_path
-        .join(&folder_path)
-        .join("INTERNET")
-        .join("AGGELIA");
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
+    let aggelia_path = property_path.join("INTERNET").join("AGGELIA");
 
     if !aggelia_path.exists() {
         return Ok(Vec::new());
@@ -1623,18 +1915,11 @@ pub async fn list_aggelia_images(
 pub async fn get_aggelia_image_as_base64(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
     filename: String,
 ) -> Result<String, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(cfg) => PathBuf::from(cfg.root_path),
-        None => return Err("App root path is not configured".into()),
-    };
-
-    let full_path = root_path
-        .join(&folder_path)
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
+    let full_path = property_path
         .join("INTERNET")
         .join("AGGELIA")
         .join(&filename);
@@ -1654,17 +1939,10 @@ pub async fn get_aggelia_image_as_base64(
 pub async fn copy_images_to_aggelia(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
     filenames: Vec<String>,
 ) -> Result<CommandResult, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(cfg) => PathBuf::from(cfg.root_path),
-        None => return Err("App root path is not configured".into()),
-    };
-
-    let property_path = root_path.join(&folder_path);
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
     let internet_path = property_path.join("INTERNET");
     let aggelia_path = internet_path.join("AGGELIA");
 
@@ -1724,19 +2002,10 @@ pub async fn copy_images_to_aggelia(
 pub async fn clear_aggelia_folder(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
 ) -> Result<CommandResult, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(cfg) => PathBuf::from(cfg.root_path),
-        None => return Err("App root path is not configured".into()),
-    };
-
-    let aggelia_path = root_path
-        .join(&folder_path)
-        .join("INTERNET")
-        .join("AGGELIA");
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
+    let aggelia_path = property_path.join("INTERNET").join("AGGELIA");
 
     if !aggelia_path.exists() {
         return Ok(CommandResult {
@@ -1794,6 +2063,7 @@ pub async fn clear_aggelia_folder(
 pub async fn open_image_in_advanced_editor(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
     filename: String,
     from_aggelia: bool,
 ) -> Result<CommandResult, String> {
@@ -1805,16 +2075,14 @@ pub async fn open_image_in_advanced_editor(
         None => return Err("App configuration not found".into()),
     };
 
-    let root_path = PathBuf::from(&config.root_path);
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
     let image_path = if from_aggelia {
-        root_path
-            .join(&folder_path)
+        property_path
             .join("INTERNET")
             .join("AGGELIA")
             .join(&filename)
     } else {
-        root_path
-            .join(&folder_path)
+        property_path
             .join("INTERNET")
             .join(&filename)
     };
@@ -1868,6 +2136,7 @@ pub async fn open_image_in_advanced_editor(
 pub async fn copy_and_watermark_images(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
 ) -> Result<CommandResult, String> {
     let config = crate::config::load_config(app.clone())
         .await
@@ -1894,8 +2163,7 @@ pub async fn copy_and_watermark_images(
         }
     };
 
-    let root_path = PathBuf::from(&config.root_path);
-    let property_path = root_path.join(&folder_path);
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
     let internet_path = property_path.join("INTERNET");
     let aggelia_path = internet_path.join("AGGELIA");
     let watermark_path = property_path.join("WATERMARK");
@@ -1971,36 +2239,53 @@ fn copy_and_process_folder_with_config(
     watermark_img: &DynamicImage,
     config: &crate::config::WatermarkConfig,
 ) -> Result<usize, String> {
-    let mut processed_count = 0;
-
-    for entry in fs::read_dir(source_path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                let ext_lc = ext.to_lowercase();
-                if ["jpg", "jpeg", "png", "bmp", "gif", "webp"].contains(&ext_lc.as_str()) {
-                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                        let dest_file = dest_path.join(filename);
-
-                        // Copy and watermark with config
-                        match apply_watermark_to_image_with_config(
-                            &path,
-                            &dest_file,
-                            watermark_img,
-                            config,
-                        ) {
-                            Ok(_) => processed_count += 1,
-                            Err(e) => return Err(format!("Failed to process {}: {}", filename, e)),
+    // Collect all image files first
+    let image_files: Vec<(PathBuf, PathBuf)> = fs::read_dir(source_path)
+        .map_err(|e| e.to_string())?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                    let ext_lc = ext.to_lowercase();
+                    if ["jpg", "jpeg", "png", "bmp", "gif", "webp"].contains(&ext_lc.as_str()) {
+                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                            return Some((path.clone(), dest_path.join(filename)));
                         }
                     }
                 }
             }
+            None
+        })
+        .collect();
+
+    let processed_count = AtomicUsize::new(0);
+    let errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+    // Process images in parallel using rayon
+    image_files.par_iter().for_each(|(source, dest)| {
+        match apply_watermark_to_image_with_config(source, dest, watermark_img, config) {
+            Ok(_) => {
+                processed_count.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(e) => {
+                if let Some(filename) = source.file_name().and_then(|s| s.to_str()) {
+                    if let Ok(mut errs) = errors.lock() {
+                        errs.push(format!("Failed to process {}: {}", filename, e));
+                    }
+                }
+            }
+        }
+    });
+
+    // Check for errors
+    if let Ok(errs) = errors.lock() {
+        if !errs.is_empty() {
+            return Err(errs.join("; "));
         }
     }
 
-    Ok(processed_count)
+    Ok(processed_count.load(Ordering::Relaxed))
 }
 
 fn apply_watermark_to_image_with_config(
@@ -2017,10 +2302,24 @@ fn apply_watermark_to_image_with_config(
     // Apply watermark using config
     apply_watermark_with_config(&mut base_img, watermark_img, config)?;
 
-    // Save watermarked image
-    base_img
-        .save(dest_path)
-        .map_err(|e| format!("Failed to save watermarked image: {}", e))?;
+    // Save watermarked image - convert to RGB for JPEG (doesn't support alpha)
+    let ext = dest_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    if ext == "jpg" || ext == "jpeg" {
+        // Convert RGBA to RGB for JPEG format
+        let rgb_img: image::RgbImage = image::DynamicImage::ImageRgba8(base_img).to_rgb8();
+        rgb_img
+            .save(dest_path)
+            .map_err(|e| format!("Failed to save watermarked image: {}", e))?;
+    } else {
+        base_img
+            .save(dest_path)
+            .map_err(|e| format!("Failed to save watermarked image: {}", e))?;
+    }
 
     Ok(())
 }
@@ -2135,12 +2434,12 @@ fn apply_watermark_with_config(
         }
     };
 
-    // Resize watermark
+    // Resize watermark (CatmullRom is faster than Lanczos3 with good quality)
     let resized_watermark = watermark_img
         .resize_exact(
             new_wm_width,
             new_wm_height,
-            image::imageops::FilterType::Lanczos3,
+            image::imageops::FilterType::CatmullRom,
         )
         .to_rgba8();
 
@@ -2270,12 +2569,12 @@ fn apply_watermark_to_image(
     let new_wm_width = (wm_width as f32 * scale) as u32;
     let new_wm_height = (wm_height as f32 * scale) as u32;
 
-    // Resize watermark
+    // Resize watermark (CatmullRom is faster than Lanczos3 with good quality)
     let resized_watermark = watermark_img
         .resize_exact(
             new_wm_width,
             new_wm_height,
-            image::imageops::FilterType::Lanczos3,
+            image::imageops::FilterType::CatmullRom,
         )
         .to_rgba8();
 
@@ -2307,10 +2606,24 @@ fn apply_watermark_to_image(
         }
     }
 
-    // Save watermarked image
-    base_img
-        .save(dest_path)
-        .map_err(|e| format!("Failed to save watermarked image: {}", e))?;
+    // Save watermarked image - convert to RGB for JPEG (doesn't support alpha)
+    let ext = dest_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    if ext == "jpg" || ext == "jpeg" {
+        // Convert RGBA to RGB for JPEG format
+        let rgb_img: image::RgbImage = image::DynamicImage::ImageRgba8(base_img).to_rgb8();
+        rgb_img
+            .save(dest_path)
+            .map_err(|e| format!("Failed to save watermarked image: {}", e))?;
+    } else {
+        base_img
+            .save(dest_path)
+            .map_err(|e| format!("Failed to save watermarked image: {}", e))?;
+    }
 
     Ok(())
 }
@@ -2319,16 +2632,11 @@ fn apply_watermark_to_image(
 pub async fn list_watermark_images(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
 ) -> Result<Vec<String>, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(c) => PathBuf::from(c.root_path),
-        None => return Err("App root folder not configured".into()),
-    };
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-    let watermark_path = root_path.join(&folder_path).join("WATERMARK");
+    let watermark_path = property_path.join("WATERMARK");
 
     if !watermark_path.exists() {
         return Ok(Vec::new());
@@ -2359,17 +2667,11 @@ pub async fn list_watermark_images(
 pub async fn list_watermark_aggelia_images(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
 ) -> Result<Vec<String>, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(c) => PathBuf::from(c.root_path),
-        None => return Err("App root folder not configured".into()),
-    };
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-    let watermark_aggelia_path = root_path
-        .join(&folder_path)
+    let watermark_aggelia_path = property_path
         .join("WATERMARK")
         .join("AGGELIA");
 
@@ -2402,26 +2704,19 @@ pub async fn list_watermark_aggelia_images(
 pub async fn get_watermark_image_as_base64(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
     filename: String,
     from_aggelia: bool,
 ) -> Result<String, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(cfg) => PathBuf::from(cfg.root_path),
-        None => return Err("App root path is not configured".into()),
-    };
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
     let full_path = if from_aggelia {
-        root_path
-            .join(&folder_path)
+        property_path
             .join("WATERMARK")
             .join("AGGELIA")
             .join(&filename)
     } else {
-        root_path
-            .join(&folder_path)
+        property_path
             .join("WATERMARK")
             .join(&filename)
     };
@@ -2441,16 +2736,11 @@ pub async fn get_watermark_image_as_base64(
 pub async fn clear_watermark_folders(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
 ) -> Result<CommandResult, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let root_path = match config {
-        Some(cfg) => PathBuf::from(cfg.root_path),
-        None => return Err("App root path is not configured".into()),
-    };
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-    let watermark_path = root_path.join(&folder_path).join("WATERMARK");
+    let watermark_path = property_path.join("WATERMARK");
     let mut deleted_count = 0;
     let mut errors = Vec::new();
 
@@ -2518,17 +2808,9 @@ fn clear_folder_images(folder_path: &PathBuf) -> Result<usize, String> {
 pub async fn open_property_folder(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
 ) -> Result<CommandResult, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let config = match config {
-        Some(cfg) => cfg,
-        None => return Err("App configuration not found".into()),
-    };
-
-    let root_path = PathBuf::from(&config.root_path);
-    let full_path = root_path.join(&folder_path);
+    let full_path = get_property_base_path(&app, &folder_path, &status).await?;
 
     println!("Attempting to open: {}", full_path.display());
 
@@ -2553,16 +2835,9 @@ pub async fn open_property_folder(
 pub async fn get_full_property_path(
     app: tauri::AppHandle,
     folder_path: String,
+    status: String,
 ) -> Result<CommandResult, String> {
-    let config = crate::config::load_config(app.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let config = match config {
-        Some(cfg) => cfg,
-        None => return Err("App configuration not found".into()),
-    };
-
-    let full_path = PathBuf::from(&config.root_path).join(&folder_path);
+    let full_path = get_property_base_path(&app, &folder_path, &status).await?;
 
     Ok(CommandResult {
         success: true,
@@ -2572,4 +2847,197 @@ pub async fn get_full_property_path(
             "relative_path": folder_path
         })),
     })
+}
+
+/// Fill AGGELIA folders to 25 images by duplicating existing images with a 1% crop
+#[tauri::command]
+pub async fn fill_aggelia_to_25(
+    app: tauri::AppHandle,
+    folder_path: String,
+    status: String,
+) -> Result<CommandResult, String> {
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
+    let internet_aggelia_path = property_path.join("INTERNET").join("AGGELIA");
+    let watermark_aggelia_path = property_path.join("WATERMARK").join("AGGELIA");
+
+    // Ensure folders exist
+    if !internet_aggelia_path.exists() {
+        return Ok(CommandResult {
+            success: false,
+            error: Some("INTERNET/AGGELIA folder does not exist".to_string()),
+            data: None,
+        });
+    }
+
+    // Get existing images from INTERNET/AGGELIA
+    let mut existing_images: Vec<String> = Vec::new();
+    for entry in fs::read_dir(&internet_aggelia_path).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                let ext_lc = ext.to_lowercase();
+                if ["jpg", "jpeg", "png", "bmp", "gif", "webp"].contains(&ext_lc.as_str()) {
+                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                        existing_images.push(filename.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    existing_images.sort();
+
+    let current_count = existing_images.len();
+
+    // Check if already at 25+
+    if current_count >= 25 {
+        return Ok(CommandResult {
+            success: true,
+            error: None,
+            data: Some(serde_json::json!({
+                "message": "Property already has 25 or more images",
+                "current_count": current_count,
+                "added_count": 0
+            })),
+        });
+    }
+
+    if current_count == 0 {
+        return Ok(CommandResult {
+            success: false,
+            error: Some("No images in AGGELIA folder to duplicate".to_string()),
+            data: None,
+        });
+    }
+
+    // Ensure WATERMARK/AGGELIA exists
+    fs::create_dir_all(&watermark_aggelia_path)
+        .map_err(|e| format!("Failed to create WATERMARK/AGGELIA folder: {}", e))?;
+
+    // Find the highest existing number for naming
+    let mut max_number: u32 = 0;
+    for img in &existing_images {
+        if let Some(num_str) = img.split('.').next() {
+            if let Ok(num) = num_str.parse::<u32>() {
+                if num > max_number {
+                    max_number = num;
+                }
+            }
+        }
+    }
+
+    let images_to_add = 25 - current_count;
+    let mut added_count = 0;
+    let mut errors: Vec<String> = Vec::new();
+
+    for i in 0..images_to_add {
+        // Cycle through existing images
+        let source_filename = &existing_images[i % current_count];
+        let source_path = internet_aggelia_path.join(source_filename);
+
+        // Get the extension from source
+        let ext = source_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("jpg")
+            .to_lowercase();
+
+        // New filename with next sequential number
+        let new_number = max_number + (i as u32) + 1;
+        let new_filename = format!("{:02}.{}", new_number, ext);
+
+        let dest_internet_path = internet_aggelia_path.join(&new_filename);
+        let dest_watermark_path = watermark_aggelia_path.join(&new_filename);
+
+        // Process for INTERNET/AGGELIA
+        match crop_and_save_image(&source_path, &dest_internet_path) {
+            Ok(_) => {
+                added_count += 1;
+
+                // Also create cropped version for WATERMARK/AGGELIA if source exists there
+                let watermark_source = watermark_aggelia_path.join(source_filename);
+                if watermark_source.exists() {
+                    if let Err(e) = crop_and_save_image(&watermark_source, &dest_watermark_path) {
+                        errors.push(format!("Failed to create watermark copy for {}: {}", new_filename, e));
+                    }
+                }
+            }
+            Err(e) => {
+                errors.push(format!("Failed to create {}: {}", new_filename, e));
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(CommandResult {
+            success: true,
+            error: None,
+            data: Some(serde_json::json!({
+                "message": format!("Added {} images to reach 25", added_count),
+                "added_count": added_count,
+                "total_count": current_count + added_count
+            })),
+        })
+    } else {
+        Ok(CommandResult {
+            success: added_count > 0,
+            error: Some(format!("Added {} images with some errors: {}", added_count, errors.join(", "))),
+            data: Some(serde_json::json!({
+                "added_count": added_count,
+                "errors": errors
+            })),
+        })
+    }
+}
+
+/// Crop an image by 1% on each edge and save to destination
+fn crop_and_save_image(source_path: &PathBuf, dest_path: &PathBuf) -> Result<(), String> {
+    use image::GenericImageView;
+
+    let img = image::open(source_path)
+        .map_err(|e| format!("Failed to open image: {}", e))?;
+
+    let (width, height) = img.dimensions();
+
+    // Calculate 1% crop from each edge
+    let crop_percent = 0.01_f32;
+    let crop_x = (width as f32 * crop_percent) as u32;
+    let crop_y = (height as f32 * crop_percent) as u32;
+
+    // Ensure we don't crop too much for very small images
+    let crop_x = crop_x.max(1);
+    let crop_y = crop_y.max(1);
+
+    let new_width = width.saturating_sub(crop_x * 2);
+    let new_height = height.saturating_sub(crop_y * 2);
+
+    // Ensure minimum dimensions
+    if new_width < 10 || new_height < 10 {
+        return Err("Image too small to crop".to_string());
+    }
+
+    let cropped = img.crop_imm(crop_x, crop_y, new_width, new_height);
+
+    // Determine output format based on extension
+    let ext = dest_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    if ext == "jpg" || ext == "jpeg" {
+        // Convert to RGB for JPEG (no alpha channel)
+        let rgb_img = cropped.to_rgb8();
+        rgb_img
+            .save(dest_path)
+            .map_err(|e| format!("Failed to save cropped image: {}", e))?;
+    } else {
+        cropped
+            .save(dest_path)
+            .map_err(|e| format!("Failed to save cropped image: {}", e))?;
+    }
+
+    Ok(())
 }

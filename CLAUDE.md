@@ -12,6 +12,30 @@ Realtr is a specialized **Tauri v2 desktop application** for real estate photogr
 
 The application manages a 4-step workflow for processing real estate property photos from import to watermarking.
 
+## UI/UX Design Philosophy
+
+The application follows a **clean, minimal, functional design** approach:
+
+- **Minimal rounding**: Border radius of 2px throughout (nearly square corners)
+- **No clutter**: No decorative backgrounds, patterns, or unnecessary visual elements
+- **Neutral colors**: Gray-based palette with very subtle blue accents for productivity focus
+- **Functional first**: Every UI element serves a purpose; no ornamental additions
+- **Compact layout**: Reduced padding and spacing for efficient information density
+- **Simple typography**: System font stack, consistent sizing, no decorative fonts
+- **Subtle interactions**: Minimal hover effects and transitions
+
+### Design Tokens (app.css)
+- Border radius: `--radius: 2px` for all elements
+- Color palette: Semantic foreground/background/accent colors in OKLCH
+- Light/dark mode support with appropriate contrast
+
+### Guidelines for New UI
+- Avoid excessive shadows, gradients, or decorative borders
+- Keep cards and containers simple with minimal visual weight
+- Use consistent spacing (Tailwind's spacing scale)
+- Prefer icons from the existing SVG icon style (outlined, 2px stroke)
+- No emojis in the interface
+
 ## Development Commands
 
 ### Frontend (SvelteKit)

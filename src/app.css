@@ -1,9 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,200;0,300;0,400;0,500;0,600;0,700;0,800;1,200;1,300;1,400;1,500;1,600;1,700;1,800&display=swap');
 @import 'tailwindcss';
 
 @theme {
-  --font-plusjakarta: 'Plus Jakarta Sans', sans-serif;
-
   /* Foreground (text) colors - neutral grays */
   --color-foreground-50: oklch(96.2% 0.002 0);
   --color-foreground-100: oklch(92.33% 0.003 0);
@@ -31,18 +28,25 @@
   --color-background-900: oklch(32% 0.005 0);
   --color-background-950: oklch(22% 0.003 0);
 
-  /* Accent colors - professional blue */
-  --color-accent-50: oklch(97% 0.013 240);
-  --color-accent-100: oklch(94% 0.025 240);
-  --color-accent-200: oklch(88% 0.05 240);
-  --color-accent-300: oklch(82% 0.075 240);
-  --color-accent-400: oklch(76% 0.1 240);
-  --color-accent-500: oklch(70% 0.125 240);
-  --color-accent-600: oklch(64% 0.15 240);
-  --color-accent-700: oklch(56% 0.125 240);
-  --color-accent-800: oklch(46% 0.1 240);
-  --color-accent-900: oklch(36% 0.075 240);
-  --color-accent-950: oklch(26% 0.05 240);
+  /* Accent colors - very subtle blue for productivity focus */
+  --color-accent-50: oklch(97% 0.003 240);
+  --color-accent-100: oklch(94% 0.006 240);
+  --color-accent-200: oklch(88% 0.012 240);
+  --color-accent-300: oklch(82% 0.018 240);
+  --color-accent-400: oklch(76% 0.024 240);
+  --color-accent-500: oklch(70% 0.03 240);
+  --color-accent-600: oklch(64% 0.036 240);
+  --color-accent-700: oklch(56% 0.03 240);
+  --color-accent-800: oklch(46% 0.024 240);
+  --color-accent-900: oklch(36% 0.018 240);
+  --color-accent-950: oklch(26% 0.012 240);
+
+  /* Minimal border radius */
+  --radius: 2px;
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 2px;
+  --radius-xl: 2px;
 }
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -76,32 +80,28 @@
     --color-background-900: oklch(82% 0.004 0);
     --color-background-950: oklch(88% 0.003 0);
 
-    /* Subtle accent colors for dark mode - professional blue */
-    --color-accent-50: oklch(20% 0.08 240);
-    --color-accent-100: oklch(28% 0.1 240);
-    --color-accent-200: oklch(36% 0.12 240);
-    --color-accent-300: oklch(44% 0.14 240);
-    --color-accent-400: oklch(52% 0.16 240);
-    --color-accent-500: oklch(60% 0.18 240);
-    --color-accent-600: oklch(68% 0.16 240);
-    --color-accent-700: oklch(76% 0.14 240);
-    --color-accent-800: oklch(84% 0.12 240);
-    --color-accent-900: oklch(90% 0.1 240);
-    --color-accent-950: oklch(95% 0.08 240);
-  }
-}
-
-@layer utilities {
-  .font-plusjakarta {
-    font-family: var(--font-plusjakarta);
+    /* Very subtle accent colors for dark mode */
+    --color-accent-50: oklch(20% 0.015 240);
+    --color-accent-100: oklch(28% 0.02 240);
+    --color-accent-200: oklch(36% 0.025 240);
+    --color-accent-300: oklch(44% 0.03 240);
+    --color-accent-400: oklch(52% 0.035 240);
+    --color-accent-500: oklch(60% 0.04 240);
+    --color-accent-600: oklch(68% 0.035 240);
+    --color-accent-700: oklch(76% 0.03 240);
+    --color-accent-800: oklch(84% 0.025 240);
+    --color-accent-900: oklch(90% 0.02 240);
+    --color-accent-950: oklch(95% 0.015 240);
   }
 }
 
 html {
-  @apply bg-background-0 text-foreground-950 font-plusjakarta transition-colors duration-300;
+  @apply bg-background-0 text-foreground-950 transition-colors duration-300;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
-/* Enhanced scrollbar with blue-tinted dark mode */
+/* Minimal scrollbar styling */
 ::-webkit-scrollbar {
   width: 8px;
 }
@@ -112,7 +112,6 @@ html {
 
 ::-webkit-scrollbar-thumb {
   background: var(--color-background-300);
-  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {

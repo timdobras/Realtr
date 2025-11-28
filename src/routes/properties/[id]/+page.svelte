@@ -5,21 +5,22 @@
   import { DatabaseService } from '$lib/services/databaseService';
   import type { Property } from '$lib/types/database';
   import { formatDate } from '$lib/utils/dateUtils';
+  import SetCodeModal from '$lib/components/SetCodeModal.svelte';
   export const prerender = false;
 
-  let propertyId: number | null = null;
-  let property: Property | null = null;
-  let originalImages: { filename: string; dataUrl: string; loading: boolean }[] = [];
-  let error = '';
-  let loading = true;
-  let folderMessage = '';
-  let folderMessageType: 'success' | 'error' | '' = '';
+  let property = $state<Property | null>(null);
+  let originalImages = $state<{ filename: string; dataUrl: string; loading: boolean }[]>([]);
+  let error = $state('');
+  let loading = $state(true);
+  let folderMessage = $state('');
+  let folderMessageType = $state<'success' | 'error' | ''>('');
+  let showCodeModal = $state(false);
 
   // Get the id from the URL params
-  $: propertyId = Number($page.params.id);
+  let propertyId = $derived(Number($page.params.id));
 
   onMount(async () => {
-    if (!propertyId) {
+    if (isNaN(propertyId) || propertyId < 1) {
       error = 'Invalid property ID';
       loading = false;
       return;
@@ -48,7 +49,8 @@
     try {
       // Get list of image filenames
       const response = await invoke('list_original_images', {
-        folderPath: property.folder_path
+        folderPath: property.folder_path,
+        status: property.status
       });
 
       if (Array.isArray(response)) {
@@ -65,6 +67,7 @@
           try {
             const base64Data = await invoke('get_image_as_base64', {
               folderPath: property.folder_path,
+              status: property.status,
               filename: image.filename
             });
 
@@ -109,7 +112,11 @@
     if (!property) return;
 
     try {
-      const result = await DatabaseService.openImagesInFolder(property.folder_path, filename);
+      const result = await DatabaseService.openImagesInFolder(
+        property.folder_path,
+        property.status,
+        filename
+      );
 
       if (!result.success) {
         error = result.error || 'Failed to open image';
@@ -124,8 +131,9 @@
     if (!property) return;
 
     try {
-      const result = await invoke('open_property_folder', {
-        folderPath: property.folder_path
+      const result: any = await invoke('open_property_folder', {
+        folderPath: property.folder_path,
+        status: property.status
       });
 
       if (result.success) {
@@ -144,8 +152,9 @@
 
     try {
       // Get the full absolute path
-      const result = await invoke('get_full_property_path', {
-        folderPath: property.folder_path
+      const result: any = await invoke('get_full_property_path', {
+        folderPath: property.folder_path,
+        status: property.status
       });
 
       if (result.success && result.data?.full_path) {
@@ -179,8 +188,13 @@
     }, 3000);
   }
 
-  // Workflow steps data
-  const workflowSteps = [
+  async function refreshProperty() {
+    if (isNaN(propertyId) || propertyId < 1) return;
+    property = await DatabaseService.getPropertyById(propertyId);
+  }
+
+  // Workflow steps data - derived so it updates when propertyId changes
+  let workflowSteps = $derived([
     {
       number: 1,
       title: 'Copy to INTERNET',
@@ -222,14 +236,14 @@
       </svg>`,
       color: 'purple'
     }
-  ];
+  ]);
 </script>
 
 {#if loading}
   <div class="flex h-64 items-center justify-center">
-    <div class="flex items-center gap-2 text-sm text-foreground-500">
+    <div class="text-foreground-500 flex items-center gap-2 text-sm">
       <div
-        class="h-4 w-4 animate-spin rounded-full border-2 border-foreground-300 border-t-transparent"
+        class="border-foreground-300 h-4 w-4 animate-spin rounded-full border-2 border-t-transparent"
       ></div>
       <span>Loading...</span>
     </div>
@@ -241,98 +255,70 @@
     </div>
   </div>
 {:else if property}
-  <div class="space-y-8 p-6">
+  <div class="space-y-4 p-4">
     <!-- Property Details -->
-    <section class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
-      <div class="mb-6 flex items-start justify-between">
-        <div class="flex flex-1 items-center space-x-4">
-          <div class="bg-accent-100 flex h-12 w-12 items-center justify-center rounded-lg">
-            <svg
-              class="text-accent-600 h-6 w-6"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
-              />
-            </svg>
+    <section class="bg-background-50 border-background-200 rounded-lg border p-4">
+      <div class="mb-3 flex items-start justify-between">
+        <div>
+          <div class="mb-2 flex items-center gap-3">
+            <h1 class="text-foreground-900 text-lg font-semibold">{property.name}</h1>
+            {#if property.code}
+              <span class="bg-accent-100 text-accent-700 rounded px-2 py-0.5 text-xs font-medium">
+                {property.code}
+              </span>
+            {/if}
           </div>
-          <div>
-            <h1 class="text-foreground-900 mb-2 text-2xl font-bold">{property.name}</h1>
-            <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div class="flex items-center space-x-2">
-                <svg
-                  class="text-foreground-600 h-4 w-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
-                  />
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-                  />
-                </svg>
-                <span class="text-foreground-700 font-medium">City:</span>
-                <span class="text-foreground-600">{property.city}</span>
-              </div>
-              <div class="flex items-center space-x-2">
-                <svg
-                  class="text-foreground-600 h-4 w-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-                <span class="text-foreground-700 font-medium">Status:</span>
-                <span
-                  class="inline-flex items-center rounded-lg border px-2.5 py-1 text-xs font-medium {property.completed
-                    ? 'border-green-200 bg-green-50 text-green-700'
-                    : 'border-orange-200 bg-orange-50 text-orange-700'}"
-                >
-                  {property.completed ? 'Completed' : 'In Progress'}
-                </span>
-              </div>
-            </div>
+          <div class="text-foreground-600 flex items-center gap-4 text-sm">
+            <span>{property.city}</span>
+            <span
+              class="inline-flex items-center rounded border px-2 py-0.5 text-xs {property.status === 'DONE'
+                ? 'border-green-300 bg-green-50 text-green-700'
+                : property.status === 'ARCHIVE'
+                  ? 'border-gray-300 bg-gray-50 text-gray-700'
+                  : property.status === 'NOT_FOUND'
+                    ? 'border-yellow-300 bg-yellow-50 text-yellow-700'
+                    : 'border-blue-300 bg-blue-50 text-blue-700'}"
+            >
+              {property.status === 'DONE'
+                ? 'Done'
+                : property.status === 'ARCHIVE'
+                  ? 'Archived'
+                  : property.status === 'NOT_FOUND'
+                    ? 'Not Found'
+                    : 'New'}
+            </span>
           </div>
         </div>
 
         <!-- Action Buttons -->
-        <div class="flex items-center space-x-3">
+        <div class="flex items-center gap-2">
+          <button
+            onclick={() => (showCodeModal = true)}
+            class="bg-background-100 hover:bg-background-200 text-foreground-700 flex items-center gap-1.5 rounded px-3 py-1.5 text-xs transition-colors"
+            title={property.code ? 'Edit Code' : 'Add Code'}
+          >
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14"
+              />
+            </svg>
+            <span>{property.code ? 'Edit Code' : 'Add Code'}</span>
+          </button>
+
           <button
             onclick={openPropertyFolder}
-            class="border-accent-200 bg-accent-50 text-accent-700 hover:bg-accent-100 flex items-center space-x-2 rounded-lg border px-4 py-2 text-sm font-medium transition-all duration-200"
+            class="bg-background-100 hover:bg-background-200 text-foreground-700 flex items-center gap-1.5 rounded px-3 py-1.5 text-xs transition-colors"
             title="Open Property Folder"
           >
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 stroke-linecap="round"
                 stroke-linejoin="round"
                 stroke-width="2"
                 d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
-              />
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M8 5a2 2 0 012-2h4a2 2 0 012 2v6H8V5z"
               />
             </svg>
             <span>Open Folder</span>
@@ -340,10 +326,10 @@
 
           <button
             onclick={copyFolderPath}
-            class="border-background-300 bg-background-100 text-foreground-700 hover:bg-background-200 flex items-center space-x-2 rounded-lg border px-4 py-2 text-sm font-medium transition-all duration-200"
+            class="bg-background-100 hover:bg-background-200 text-foreground-700 flex items-center gap-1.5 rounded px-3 py-1.5 text-xs transition-colors"
             title="Copy Folder Path"
           >
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 stroke-linecap="round"
                 stroke-linejoin="round"
@@ -357,207 +343,57 @@
       </div>
 
       <!-- Folder Path Display -->
-      <div class="bg-background-100 border-background-200 mb-4 rounded-lg border p-4">
-        <div class="flex items-start space-x-3">
-          <svg
-            class="text-foreground-600 mt-0.5 h-5 w-5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
-            />
-          </svg>
-          <div class="min-w-0 flex-1">
-            <p class="text-foreground-500 mb-1 text-xs font-medium tracking-wide uppercase">
-              Folder Path
-            </p>
-            <p class="text-foreground-700 font-mono text-sm break-all">{property.folder_path}</p>
-          </div>
-        </div>
+      <div class="bg-background-100 mb-3 rounded px-3 py-2">
+        <p class="text-foreground-500 mb-1 text-xs">Folder Path</p>
+        <p class="text-foreground-700 font-mono text-xs break-all">{property.folder_path}</p>
       </div>
 
       <!-- Success/Error Message -->
       {#if folderMessage}
         <div
-          class="mb-4 rounded-lg border p-4 {folderMessageType === 'success'
-            ? 'border-green-200 bg-green-50'
-            : 'border-red-200 bg-red-50'}"
+          class="mb-3 rounded border px-3 py-2 text-xs {folderMessageType === 'success'
+            ? 'border-green-300 bg-green-50 text-green-800'
+            : 'border-red-300 bg-red-50 text-red-800'}"
         >
-          <div class="flex items-center space-x-3">
-            {#if folderMessageType === 'success'}
-              <svg
-                class="h-5 w-5 text-green-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-            {:else}
-              <svg
-                class="h-5 w-5 text-red-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-            {/if}
-            <span
-              class="text-sm font-medium {folderMessageType === 'success'
-                ? 'text-green-800'
-                : 'text-red-800'}">{folderMessage}</span
-            >
-          </div>
+          {folderMessage}
         </div>
       {/if}
 
       <!-- Notes -->
       {#if property.notes}
-        <div class="bg-background-100 border-background-200 mb-4 rounded-lg border p-4">
-          <div class="flex items-start space-x-3">
-            <svg
-              class="text-foreground-600 mt-0.5 h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-              />
-            </svg>
-            <div>
-              <p class="text-foreground-500 mb-2 text-xs font-medium tracking-wide uppercase">
-                Notes
-              </p>
-              <p class="text-foreground-700 whitespace-pre-wrap">{property.notes}</p>
-            </div>
-          </div>
+        <div class="bg-background-100 mb-3 rounded px-3 py-2">
+          <p class="text-foreground-500 mb-1 text-xs">Notes</p>
+          <p class="text-foreground-700 whitespace-pre-wrap text-sm">{property.notes}</p>
         </div>
       {/if}
 
       <!-- Timestamps -->
-      <div
-        class="border-background-200 text-foreground-500 flex items-center space-x-6 border-t pt-4 text-xs"
-      >
-        <div class="flex items-center space-x-2">
-          <div class="h-1.5 w-1.5 rounded-full bg-green-400"></div>
-          <span>Created: {formatDate(property.created_at)}</span>
-        </div>
+      <div class="border-background-200 text-foreground-500 flex items-center gap-4 border-t pt-2 text-xs">
+        <span>Created: {formatDate(property.created_at)}</span>
         {#if property.updated_at !== property.created_at}
-          <div class="flex items-center space-x-2">
-            <div class="bg-accent-400 h-1.5 w-1.5 rounded-full"></div>
-            <span>Updated: {formatDate(property.updated_at)}</span>
-          </div>
+          <span>Updated: {formatDate(property.updated_at)}</span>
         {/if}
       </div>
     </section>
 
     <!-- Workflow Steps Navigation -->
-    <section class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
-      <div class="mb-6 flex items-center space-x-3">
-        <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-          <svg
-            class="text-accent-600 h-5 w-5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-            />
-          </svg>
-        </div>
-        <div>
-          <h2 class="text-foreground-900 text-xl font-semibold">Workflow Steps</h2>
-          <p class="text-foreground-600 text-sm">
-            Complete each step to process your property photos
-          </p>
-        </div>
-      </div>
+    <section class="bg-background-50 border-background-200 rounded-lg border p-4">
+      <h2 class="text-foreground-900 mb-3 text-sm font-semibold">Workflow Steps</h2>
 
-      <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div class="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-4">
         {#each workflowSteps as step}
           <a
             href={step.href}
-            class="group flex items-center space-x-4 rounded-xl border p-4 transition-all duration-200 hover:shadow-md {step.color ===
-            'accent'
-              ? 'border-accent-200 bg-accent-50 hover:bg-accent-100'
-              : step.color === 'green'
-                ? 'border-green-200 bg-green-50 hover:bg-green-100'
-                : step.color === 'orange'
-                  ? 'border-orange-200 bg-orange-50 hover:bg-orange-100'
-                  : 'border-purple-200 bg-purple-50 hover:bg-purple-100'}"
+            class="bg-background-100 hover:bg-background-200 border-background-200 flex items-center gap-3 rounded border p-3 transition-colors"
           >
-            <div
-              class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg {step.color ===
-              'accent'
-                ? 'bg-accent-100 text-accent-600'
-                : step.color === 'green'
-                  ? 'bg-green-100 text-green-600'
-                  : step.color === 'orange'
-                    ? 'bg-orange-100 text-orange-600'
-                    : 'bg-purple-100 text-purple-600'}"
-            >
+            <div class="text-foreground-600 flex h-8 w-8 flex-shrink-0 items-center justify-center">
               {@html step.icon}
             </div>
             <div class="min-w-0 flex-1">
-              <div class="mb-1 flex items-center space-x-2">
-                <p
-                  class="text-sm font-semibold {step.color === 'accent'
-                    ? 'text-accent-900'
-                    : step.color === 'green'
-                      ? 'text-green-900'
-                      : step.color === 'orange'
-                        ? 'text-orange-900'
-                        : 'text-purple-900'}"
-                >
-                  Step {step.number}
-                </p>
-              </div>
-              <p
-                class="text-sm font-medium {step.color === 'accent'
-                  ? 'text-accent-800'
-                  : step.color === 'green'
-                    ? 'text-green-800'
-                    : step.color === 'orange'
-                      ? 'text-orange-800'
-                      : 'text-purple-800'} group-hover:underline"
-              >
-                {step.title}
+              <p class="text-foreground-900 mb-0.5 text-xs font-medium">
+                Step {step.number}: {step.title}
               </p>
-              <p
-                class="text-xs {step.color === 'accent'
-                  ? 'text-accent-700'
-                  : step.color === 'green'
-                    ? 'text-green-700'
-                    : step.color === 'orange'
-                      ? 'text-orange-700'
-                      : 'text-purple-700'}"
-              >
-                {step.description}
-              </p>
+              <p class="text-foreground-600 text-xs">{step.description}</p>
             </div>
           </a>
         {/each}
@@ -565,75 +401,24 @@
     </section>
 
     <!-- Original Images Gallery -->
-    <section class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
-      <div class="mb-6 flex items-center justify-between">
-        <div class="flex items-center space-x-3">
-          <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-            <svg
-              class="text-accent-600 h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-              />
-            </svg>
-          </div>
-          <div>
-            <h2 class="text-foreground-900 text-xl font-semibold">
-              Original Images ({originalImages.length})
-            </h2>
-            <p class="text-foreground-600 text-sm">Click images to open in system viewer</p>
-          </div>
-        </div>
-
+    <section class="bg-background-50 border-background-200 rounded-lg border p-4">
+      <div class="mb-3 flex items-center justify-between">
+        <h2 class="text-foreground-900 text-sm font-semibold">
+          Original Images ({originalImages.length})
+        </h2>
         {#if originalImages.length > 0}
-          <div class="text-foreground-500 flex items-center space-x-2 text-sm">
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-            <span>Click to open</span>
-          </div>
+          <span class="text-foreground-500 text-xs">Click to open</span>
         {/if}
       </div>
 
       {#if originalImages.length === 0}
-        <div class="py-16 text-center">
-          <div
-            class="bg-background-100 mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full"
-          >
-            <svg
-              class="text-foreground-400 h-10 w-10"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-              />
-            </svg>
-          </div>
-          <h3 class="text-foreground-900 mb-2 text-lg font-semibold">No original images found</h3>
-          <p class="text-foreground-500 mx-auto mb-6 max-w-md">
-            Upload some images to this property folder to get started with your workflow.
-          </p>
+        <div class="bg-background-100 rounded py-8 text-center">
+          <p class="text-foreground-500 mb-3 text-sm">No original images found</p>
           <button
             onclick={openPropertyFolder}
-            class="bg-accent-500 hover:bg-accent-600 inline-flex items-center space-x-2 rounded-lg px-6 py-3 font-medium text-white transition-colors"
+            class="bg-background-200 hover:bg-background-300 text-foreground-700 inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs transition-colors"
           >
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 stroke-linecap="round"
                 stroke-linejoin="round"
@@ -641,21 +426,21 @@
                 d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
               />
             </svg>
-            <span>Open Property Folder</span>
+            <span>Open Folder</span>
           </button>
         </div>
       {:else}
-        <div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+        <div class="grid grid-cols-3 gap-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           {#each originalImages as image}
             <button
               onclick={() => openImage(image.filename)}
-              class="bg-background-100 border-background-200 hover:border-background-300 aspect-square overflow-hidden rounded-md border transition-colors"
+              class="bg-background-100 hover:bg-background-200 aspect-square overflow-hidden rounded transition-colors"
               title={image.filename}
             >
               {#if image.loading}
                 <div class="flex h-full items-center justify-center">
                   <div
-                    class="h-4 w-4 animate-spin rounded-full border-2 border-foreground-300 border-t-transparent"
+                    class="border-foreground-300 h-3 w-3 animate-spin rounded-full border-2 border-t-transparent"
                   ></div>
                 </div>
               {:else if image.dataUrl}
@@ -676,4 +461,18 @@
       {/if}
     </section>
   </div>
+{/if}
+
+<!-- Set Code Modal -->
+{#if showCodeModal && property}
+  <SetCodeModal
+    propertyId={property.id!}
+    propertyName={property.name}
+    currentCode={property.code}
+    onClose={() => (showCodeModal = false)}
+    onCodeSet={() => {
+      showCodeModal = false;
+      refreshProperty();
+    }}
+  />
 {/if}

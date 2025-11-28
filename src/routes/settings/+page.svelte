@@ -5,10 +5,15 @@
   import { appDataDir } from '@tauri-apps/api/path';
   import { DatabaseService } from '$lib/services/databaseService';
   import type { ScanResult, WatermarkConfig } from '$lib/types/database';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
   // TypeScript interfaces
   interface AppConfig {
-    rootPath: string;
+    rootPath?: string; // Legacy field for backward compatibility
+    newFolderPath: string;
+    doneFolderPath: string;
+    notFoundFolderPath: string;
+    archiveFolderPath: string;
     isValidPath: boolean;
     lastUpdated: string | null;
     fast_editor_path?: string;
@@ -27,7 +32,10 @@
 
   // Reactive state for settings
   let config = $state<AppConfig>({
-    rootPath: '',
+    newFolderPath: '',
+    doneFolderPath: '',
+    notFoundFolderPath: '',
+    archiveFolderPath: '',
     isValidPath: false,
     lastUpdated: null,
     fast_editor_path: undefined,
@@ -54,6 +62,10 @@
   // Watermark preview state
   let watermarkPreviewUrl = $state<string>('');
   let isGeneratingPreview = $state(false);
+
+  // Confirmation dialog states
+  let showResetConfigConfirm = $state(false);
+  let showResetDatabaseConfirm = $state(false);
 
   // Load config on mount
   onMount(async () => {
@@ -85,18 +97,18 @@
     }
   }
 
-  // Open folder dialog
-  async function selectFolder(): Promise<void> {
+  // Open folder dialog for each status folder
+  async function selectNewFolder(): Promise<void> {
     try {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: 'Select root folder for photo storage'
+        title: 'Select folder for NEW properties'
       });
 
       if (selected && typeof selected === 'string') {
-        config.rootPath = selected;
-        await validateAndCreateStructure();
+        config.newFolderPath = selected;
+        validateFolderPaths();
       }
     } catch (error) {
       console.error('Error selecting folder:', error);
@@ -105,40 +117,81 @@
     }
   }
 
-  // Validate path and create folder structure
-  async function validateAndCreateStructure(): Promise<void> {
+  async function selectDoneFolder(): Promise<void> {
     try {
-      isLoading = true;
-      statusMessage = 'Validating path and creating folder structure...';
-      statusType = 'info';
-
-      const result = await invoke<CommandResult>('setup_folder_structure', {
-        rootPath: config.rootPath
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: 'Select folder for DONE properties'
       });
 
-      if (result.success) {
-        config.isValidPath = true;
-        statusMessage = 'Folder structure created successfully!';
-        statusType = 'success';
-      } else {
-        config.isValidPath = false;
-        statusMessage = result.error || 'Failed to create folder structure';
-        statusType = 'error';
+      if (selected && typeof selected === 'string') {
+        config.doneFolderPath = selected;
+        validateFolderPaths();
       }
     } catch (error) {
-      console.error('Error creating folder structure:', error);
-      config.isValidPath = false;
-      statusMessage = `Error: ${error}`;
+      console.error('Error selecting folder:', error);
+      statusMessage = `Error selecting folder: ${error}`;
       statusType = 'error';
-    } finally {
-      isLoading = false;
+    }
+  }
+
+  async function selectNotFoundFolder(): Promise<void> {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: 'Select folder for NOT FOUND properties'
+      });
+
+      if (selected && typeof selected === 'string') {
+        config.notFoundFolderPath = selected;
+        validateFolderPaths();
+      }
+    } catch (error) {
+      console.error('Error selecting folder:', error);
+      statusMessage = `Error selecting folder: ${error}`;
+      statusType = 'error';
+    }
+  }
+
+  async function selectArchiveFolder(): Promise<void> {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: 'Select folder for ARCHIVED properties'
+      });
+
+      if (selected && typeof selected === 'string') {
+        config.archiveFolderPath = selected;
+        validateFolderPaths();
+      }
+    } catch (error) {
+      console.error('Error selecting folder:', error);
+      statusMessage = `Error selecting folder: ${error}`;
+      statusType = 'error';
+    }
+  }
+
+  // Validate that all folder paths are set
+  function validateFolderPaths(): void {
+    config.isValidPath =
+      config.newFolderPath !== '' &&
+      config.doneFolderPath !== '' &&
+      config.notFoundFolderPath !== '' &&
+      config.archiveFolderPath !== '';
+
+    if (config.isValidPath) {
+      statusMessage = 'All folder paths configured';
+      statusType = 'success';
     }
   }
 
   // Save configuration
   async function saveConfig(): Promise<void> {
-    if (!config.rootPath || !config.isValidPath) {
-      statusMessage = 'Please select a valid root folder first';
+    if (!config.isValidPath) {
+      statusMessage = 'Please configure all 4 folder paths first';
       statusType = 'error';
       return;
     }
@@ -151,6 +204,10 @@
       const result = await invoke<CommandResult>('save_config', {
         config: {
           rootPath: config.rootPath,
+          newFolderPath: config.newFolderPath,
+          doneFolderPath: config.doneFolderPath,
+          notFoundFolderPath: config.notFoundFolderPath,
+          archiveFolderPath: config.archiveFolderPath,
           isValidPath: config.isValidPath,
           lastUpdated: new Date().toISOString(),
           fast_editor_path: config.fast_editor_path,
@@ -180,23 +237,37 @@
   }
 
   // Reset configuration
-  async function resetConfig(): Promise<void> {
-    if (
-      confirm('Are you sure you want to reset the configuration? This will clear all settings.')
-    ) {
-      try {
-        await invoke<CommandResult>('reset_config');
-        config = {
-          rootPath: '',
-          isValidPath: false,
-          lastUpdated: null
-        };
-        statusMessage = 'Configuration reset successfully';
-        statusType = 'success';
-      } catch (error) {
-        statusMessage = `Error resetting configuration: ${error}`;
-        statusType = 'error';
-      }
+  function resetConfig(): void {
+    showResetConfigConfirm = true;
+  }
+
+  async function doResetConfig(): Promise<void> {
+    showResetConfigConfirm = false;
+    try {
+      await invoke<CommandResult>('reset_config');
+      config = {
+        newFolderPath: '',
+        doneFolderPath: '',
+        notFoundFolderPath: '',
+        archiveFolderPath: '',
+        isValidPath: false,
+        lastUpdated: null,
+        watermarkConfig: {
+          sizeMode: 'proportional',
+          sizePercentage: 0.35,
+          relativeTo: 'longest-side',
+          positionAnchor: 'center',
+          offsetX: 0,
+          offsetY: 0,
+          opacity: 0.15,
+          useAlphaChannel: true
+        }
+      };
+      statusMessage = 'Configuration reset successfully';
+      statusType = 'success';
+    } catch (error) {
+      statusMessage = `Error resetting configuration: ${error}`;
+      statusType = 'error';
     }
   }
 
@@ -205,15 +276,22 @@
   let showScanResult = $state(false);
 
   async function scanAndImport() {
-    if (!config.rootPath || !config.isValidPath) {
-      statusMessage = 'Please set up your root folder first';
+    // Check if at least one status folder is configured
+    const hasFolderConfigured =
+      config.newFolderPath ||
+      config.doneFolderPath ||
+      config.notFoundFolderPath ||
+      config.archiveFolderPath;
+
+    if (!hasFolderConfigured) {
+      statusMessage = 'Please set up at least one status folder first';
       statusType = 'error';
       return;
     }
 
     try {
       isScanning = true;
-      statusMessage = 'Scanning folder for existing properties...';
+      statusMessage = 'Scanning folders for existing properties...';
       statusType = 'info';
 
       scanResult = await DatabaseService.scanAndImportProperties();
@@ -246,16 +324,19 @@
     }
   }
 
-  async function resetDatabase() {
-    if (confirm('This will completely reset the database and delete all data. Are you sure?')) {
-      try {
-        await invoke('reset_database_with_proper_dates');
-        statusMessage = 'Database reset successfully';
-        statusType = 'success';
-      } catch (error) {
-        statusMessage = `Reset failed: ${error}`;
-        statusType = 'error';
-      }
+  function resetDatabase() {
+    showResetDatabaseConfirm = true;
+  }
+
+  async function doResetDatabase() {
+    showResetDatabaseConfirm = false;
+    try {
+      await invoke('reset_database_with_proper_dates');
+      statusMessage = 'Database reset successfully';
+      statusType = 'success';
+    } catch (error) {
+      statusMessage = `Reset failed: ${error}`;
+      statusType = 'error';
     }
   }
 
@@ -451,134 +532,130 @@
     {/if}
 
     <!-- Folder Configuration -->
-    <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
-      <div class="mb-6 flex items-center space-x-3">
-        <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-          <svg
-            class="text-accent-600 h-5 w-5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
-            />
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M8 5a2 2 0 012-2h4a2 2 0 012 2v6H8V5z"
-            />
-          </svg>
-        </div>
-        <div>
-          <h2 class="text-foreground-900 text-xl font-semibold">Folder Configuration</h2>
-          <p class="text-foreground-600 text-sm">Set up your photo storage directory</p>
-        </div>
+    <div class="bg-background-50 border-background-200 border p-4">
+      <div class="mb-4">
+        <h2 class="text-foreground-900 text-lg font-semibold">Folder Configuration</h2>
+        <p class="text-foreground-600 text-sm">Set up your photo storage directory</p>
       </div>
 
       <div class="space-y-6">
-        <!-- Root Folder Selection -->
+        <!-- NEW Folder Selection -->
         <div>
           <label class="text-foreground-700 mb-3 block text-sm font-medium">
-            Root Storage Folder
+            NEW Properties Folder
           </label>
           <div class="flex items-center space-x-4">
             <div class="min-w-0 flex-1">
               <input
                 type="text"
                 readonly
-                value={config.rootPath || 'No folder selected'}
+                value={config.newFolderPath || 'No folder selected'}
                 class="text-foreground-900 border-background-300 bg-background-100 focus:ring-accent-500 focus:border-accent-500 w-full rounded-lg border px-4 py-3 focus:ring-2 focus:outline-none"
-                placeholder="Select a folder to store your photos"
               />
             </div>
             <button
-              onclick={selectFolder}
+              onclick={selectNewFolder}
               disabled={isLoading}
               class="bg-accent-500 hover:bg-accent-600 flex items-center space-x-2 rounded-lg px-6 py-3 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
-                />
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M8 5a2 2 0 012-2h4a2 2 0 012 2v6H8V5z"
-                />
-              </svg>
               <span>Browse</span>
             </button>
           </div>
           <p class="text-foreground-500 mt-2 text-sm">
-            This folder will contain all your photo projects and processed images
+            Folder for new properties that need editing
           </p>
         </div>
 
-        <!-- Folder Structure Preview -->
-        {#if config.rootPath}
-          <div class="border-background-300 bg-background-100 rounded-lg border p-4">
-            <div class="mb-3 flex items-center space-x-2">
-              <svg
-                class="text-foreground-600 h-4 w-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
-                />
-              </svg>
-              <h3 class="text-foreground-900 font-medium">Folder Structure Preview</h3>
+        <!-- DONE Folder Selection -->
+        <div>
+          <label class="text-foreground-700 mb-3 block text-sm font-medium">
+            DONE Properties Folder
+          </label>
+          <div class="flex items-center space-x-4">
+            <div class="min-w-0 flex-1">
+              <input
+                type="text"
+                readonly
+                value={config.doneFolderPath || 'No folder selected'}
+                class="text-foreground-900 border-background-300 bg-background-100 focus:ring-accent-500 focus:border-accent-500 w-full rounded-lg border px-4 py-3 focus:ring-2 focus:outline-none"
+              />
             </div>
-            <div
-              class="text-foreground-700 bg-background-200 space-y-1 rounded p-3 font-mono text-sm"
+            <button
+              onclick={selectDoneFolder}
+              disabled={isLoading}
+              class="bg-accent-500 hover:bg-accent-600 flex items-center space-x-2 rounded-lg px-6 py-3 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <div>📁 {config.rootPath}</div>
-              <div class="ml-4">├── 📁 FOTOGRAFIES - DONE</div>
-              <div class="ml-8">│ └── 📁 [CITY/STREETANDNUMBER]</div>
-              <div class="ml-12">│ ├── 📁 INTERNET</div>
-              <div class="ml-16">│ │ └── 📁 AGGELIA</div>
-              <div class="ml-12">│ ├── 📁 WATERMARK</div>
-              <div class="ml-16">│ │ └── 📁 AGGELIA</div>
-              <div class="ml-12">│ └── 📄 [original images]</div>
-              <div class="ml-4">└── 📁 FOTOGRAFIES - NEW</div>
-              <div class="ml-8">└── 📁 [CITY/STREETANDNUMBER]</div>
-              <div class="ml-12">├── 📁 INTERNET</div>
-              <div class="ml-16">│ └── 📁 AGGELIA</div>
-              <div class="ml-12">├── 📁 WATERMARK</div>
-              <div class="ml-16">│ └── 📁 AGGELIA</div>
-              <div class="ml-12">└── 📄 [original images]</div>
-            </div>
+              <span>Browse</span>
+            </button>
           </div>
-        {/if}
+          <p class="text-foreground-500 mt-2 text-sm">
+            Folder for properties completed this week, waiting to be sent
+          </p>
+        </div>
+
+        <!-- NOT FOUND Folder Selection -->
+        <div>
+          <label class="text-foreground-700 mb-3 block text-sm font-medium">
+            NOT FOUND Properties Folder
+          </label>
+          <div class="flex items-center space-x-4">
+            <div class="min-w-0 flex-1">
+              <input
+                type="text"
+                readonly
+                value={config.notFoundFolderPath || 'No folder selected'}
+                class="text-foreground-900 border-background-300 bg-background-100 focus:ring-accent-500 focus:border-accent-500 w-full rounded-lg border px-4 py-3 focus:ring-2 focus:outline-none"
+              />
+            </div>
+            <button
+              onclick={selectNotFoundFolder}
+              disabled={isLoading}
+              class="bg-accent-500 hover:bg-accent-600 flex items-center space-x-2 rounded-lg px-6 py-3 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span>Browse</span>
+            </button>
+          </div>
+          <p class="text-foreground-500 mt-2 text-sm">
+            Folder for properties where listing doesn't exist on website yet
+          </p>
+        </div>
+
+        <!-- ARCHIVE Folder Selection -->
+        <div>
+          <label class="text-foreground-700 mb-3 block text-sm font-medium">
+            ARCHIVE Properties Folder
+          </label>
+          <div class="flex items-center space-x-4">
+            <div class="min-w-0 flex-1">
+              <input
+                type="text"
+                readonly
+                value={config.archiveFolderPath || 'No folder selected'}
+                class="text-foreground-900 border-background-300 bg-background-100 focus:ring-accent-500 focus:border-accent-500 w-full rounded-lg border px-4 py-3 focus:ring-2 focus:outline-none"
+              />
+            </div>
+            <button
+              onclick={selectArchiveFolder}
+              disabled={isLoading}
+              class="bg-accent-500 hover:bg-accent-600 flex items-center space-x-2 rounded-lg px-6 py-3 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span>Browse</span>
+            </button>
+          </div>
+          <p class="text-foreground-500 mt-2 text-sm">
+            Folder for properties that are done, uploaded, and sent to boss
+          </p>
+        </div>
 
         <!-- Status Indicators -->
         <div class="bg-background-100 flex items-center space-x-6 rounded-lg p-4">
-          <div class="flex items-center space-x-2">
-            <div
-              class="h-3 w-3 rounded-full {config.rootPath ? 'bg-green-500' : 'bg-background-300'}"
-            ></div>
-            <span class="text-foreground-600 text-sm font-medium">Folder Selected</span>
-          </div>
           <div class="flex items-center space-x-2">
             <div
               class="h-3 w-3 rounded-full {config.isValidPath
                 ? 'bg-green-500'
                 : 'bg-background-300'}"
             ></div>
-            <span class="text-foreground-600 text-sm font-medium">Structure Created</span>
+            <span class="text-foreground-600 text-sm font-medium">All Folders Configured</span>
           </div>
           <div class="flex items-center space-x-2">
             <div
@@ -594,27 +671,10 @@
 
     <!-- Configuration Details -->
     {#if config.lastUpdated}
-      <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
-        <div class="mb-6 flex items-center space-x-3">
-          <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-            <svg
-              class="text-accent-600 h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-              />
-            </svg>
-          </div>
-          <div>
-            <h2 class="text-foreground-900 text-xl font-semibold">Configuration Details</h2>
-            <p class="text-foreground-600 text-sm">Current application settings</p>
-          </div>
+      <div class="bg-background-50 border-background-200 border p-4">
+        <div class="mb-4">
+          <h2 class="text-foreground-900 text-lg font-semibold">Configuration Details</h2>
+          <p class="text-foreground-600 text-sm">Current application settings</p>
         </div>
 
         <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -657,35 +717,18 @@
 
     <!-- Import Existing Properties -->
     {#if config.isValidPath}
-      <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
-        <div class="mb-6 flex items-center space-x-3">
-          <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-            <svg
-              class="text-accent-600 h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"
-              />
-            </svg>
-          </div>
-          <div>
-            <h2 class="text-foreground-900 text-xl font-semibold">Import Existing Properties</h2>
-            <p class="text-foreground-600 text-sm">
-              Scan your folder for existing properties and add them to the database
-            </p>
-          </div>
+      <div class="bg-background-50 border-background-200 border p-4">
+        <div class="mb-4">
+          <h2 class="text-foreground-900 text-lg font-semibold">Import Existing Properties</h2>
+          <p class="text-foreground-600 text-sm">
+            Scan your folder for existing properties and add them to the database
+          </p>
         </div>
 
         <button
           onclick={scanAndImport}
           disabled={isScanning}
-          class="bg-accent-500 hover:bg-accent-600 flex items-center space-x-3 rounded-lg px-6 py-3 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          class="bg-accent-500 hover:bg-accent-600 flex items-center space-x-3 px-6 py-3 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
           {#if isScanning}
             <div
@@ -708,32 +751,13 @@
     {/if}
 
     <!-- Image Editor Configuration -->
-    <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
-      <div class="mb-6 flex items-center space-x-3">
-        <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-          <svg
-            class="text-accent-600 h-5 w-5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-            />
-          </svg>
-        </div>
-        <div>
-          <h2 class="text-foreground-900 text-xl font-semibold">Image Editor Configuration</h2>
-          <p class="text-foreground-600 text-sm">
-            Set up your preferred image editing applications
-          </p>
-        </div>
+    <div class="bg-background-50 border-background-200 border p-4">
+      <div class="mb-4">
+        <h2 class="text-foreground-900 text-lg font-semibold">Image Editor Configuration</h2>
+        <p class="text-foreground-600 text-sm">Set up your preferred image editing applications</p>
       </div>
 
-      <div class="space-y-6">
+      <div class="space-y-5">
         <!-- Fast Editor Selection -->
         <div>
           <label class="text-foreground-700 mb-3 block text-sm font-medium">
@@ -860,32 +884,15 @@
     </div>
 
     <!-- Enhanced Watermark Configuration -->
-    <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
-      <div class="mb-6 flex items-center space-x-3">
-        <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-          <svg
-            class="text-accent-600 h-5 w-5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"
-            />
-          </svg>
-        </div>
-        <div>
-          <h2 class="text-foreground-900 text-xl font-semibold">Watermark Configuration</h2>
-          <p class="text-foreground-600 text-sm">
-            Configure watermark image, size, position, and opacity
-          </p>
-        </div>
+    <div class="bg-background-50 border-background-200 border p-4">
+      <div class="mb-4">
+        <h2 class="text-foreground-900 text-lg font-semibold">Watermark Configuration</h2>
+        <p class="text-foreground-600 text-sm">
+          Configure watermark image, size, position, and opacity
+        </p>
       </div>
 
-      <div class="space-y-6">
+      <div class="space-y-5">
         <!-- Watermark Image Selection -->
         <div>
           <label class="text-foreground-700 mb-3 block text-sm font-medium">Watermark Image</label>
@@ -1015,24 +1022,15 @@
             <div class="mb-4">
               <label class="text-foreground-700 mb-3 block text-sm">Anchor</label>
               <div class="grid grid-cols-3 gap-2">
-                {#each [
-                  ['top-left', 'TL'],
-                  ['top-center', 'TC'],
-                  ['top-right', 'TR'],
-                  ['center-left', 'CL'],
-                  ['center', 'C'],
-                  ['center-right', 'CR'],
-                  ['bottom-left', 'BL'],
-                  ['bottom-center', 'BC'],
-                  ['bottom-right', 'BR']
-                ] as [value, label]}
+                {#each [['top-left', 'TL'], ['top-center', 'TC'], ['top-right', 'TR'], ['center-left', 'CL'], ['center', 'C'], ['center-right', 'CR'], ['bottom-left', 'BL'], ['bottom-center', 'BC'], ['bottom-right', 'BR']] as [value, label]}
                   <button
                     type="button"
                     onclick={() => {
-                      config.watermarkConfig.positionAnchor = value;
+                      config.watermarkConfig.positionAnchor = value as 'top-left' | 'top-center' | 'top-right' | 'center-left' | 'center' | 'center-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
                       schedulePreviewUpdate();
                     }}
-                    class="border-background-300 hover:bg-accent-100 flex h-12 items-center justify-center rounded-lg border text-sm font-medium transition-colors {config.watermarkConfig.positionAnchor === value
+                    class="border-background-300 hover:bg-accent-100 flex h-12 items-center justify-center rounded-lg border text-sm font-medium transition-colors {config
+                      .watermarkConfig.positionAnchor === value
                       ? 'bg-accent-500 text-white'
                       : 'bg-background-50 text-foreground-700'}"
                   >
@@ -1099,7 +1097,9 @@
                 onchange={schedulePreviewUpdate}
                 class="text-accent-600 focus:ring-accent-500 h-4 w-4 rounded"
               />
-              <span class="text-foreground-700 text-sm">Use alpha channel (respect PNG transparency)</span>
+              <span class="text-foreground-700 text-sm"
+                >Use alpha channel (respect PNG transparency)</span
+              >
             </label>
           </div>
 
@@ -1130,18 +1130,14 @@
               </div>
               {#if isGeneratingPreview}
                 <div
-                  class="h-4 w-4 animate-spin rounded-full border-2 border-accent-600 border-t-transparent"
+                  class="border-accent-600 h-4 w-4 animate-spin rounded-full border-2 border-t-transparent"
                 ></div>
               {/if}
             </div>
 
             {#if watermarkPreviewUrl}
               <div class="border-background-300 bg-background-50 overflow-hidden rounded-lg border">
-                <img
-                  src={watermarkPreviewUrl}
-                  alt="Watermark preview"
-                  class="h-auto w-full"
-                />
+                <img src={watermarkPreviewUrl} alt="Watermark preview" class="h-auto w-full" />
               </div>
               <p class="text-foreground-500 mt-2 text-xs">
                 Preview shows how watermark will appear on images
@@ -1187,13 +1183,13 @@
       </div>
     </div>
 
-    <!-- Debug Section (Temporary) -->
+    <!-- Database Management Section -->
     {#if config.isValidPath}
-      <div class="rounded-xl border border-orange-200 bg-orange-50 p-6">
+      <div class="rounded-xl border border-red-200 bg-red-50 p-6">
         <div class="mb-4 flex items-center space-x-3">
-          <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-100">
+          <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-red-100">
             <svg
-              class="h-5 w-5 text-orange-600"
+              class="h-5 w-5 text-red-600"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -1207,27 +1203,12 @@
             </svg>
           </div>
           <div>
-            <h2 class="text-xl font-semibold text-orange-900">Debug Database (Development)</h2>
-            <p class="text-sm text-orange-700">Temporary development tools</p>
+            <h2 class="text-xl font-semibold text-red-900">Database Management</h2>
+            <p class="text-sm text-red-700">Clear all properties to start fresh</p>
           </div>
         </div>
 
         <div class="flex items-center space-x-4">
-          <button
-            onclick={debugDatabase}
-            class="flex items-center space-x-2 rounded-lg bg-orange-200 px-4 py-2 font-medium text-orange-800 transition-colors hover:bg-orange-300"
-          >
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-            <span>Debug Database Dates</span>
-          </button>
-
           <button
             onclick={resetDatabase}
             class="flex items-center space-x-2 rounded-lg bg-red-600 px-4 py-2 font-medium text-white transition-colors hover:bg-red-700"
@@ -1240,7 +1221,7 @@
                 d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
               />
             </svg>
-            <span>Reset Database</span>
+            <span>Clear Database</span>
           </button>
         </div>
       </div>
@@ -1290,7 +1271,7 @@
 
         <button
           onclick={saveConfig}
-          disabled={isLoading || !config.rootPath || !config.isValidPath}
+          disabled={isLoading || !config.isValidPath}
           class="flex items-center space-x-2 rounded-lg bg-green-600 px-6 py-3 font-medium text-white transition-colors hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {#if isLoading}
@@ -1319,27 +1300,10 @@
 {#if showScanResult && scanResult}
   <div class="bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center bg-black">
     <div
-      class="bg-background-50 border-background-200 mx-4 max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-xl border shadow-xl"
+      class="bg-background-50 border-background-200 mx-4 max-h-[80vh] w-full max-w-2xl overflow-y-auto border"
     >
-      <div class="border-background-200 flex items-center justify-between border-b p-6">
-        <div class="flex items-center space-x-3">
-          <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-            <svg
-              class="text-accent-600 h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-              />
-            </svg>
-          </div>
-          <h3 class="text-foreground-900 text-xl font-semibold">Scan Results</h3>
-        </div>
+      <div class="border-background-200 flex items-center justify-between border-b p-4">
+        <h3 class="text-foreground-900 text-lg font-semibold">Scan Results</h3>
         <button
           onclick={() => (showScanResult = false)}
           class="text-foreground-400 hover:text-foreground-600 p-1"
@@ -1355,31 +1319,33 @@
         </button>
       </div>
 
-      <div class="p-6">
+      <div class="p-4">
         <!-- Summary Stats -->
-        <div class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
-          <div class="bg-accent-50 border-accent-200 rounded-lg border p-4 text-center">
-            <div class="text-accent-600 text-2xl font-bold">{scanResult.foundProperties}</div>
-            <div class="text-accent-800 text-sm font-medium">Properties Found</div>
+        <div class="mb-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div class="bg-background-100 border-background-200 border p-4 text-center">
+            <div class="text-foreground-900 text-2xl font-semibold">
+              {scanResult.foundProperties}
+            </div>
+            <div class="text-foreground-600 text-sm font-medium">Properties Found</div>
           </div>
-          <div class="rounded-lg border border-green-200 bg-green-50 p-4 text-center">
-            <div class="text-2xl font-bold text-green-600">{scanResult.newProperties}</div>
-            <div class="text-sm font-medium text-green-800">New Properties Added</div>
+          <div class="bg-background-100 border-background-200 border p-4 text-center">
+            <div class="text-foreground-900 text-2xl font-semibold">{scanResult.newProperties}</div>
+            <div class="text-foreground-600 text-sm font-medium">New Properties Added</div>
           </div>
-          <div class="bg-background-100 border-background-200 rounded-lg border p-4 text-center">
-            <div class="text-foreground-600 text-2xl font-bold">
+          <div class="bg-background-100 border-background-200 border p-4 text-center">
+            <div class="text-foreground-900 text-2xl font-semibold">
               {scanResult.existingProperties}
             </div>
-            <div class="text-foreground-800 text-sm font-medium">Already in Database</div>
+            <div class="text-foreground-600 text-sm font-medium">Already in Database</div>
           </div>
         </div>
 
         <!-- Success Message -->
         {#if scanResult.newProperties > 0}
-          <div class="mb-4 rounded-lg border border-green-200 bg-green-50 p-4">
+          <div class="bg-background-100 border-background-200 mb-4 border p-4">
             <div class="flex items-center space-x-3">
               <svg
-                class="h-5 w-5 flex-shrink-0 text-green-600"
+                class="text-foreground-700 h-5 w-5 flex-shrink-0"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -1391,7 +1357,7 @@
                   d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
                 />
               </svg>
-              <p class="font-medium text-green-800">
+              <p class="text-foreground-900 font-medium">
                 Successfully imported {scanResult.newProperties} new properties!
               </p>
             </div>
@@ -1464,3 +1430,25 @@
     </div>
   </div>
 {/if}
+
+<!-- Reset Configuration Confirmation Dialog -->
+<ConfirmDialog
+  bind:open={showResetConfigConfirm}
+  title="Reset Configuration"
+  message="Are you sure you want to reset the configuration? This will clear all settings."
+  confirmText="Reset"
+  destructive={true}
+  onConfirm={doResetConfig}
+  onCancel={() => (showResetConfigConfirm = false)}
+/>
+
+<!-- Clear Database Confirmation Dialog -->
+<ConfirmDialog
+  bind:open={showResetDatabaseConfirm}
+  title="Clear Database"
+  message="This will delete all properties from the database. Your folders will NOT be deleted. Are you sure?"
+  confirmText="Clear Database"
+  destructive={true}
+  onConfirm={doResetDatabase}
+  onCancel={() => (showResetDatabaseConfirm = false)}
+/>

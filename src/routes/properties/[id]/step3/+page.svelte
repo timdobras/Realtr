@@ -4,6 +4,8 @@
   import { DatabaseService } from '$lib/services/databaseService';
   import type { Property } from '$lib/types/database';
   import { onMount } from 'svelte';
+  import { showSuccess, showError } from '$lib/stores/notification';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   export const prerender = false;
 
   interface ImageItem {
@@ -14,16 +16,17 @@
     inAggelia: boolean;
   }
 
-  let propertyId: number | null = null;
-  let property: Property | null = null;
-  let internetImages: ImageItem[] = [];
-  let aggeliaImages: ImageItem[] = [];
-  let error = '';
-  let loading = true;
-  let copyingImages = false;
+  let property: Property | null = $state(null);
+  let internetImages: ImageItem[] = $state([]);
+  let aggeliaImages: ImageItem[] = $state([]);
+  let error = $state('');
+  let loading = $state(true);
+  let copyingImages = $state(false);
+  let showCopyConfirm = $state(false);
+  let showClearConfirm = $state(false);
 
   // Get the id from the URL params
-  $: propertyId = Number($page.params.id);
+  let propertyId = $derived(Number($page.params.id));
 
   onMount(async () => {
     if (!propertyId) {
@@ -83,7 +86,8 @@
     if (!property) return;
 
     const response = await invoke('list_internet_images', {
-      folderPath: property.folder_path
+      folderPath: property.folder_path,
+      status: property.status
     });
 
     if (Array.isArray(response)) {
@@ -100,7 +104,8 @@
 
       // Check which images are already in AGGELIA
       const aggeliaFileList = await invoke('list_aggelia_images', {
-        folderPath: property.folder_path
+        folderPath: property.folder_path,
+        status: property.status
       });
 
       const aggeliaFiles = Array.isArray(aggeliaFileList) ? aggeliaFileList : [];
@@ -114,6 +119,7 @@
         try {
           const base64Data = await invoke('get_internet_image_as_base64', {
             folderPath: property.folder_path,
+            status: property.status,
             filename: image.filename
           });
 
@@ -137,7 +143,8 @@
 
     try {
       const response = await invoke('list_aggelia_images', {
-        folderPath: property.folder_path
+        folderPath: property.folder_path,
+        status: property.status
       });
 
       if (Array.isArray(response)) {
@@ -158,6 +165,7 @@
           try {
             const base64Data = await invoke('get_aggelia_image_as_base64', {
               folderPath: property.folder_path,
+              status: property.status,
               filename: image.filename
             });
 
@@ -218,7 +226,7 @@
     }
   }
 
-  async function copySelectedToAggelia() {
+  function copySelectedToAggelia() {
     if (!property) return;
 
     const selectedImages = internetImages.filter((img) => img.selected);
@@ -227,11 +235,14 @@
       return;
     }
 
-    const confirmMessage = `Copy ${selectedImages.length} selected images to AGGELIA folder? This will prepare them for advanced editing.`;
+    showCopyConfirm = true;
+  }
 
-    if (!confirm(confirmMessage)) {
-      return;
-    }
+  async function doCopyToAggelia() {
+    if (!property) return;
+    showCopyConfirm = false;
+
+    const selectedImages = internetImages.filter((img) => img.selected);
 
     try {
       copyingImages = true;
@@ -239,24 +250,31 @@
 
       const filenames = selectedImages.map((img) => img.filename);
 
-      const result = await invoke('copy_images_to_aggelia', {
+      const result: any = await invoke('copy_images_to_aggelia', {
         folderPath: property.folder_path,
+        status: property.status,
         filenames
       });
 
       if (result.success) {
+        const count = selectedImages.length;
         await loadImages();
         // Reset selections after copying
         deselectAllImages();
+        showSuccess(`Copied ${count} images to AGGELIA folder`);
       } else {
-        error = result.error || 'Failed to copy images to AGGELIA';
+        showError(result.error || 'Failed to copy images to AGGELIA');
       }
     } catch (e) {
-      error = `Failed to copy images: ${e}`;
+      showError(`Failed to copy images: ${e}`);
     } finally {
       copyingImages = false;
     }
   }
+
+  let copyConfirmMessage = $derived(
+    `Copy ${internetImages.filter((img) => img.selected).length} selected images to AGGELIA folder? This will prepare them for advanced editing.`
+  );
 
   async function openImageInAdvancedEditor(filename: string, fromAggelia: boolean = false) {
     if (!property) return;
@@ -277,37 +295,40 @@
     }
   }
 
-  async function clearAggeliaFolder() {
-    if (
-      !confirm(
-        'Are you sure you want to clear all images from the AGGELIA folder? This action cannot be undone.'
-      )
-    ) {
-      return;
-    }
+  function clearAggeliaFolder() {
+    if (!property) return;
+    showClearConfirm = true;
+  }
+
+  async function doClearAggelia() {
+    if (!property) return;
+    showClearConfirm = false;
 
     try {
-      const result = await invoke('clear_aggelia_folder', {
-        folderPath: property.folder_path
+      const result: any = await invoke('clear_aggelia_folder', {
+        folderPath: property.folder_path,
+        status: property.status
       });
 
       if (result.success) {
         await loadImages();
+        showSuccess('AGGELIA folder cleared');
       } else {
-        error = result.error || 'Failed to clear AGGELIA folder';
+        showError(result.error || 'Failed to clear AGGELIA folder');
       }
     } catch (e) {
-      error = `Failed to clear folder: ${e}`;
+      showError(`Failed to clear folder: ${e}`);
     }
   }
 
   // Get counts for UI
-  $: selectedCount = internetImages.filter((img) => img.selected).length;
-  $: availableCount = internetImages.filter((img) => !img.inAggelia).length;
-  $: allAvailableSelected =
+  let selectedCount = $derived(internetImages.filter((img) => img.selected).length);
+  let availableCount = $derived(internetImages.filter((img) => !img.inAggelia).length);
+  let allAvailableSelected = $derived(
     availableCount > 0 &&
-    internetImages.filter((img) => !img.inAggelia && img.selected).length === availableCount;
-  $: anySelected = selectedCount > 0;
+      internetImages.filter((img) => !img.inAggelia && img.selected).length === availableCount
+  );
+  let anySelected = $derived(selectedCount > 0);
 </script>
 
 {#if loading}
@@ -321,22 +342,12 @@
   </div>
 {:else if error}
   <div class="p-6">
-    <div class="rounded-lg border border-red-200 bg-red-50 p-4">
-      <div class="flex items-center space-x-3">
-        <svg class="h-5 w-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-          />
-        </svg>
-        <p class="font-medium text-red-800">{error}</p>
-      </div>
+    <div class="border-background-300 bg-background-100 border p-4">
+      <p class="text-foreground-900 font-medium">{error}</p>
     </div>
   </div>
 {:else if property}
-  <div class="min-h-full space-y-8 p-6">
+  <div class="min-h-full space-y-5 p-6">
     <!-- Step Header -->
     <!-- <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
       <div class="mb-4 flex items-center space-x-4">
@@ -397,198 +408,85 @@
       </div>
     </div> -->
 
-    <!-- Progress Section -->
+    <!-- Progress -->
     {#if copyingImages}
-      <div class="bg-accent-50 border-accent-200 rounded-xl border p-6">
-        <div class="flex items-center space-x-4">
+      <div class="bg-background-100 border-background-300 border p-4">
+        <div class="flex items-center space-x-3">
           <div
-            class="border-accent-500 h-6 w-6 animate-spin rounded-full border-2 border-t-transparent"
+            class="border-foreground-300 h-5 w-5 animate-spin border-2 border-t-transparent"
           ></div>
           <div>
-            <p class="text-accent-900 font-semibold">Copying images to AGGELIA folder...</p>
-            <p class="text-accent-700 text-sm">
-              Please wait while images are being copied for advanced editing.
-            </p>
+            <p class="text-foreground-900 font-semibold">Copying images to AGGELIA folder...</p>
+            <p class="text-foreground-600 text-sm">Please wait while images are being copied.</p>
           </div>
         </div>
       </div>
     {/if}
 
-    <!-- Statistics Summary -->
-    <div class="grid grid-cols-1 gap-6 md:grid-cols-3">
-      <div class="bg-background-50 border-background-200 rounded-xl border p-6">
-        <div class="flex items-center space-x-3">
-          <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100">
-            <svg
-              class="h-5 w-5 text-blue-600"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-              />
-            </svg>
-          </div>
-          <div>
-            <p class="text-foreground-500 text-sm font-medium">Total Images</p>
-            <p class="text-foreground-900 text-2xl font-bold">{internetImages.length}</p>
-          </div>
-        </div>
+    <!-- Statistics -->
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+      <div class="bg-background-50 border-background-200 border p-4">
+        <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">Total Images</p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{internetImages.length}</p>
       </div>
 
-      <div class="bg-background-50 border-background-200 rounded-xl border p-6">
-        <div class="flex items-center space-x-3">
-          <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100">
-            <svg
-              class="h-5 w-5 text-green-600"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-          </div>
-          <div>
-            <p class="text-foreground-500 text-sm font-medium">In AGGELIA</p>
-            <p class="text-foreground-900 text-2xl font-bold">
-              {internetImages.filter((img) => img.inAggelia).length}
-            </p>
-          </div>
-        </div>
+      <div class="bg-background-50 border-background-200 border p-4">
+        <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">In AGGELIA</p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">
+          {internetImages.filter((img) => img.inAggelia).length}
+        </p>
       </div>
 
-      <div class="bg-background-50 border-background-200 rounded-xl border p-6">
-        <div class="flex items-center space-x-3">
-          <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-            <svg
-              class="text-accent-600 h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4"
-              />
-            </svg>
-          </div>
-          <div>
-            <p class="text-foreground-500 text-sm font-medium">Available</p>
-            <p class="text-foreground-900 text-2xl font-bold">{availableCount}</p>
-          </div>
-        </div>
+      <div class="bg-background-50 border-background-200 border p-4">
+        <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">Available</p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{availableCount}</p>
       </div>
     </div>
 
     <!-- Selection Controls -->
-    <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
-      <div class="mb-6 flex items-center space-x-3">
-        <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-          <svg
-            class="text-accent-600 h-5 w-5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-            />
-          </svg>
-        </div>
-        <div>
-          <h2 class="text-foreground-900 text-lg font-semibold">Selection Controls</h2>
-          <p class="text-foreground-600 text-sm">
-            Choose which images to copy to AGGELIA for advanced editing
-          </p>
-        </div>
+    <div class="bg-background-50 border-background-200 border p-4">
+      <div class="mb-3">
+        <h2 class="text-foreground-900 text-sm font-semibold">Selection Controls</h2>
+        <p class="text-foreground-600 text-xs">
+          Choose which images to copy to AGGELIA for advanced editing
+        </p>
       </div>
 
-      <div class="mb-6 flex items-center justify-between">
-        <div class="flex items-center space-x-4">
-          <!-- Selection Buttons -->
-          <div class="flex items-center space-x-3">
-            <button
-              onclick={selectAllImages}
-              disabled={availableCount === 0 || allAvailableSelected}
-              class="flex items-center space-x-2 rounded-lg border border-green-200 bg-green-50 px-4 py-2 text-sm font-medium text-green-700 transition-colors hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-              <span>Select All ({availableCount})</span>
-            </button>
-
-            <button
-              onclick={deselectAllImages}
-              disabled={!anySelected}
-              class="border-background-300 bg-background-100 text-foreground-700 hover:bg-background-200 flex items-center space-x-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-              <span>Deselect All</span>
-            </button>
-          </div>
-
-          <div
-            class="bg-accent-100 text-accent-800 inline-flex items-center space-x-2 rounded-lg px-3 py-1.5"
+      <div
+        class="flex flex-col space-y-3 md:flex-row md:items-center md:justify-between md:space-y-0"
+      >
+        <div class="flex flex-wrap items-center gap-3">
+          <button
+            onclick={selectAllImages}
+            disabled={availableCount === 0 || allAvailableSelected}
+            class="bg-background-100 border-background-300 text-foreground-700 hover:bg-background-200 border px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M9 12l2 2 4-4"
-              />
-            </svg>
+            Select All ({availableCount})
+          </button>
+
+          <button
+            onclick={deselectAllImages}
+            disabled={!anySelected}
+            class="bg-background-100 border-background-300 text-foreground-700 hover:bg-background-200 border px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Deselect All
+          </button>
+
+          <div class="bg-background-100 text-foreground-700 border-background-200 border px-3 py-2">
             <span class="text-sm font-medium">{selectedCount} selected</span>
           </div>
         </div>
 
-        <div class="flex items-center space-x-3">
+        <div class="flex flex-wrap items-center gap-3">
           <button
             onclick={copySelectedToAggelia}
             disabled={copyingImages || selectedCount === 0}
-            class="bg-accent-500 hover:bg-accent-600 flex items-center space-x-2 rounded-lg px-6 py-3 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            class="bg-accent-500 hover:bg-accent-600 px-4 py-2 text-sm font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
             {#if copyingImages}
-              <div
-                class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
-              ></div>
+              <div class="h-4 w-4 animate-spin border-2 border-white border-t-transparent"></div>
               <span>Copying...</span>
             {:else}
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                />
-              </svg>
               <span>Copy to AGGELIA ({selectedCount})</span>
             {/if}
           </button>
@@ -597,16 +495,8 @@
             <button
               onclick={clearAggeliaFolder}
               disabled={copyingImages}
-              class="flex items-center space-x-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+              class="bg-background-200 text-foreground-700 hover:bg-background-300 border-background-300 border px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                />
-              </svg>
               <span>Clear AGGELIA</span>
             </button>
           {/if}
@@ -614,450 +504,203 @@
       </div>
     </div>
 
-    <!-- INTERNET Images Section -->
-    <section class="bg-background-50 border-background-200 rounded-xl border shadow-sm">
-      <div class="p-6">
-        <div class="mb-6 flex items-center justify-between">
-          <div class="flex items-center space-x-3">
-            <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-              <svg
-                class="text-accent-600 h-5 w-5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                />
-              </svg>
-            </div>
-            <div>
-              <h2 class="text-foreground-900 text-xl font-semibold">
-                INTERNET Folder ({internetImages.length})
-              </h2>
-              <p class="text-foreground-600 text-sm">
-                Click to select images • Green badges indicate already copied
-              </p>
-            </div>
-          </div>
-
-          {#if internetImages.length > 0}
-            <div class="text-foreground-500 flex items-center space-x-2 text-sm">
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122"
-                />
-              </svg>
-              <span>Click to select</span>
-            </div>
-          {/if}
+    <!-- INTERNET Images -->
+    <section class="bg-background-50 border-background-200 border">
+      <div class="p-4">
+        <div class="mb-3">
+          <h2 class="text-foreground-900 text-sm font-semibold">
+            INTERNET Folder ({internetImages.length})
+          </h2>
+          <p class="text-foreground-600 text-xs">Click to select images for AGGELIA</p>
         </div>
 
         {#if internetImages.length === 0}
-          <div class="py-16 text-center">
-            <div
-              class="bg-background-100 mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full"
-            >
-              <svg
-                class="text-foreground-400 h-10 w-10"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
-                />
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M8 5a2 2 0 012-2h4a2 2 0 012 2v6H8V5z"
-                />
-              </svg>
-            </div>
-            <h3 class="text-foreground-900 mb-2 text-lg font-semibold">
-              No images in INTERNET folder
-            </h3>
-            <p class="text-foreground-500 mx-auto mb-6 max-w-md">
-              You need to complete Step 1 and Step 2 before copying images to AGGELIA.
+          <div class="py-8 text-center">
+            <p class="text-foreground-500 mb-3 text-sm">No images in INTERNET folder</p>
+            <p class="text-foreground-600 mb-4 text-xs">
+              Complete Step 1 and Step 2 before copying images to AGGELIA.
             </p>
             <a
               href="/properties/{property.id}/step1"
-              class="bg-accent-500 hover:bg-accent-600 inline-flex items-center space-x-2 rounded-lg px-6 py-3 font-medium text-white transition-colors"
+              class="bg-accent-500 hover:bg-accent-600 inline-flex items-center space-x-2 px-4 py-2 text-sm font-medium text-white transition-colors"
             >
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M15 19l-7-7 7-7"
-                />
-              </svg>
               <span>Back to Step 1</span>
             </a>
           </div>
         {:else}
-          <div class="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          <div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {#each internetImages as image, index}
-              <div class="group relative">
-                <button
-                  class="bg-background-100 aspect-square w-full overflow-hidden rounded-xl border-2 transition-all duration-200 {image.inAggelia
-                    ? 'cursor-pointer border-green-400 shadow-lg hover:shadow-xl'
-                    : image.selected
-                      ? 'border-accent-400 scale-105 shadow-lg'
-                      : 'border-background-300 hover:border-background-400 hover:shadow-md'}"
-                  onclick={() =>
-                    image.inAggelia
-                      ? openImageInAdvancedEditor(image.filename, false)
-                      : toggleImageSelection(index)}
-                  disabled={copyingImages}
+              <button
+                class="bg-background-100 border-background-200 group relative aspect-square w-full overflow-hidden border transition-opacity hover:opacity-75 {image.selected
+                  ? 'border-accent-500'
+                  : ''} {image.inAggelia ? 'opacity-50' : ''}"
+                onclick={() =>
+                  image.inAggelia
+                    ? openImageInAdvancedEditor(image.filename, false)
+                    : toggleImageSelection(index)}
+                disabled={copyingImages}
+              >
+                {#if image.loading}
+                  <div class="bg-background-100 flex h-full w-full items-center justify-center">
+                    <div class="text-center">
+                      <div
+                        class="border-foreground-300 mx-auto mb-2 h-5 w-5 animate-spin border-2 border-t-transparent"
+                      ></div>
+                      <p class="text-foreground-500 text-xs font-medium">Loading...</p>
+                    </div>
+                  </div>
+                {:else if image.dataUrl}
+                  <img
+                    src={image.dataUrl}
+                    alt={image.filename}
+                    loading="lazy"
+                    class="h-full w-full object-cover"
+                  />
+                {:else}
+                  <div class="bg-background-100 flex h-full w-full items-center justify-center">
+                    <p class="text-foreground-500 text-xs">Failed</p>
+                  </div>
+                {/if}
+
+                <!-- Selected indicator -->
+                {#if image.selected}
+                  <div class="bg-accent-500 absolute top-2 left-2 h-5 w-5">
+                    <svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                      <path
+                        fill-rule="evenodd"
+                        d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                        clip-rule="evenodd"
+                      />
+                    </svg>
+                  </div>
+                {/if}
+
+                <!-- Filename on hover -->
+                <div
+                  class="bg-foreground-900/75 absolute inset-x-0 bottom-0 p-2 opacity-0 transition-opacity group-hover:opacity-100"
                 >
-                  {#if image.loading}
-                    <div class="bg-background-100 flex h-full w-full items-center justify-center">
-                      <div class="text-center">
-                        <div
-                          class="border-accent-500 mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-2 border-t-transparent"
-                        ></div>
-                        <p class="text-foreground-500 text-xs font-medium">Loading...</p>
-                      </div>
-                    </div>
-                  {:else if image.dataUrl}
-                    <img
-                      src={image.dataUrl}
-                      alt={image.filename}
-                      loading="lazy"
-                      class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                    />
-                  {:else}
-                    <div class="flex h-full w-full items-center justify-center bg-red-50">
-                      <div class="text-center text-red-500">
-                        <svg
-                          class="mx-auto mb-2 h-8 w-8"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                          />
-                        </svg>
-                        <p class="text-xs font-medium">Failed to load</p>
-                      </div>
-                    </div>
-                  {/if}
-
-                  <!-- Status Indicators -->
-                  {#if image.inAggelia}
-                    <div
-                      class="absolute top-2 left-2 flex items-center space-x-1 rounded-lg bg-green-500 px-2 py-1 text-xs text-white shadow-lg"
-                    >
-                      <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          stroke-width="2"
-                          d="M9 12l2 2 4-4"
-                        />
-                      </svg>
-                      <span class="hidden sm:inline">In AGGELIA</span>
-                    </div>
-                  {:else if image.selected}
-                    <div
-                      class="bg-accent-500 absolute top-2 left-2 flex h-6 w-6 items-center justify-center rounded-full text-white shadow-lg"
-                    >
-                      <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                        <path
-                          fill-rule="evenodd"
-                          d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                          clip-rule="evenodd"
-                        />
-                      </svg>
-                    </div>
-                  {:else}
-                    <div
-                      class="border-background-300 absolute top-2 left-2 h-6 w-6 rounded-full border-2 bg-white/80 opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
-                    ></div>
-                  {/if}
-
-                  <!-- Filename overlay -->
-                  <div
-                    class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/60 to-transparent p-3 pt-8 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
-                  >
-                    <p class="truncate text-xs font-medium text-white" title={image.filename}>
-                      {image.filename}
-                    </p>
-                  </div>
-
-                  <!-- Action indicator on hover -->
-                  <div
-                    class="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
-                  >
-                    <div class="rounded-full bg-white/90 p-2">
-                      {#if image.inAggelia}
-                        <svg
-                          class="text-foreground-900 h-4 w-4"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                          />
-                        </svg>
-                      {:else}
-                        <svg
-                          class="text-foreground-900 h-4 w-4"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M9 12l2 2 4-4"
-                          />
-                        </svg>
-                      {/if}
-                    </div>
-                  </div>
-                </button>
-              </div>
+                  <p class="truncate text-xs text-white" title={image.filename}>
+                    {image.filename}
+                    {#if image.inAggelia}
+                      <span class="text-foreground-300 text-xs"> (In AGGELIA)</span>
+                    {/if}
+                  </p>
+                </div>
+              </button>
             {/each}
           </div>
         {/if}
       </div>
     </section>
 
-    <!-- AGGELIA Images Section -->
-    <section class="bg-background-50 border-background-200 rounded-xl border shadow-sm">
-      <div class="p-6">
-        <div class="mb-6 flex items-center justify-between">
-          <div class="flex items-center space-x-3">
-            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100">
-              <svg
-                class="h-5 w-5 text-purple-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v1a2 2 0 002 2h6a2 2 0 012 2v8a4 4 0 01-4 4H7z"
-                />
-              </svg>
-            </div>
-            <div>
-              <h2 class="text-foreground-900 text-xl font-semibold">
-                AGGELIA Folder - Advanced Editing ({aggeliaImages.length})
-              </h2>
-              <p class="text-foreground-600 text-sm">
-                Click images to open in your advanced editor
-              </p>
-            </div>
-          </div>
-
-          {#if aggeliaImages.length > 0}
-            <div class="flex items-center space-x-2 text-sm text-purple-600">
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v1a2 2 0 002 2h6a2 2 0 012 2v8a4 4 0 01-4 4H7z"
-                />
-              </svg>
-              <span>Advanced editing</span>
-            </div>
-          {/if}
+    <!-- AGGELIA Images -->
+    <section class="bg-background-50 border-background-200 border">
+      <div class="p-4">
+        <div class="mb-3">
+          <h2 class="text-foreground-900 text-sm font-semibold">
+            AGGELIA Folder ({aggeliaImages.length})
+          </h2>
+          <p class="text-foreground-600 text-xs">Click images to open in your advanced editor</p>
         </div>
 
         {#if aggeliaImages.length === 0}
-          <div class="py-16 text-center">
-            <div
-              class="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-purple-100"
-            >
-              <svg
-                class="h-10 w-10 text-purple-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v1a2 2 0 002 2h6a2 2 0 012 2v8a4 4 0 01-4 4H7z"
-                />
-              </svg>
-            </div>
-            <h3 class="text-foreground-900 mb-2 text-lg font-semibold">AGGELIA folder is empty</h3>
-            <p class="text-foreground-500 mx-auto mb-6 max-w-md">
-              Select images from the INTERNET folder above and copy them to AGGELIA for advanced
-              editing.
+          <div class="py-8 text-center">
+            <p class="text-foreground-500 mb-3 text-sm">AGGELIA folder is empty</p>
+            <p class="text-foreground-600 text-xs">
+              Select images from the INTERNET folder above and copy them to AGGELIA.
             </p>
           </div>
         {:else}
-          <div class="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          <div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {#each aggeliaImages as image}
-              <div class="group relative">
-                <button
-                  class="bg-background-100 aspect-square w-full overflow-hidden rounded-xl border-2 border-purple-400 shadow-lg shadow-purple-100 transition-all duration-200 hover:scale-105 hover:shadow-xl"
-                  onclick={() => openImageInAdvancedEditor(image.filename, true)}
-                  disabled={copyingImages}
+              <button
+                class="bg-background-100 border-background-200 group relative aspect-square w-full overflow-hidden border transition-opacity hover:opacity-75"
+                onclick={() => openImageInAdvancedEditor(image.filename, true)}
+                disabled={copyingImages}
+              >
+                {#if image.loading}
+                  <div class="bg-background-100 flex h-full w-full items-center justify-center">
+                    <div class="text-center">
+                      <div
+                        class="border-foreground-300 mx-auto mb-2 h-5 w-5 animate-spin border-2 border-t-transparent"
+                      ></div>
+                      <p class="text-foreground-500 text-xs font-medium">Loading...</p>
+                    </div>
+                  </div>
+                {:else if image.dataUrl}
+                  <img
+                    src={image.dataUrl}
+                    alt={image.filename}
+                    loading="lazy"
+                    class="h-full w-full object-cover"
+                  />
+                {:else}
+                  <div class="bg-background-100 flex h-full w-full items-center justify-center">
+                    <p class="text-foreground-500 text-xs">Failed</p>
+                  </div>
+                {/if}
+
+                <!-- Filename on hover -->
+                <div
+                  class="bg-foreground-900/75 absolute inset-x-0 bottom-0 p-2 opacity-0 transition-opacity group-hover:opacity-100"
                 >
-                  {#if image.loading}
-                    <div class="bg-background-100 flex h-full w-full items-center justify-center">
-                      <div class="text-center">
-                        <div
-                          class="mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-2 border-purple-500 border-t-transparent"
-                        ></div>
-                        <p class="text-foreground-500 text-xs font-medium">Loading...</p>
-                      </div>
-                    </div>
-                  {:else if image.dataUrl}
-                    <img
-                      src={image.dataUrl}
-                      alt={image.filename}
-                      loading="lazy"
-                      class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                    />
-                  {:else}
-                    <div class="flex h-full w-full items-center justify-center bg-red-50">
-                      <div class="text-center text-red-500">
-                        <svg
-                          class="mx-auto mb-2 h-8 w-8"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                          />
-                        </svg>
-                        <p class="text-xs font-medium">Failed to load</p>
-                      </div>
-                    </div>
-                  {/if}
-
-                  <!-- Advanced editing indicator -->
-                  <div
-                    class="absolute top-2 right-2 flex items-center space-x-1 rounded-lg bg-purple-500 px-2 py-1 text-xs text-white shadow-lg"
-                  >
-                    <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v1a2 2 0 002 2h6a2 2 0 012 2v8a4 4 0 01-4 4H7z"
-                      />
-                    </svg>
-                    <span class="hidden sm:inline">Advanced</span>
-                  </div>
-
-                  <!-- Filename overlay -->
-                  <div
-                    class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-purple-900/80 via-purple-800/60 to-transparent p-3 pt-8 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
-                  >
-                    <p class="truncate text-xs font-medium text-white" title={image.filename}>
-                      {image.filename}
-                    </p>
-                  </div>
-
-                  <!-- Edit indicator on hover -->
-                  <div
-                    class="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
-                  >
-                    <div class="rounded-full bg-white/90 p-3">
-                      <svg
-                        class="text-foreground-900 h-5 w-5"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          stroke-width="2"
-                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                        />
-                      </svg>
-                    </div>
-                  </div>
-                </button>
-              </div>
+                  <p class="truncate text-xs text-white" title={image.filename}>
+                    {image.filename}
+                  </p>
+                </div>
+              </button>
             {/each}
           </div>
         {/if}
       </div>
     </section>
 
-    <!-- Next Step Navigation -->
-    <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center space-x-4">
-          <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-green-100">
-            <svg
-              class="h-6 w-6 text-green-600"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-          </div>
-          <div>
-            <h3 class="text-foreground-900 font-semibold">Ready for the final step?</h3>
-            <p class="text-foreground-600 text-sm">
-              Once you've completed your advanced editing, proceed to Step 4 for watermarking.
-            </p>
-          </div>
+    <!-- Next Step -->
+    <div class="bg-background-50 border-background-200 border p-4">
+      <div
+        class="flex flex-col space-y-3 md:flex-row md:items-center md:justify-between md:space-y-0"
+      >
+        <div>
+          <h3 class="text-foreground-900 text-sm font-semibold">Ready for the final step?</h3>
+          <p class="text-foreground-600 text-xs">
+            Proceed to Step 4 for watermarking once editing is complete.
+          </p>
         </div>
 
         <a
           href="/properties/{property.id}/step4"
-          class="inline-flex items-center space-x-2 rounded-lg px-6 py-3 font-medium transition-colors {aggeliaImages.length ===
+          class="inline-flex items-center space-x-2 px-4 py-2 text-sm font-medium transition-colors {aggeliaImages.length ===
           0
             ? 'bg-background-200 text-foreground-500 cursor-not-allowed'
             : 'bg-accent-500 hover:bg-accent-600 text-white'}"
           class:pointer-events-none={aggeliaImages.length === 0}
         >
           <span>Step 4: Add Watermark</span>
-          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M9 5l7 7-7 7"
-            />
-          </svg>
         </a>
       </div>
     </div>
   </div>
+
+  <!-- Copy to AGGELIA Confirmation Dialog -->
+  {#if showCopyConfirm}
+    <ConfirmDialog
+      title="Copy to AGGELIA"
+      message={copyConfirmMessage}
+      confirmText="Copy"
+      onConfirm={doCopyToAggelia}
+      onCancel={() => (showCopyConfirm = false)}
+    />
+  {/if}
+
+  <!-- Clear AGGELIA Confirmation Dialog -->
+  {#if showClearConfirm}
+    <ConfirmDialog
+      title="Clear AGGELIA Folder"
+      message="Are you sure you want to clear all images from the AGGELIA folder? This action cannot be undone."
+      confirmText="Clear"
+      destructive={true}
+      onConfirm={doClearAggelia}
+      onCancel={() => (showClearConfirm = false)}
+    />
+  {/if}
 {/if}

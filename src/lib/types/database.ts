@@ -1,10 +1,13 @@
+export type PropertyStatus = 'NEW' | 'DONE' | 'NOT_FOUND' | 'ARCHIVE';
+
 export interface Property {
   id?: number;
   name: string;
   city: string;
-  completed: boolean;
+  status: PropertyStatus;
   folder_path: string;
   notes?: string;
+  code?: string; // Website listing code (e.g., "45164")
   created_at: number; // Milliseconds since epoch
   updated_at: number; // Milliseconds since epoch
 }
@@ -33,7 +36,16 @@ export interface WatermarkConfig {
   sizeMode: 'proportional' | 'fit' | 'stretch' | 'tile';
   sizePercentage: number; // 0.0 to 1.0
   relativeTo: 'longest-side' | 'shortest-side' | 'width' | 'height';
-  positionAnchor: 'top-left' | 'top-center' | 'top-right' | 'center-left' | 'center' | 'center-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
+  positionAnchor:
+    | 'top-left'
+    | 'top-center'
+    | 'top-right'
+    | 'center-left'
+    | 'center'
+    | 'center-right'
+    | 'bottom-left'
+    | 'bottom-center'
+    | 'bottom-right';
   offsetX: number;
   offsetY: number;
   opacity: number; // 0.0 to 1.0
@@ -41,7 +53,13 @@ export interface WatermarkConfig {
 }
 
 export interface AppConfig {
-  rootPath: string;
+  // Legacy field for backward compatibility
+  rootPath?: string;
+  // New modular folder paths
+  newFolderPath: string;
+  doneFolderPath: string;
+  notFoundFolderPath: string;
+  archiveFolderPath: string;
   isValidPath: boolean;
   lastUpdated: string | null;
   fast_editor_path?: string;
@@ -52,4 +70,41 @@ export interface AppConfig {
   watermarkConfig: WatermarkConfig;
   // Legacy field for backward compatibility
   watermark_opacity?: number;
+}
+
+// Perspective Correction Types (LSD + RANSAC)
+export interface CorrectionResult {
+  original_filename: string;
+  original_path: string;
+  corrected_temp_path: string;
+  confidence: number; // 0.0-1.0
+  rotation_applied: number; // degrees
+  needs_correction: boolean;
+  corrected_preview_base64?: string;
+}
+
+export interface AcceptedCorrection {
+  original_path: string;
+  corrected_temp_path: string;
+}
+
+export interface PerspectiveCommandResult {
+  success: boolean;
+  error?: string;
+  message?: string;
+}
+
+// OpenCV Setup Types
+export interface OpenCVStatus {
+  installed: boolean;
+  dll_path?: string;
+  message: string;
+}
+
+export interface SetupProgress {
+  step: number;
+  total_steps: number;
+  message: string;
+  complete: boolean;
+  error?: string;
 }

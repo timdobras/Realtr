@@ -29,8 +29,8 @@
       const properties = await DatabaseService.getProperties();
 
       // Calculate stats
-      const completed = properties.filter((p) => p.completed);
-      const inProgress = properties.filter((p) => !p.completed);
+      const completed = properties.filter((p) => p.status === 'DONE' || p.status === 'ARCHIVE');
+      const inProgress = properties.filter((p) => p.status === 'NEW' || p.status === 'NOT_FOUND');
 
       // Calculate today's processed (completed today)
       const todayProcessed = completed.filter(
@@ -45,7 +45,7 @@
       };
 
       // Get recent properties (last 5)
-      recentProperties = properties.slice(0, 5);
+      recentProperties = properties.slice(0, 25);
     } catch (err) {
       console.error('Error loading dashboard data:', err);
       error = 'Failed to load dashboard data';
@@ -63,7 +63,7 @@
 
   async function markAsCompleted(propertyId: number) {
     try {
-      await DatabaseService.updatePropertyStatus(propertyId, true);
+      await DatabaseService.updatePropertyStatus(propertyId, 'DONE');
       await loadDashboardData(); // Refresh data
     } catch (err) {
       console.error('Error updating property status:', err);
@@ -74,88 +74,86 @@
 <div class="bg-background-0 min-h-full">
   <!-- Header -->
   <div class="bg-background-50 border-background-200 border-b">
-    <div class="px-8 py-6">
+    <div class="px-6 py-4">
       <div class="mx-auto max-w-7xl">
-        <h1 class="text-foreground-900 text-2xl font-semibold">Dashboard</h1>
-        <p class="text-foreground-600 mt-1 text-sm">Overview of your property management</p>
+        <h1 class="text-foreground-900 text-xl font-semibold">Dashboard</h1>
+        <p class="text-foreground-600 mt-0.5 text-sm">Overview of your property management</p>
       </div>
     </div>
   </div>
 
-  <div class="mx-auto max-w-7xl space-y-6 p-8">
+  <div class="mx-auto max-w-7xl space-y-5 p-6">
     <!-- Error Message -->
     {#if error}
-      <div class="rounded-lg border border-red-300 bg-red-50 px-4 py-3">
-        <p class="text-sm text-red-800">{error}</p>
+      <div class="border-background-300 bg-background-100 border px-3 py-2">
+        <p class="text-foreground-900 text-sm">{error}</p>
       </div>
     {/if}
 
     <!-- Loading State -->
     {#if isLoading}
-      <div class="flex items-center gap-2 text-sm text-foreground-500">
-        <div
-          class="h-4 w-4 animate-spin rounded-full border-2 border-foreground-300 border-t-transparent"
-        ></div>
+      <div class="text-foreground-500 flex items-center gap-2 text-sm">
+        <div class="border-foreground-300 h-4 w-4 animate-spin border-2 border-t-transparent"></div>
         <span>Loading data...</span>
       </div>
     {/if}
 
     <!-- Stats Grid -->
-    <div class="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-4">
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
       <!-- Total Properties -->
-      <div class="bg-background-50 border-background-200 rounded-lg border p-5">
-        <p class="text-foreground-600 text-xs font-medium uppercase tracking-wide">Total</p>
-        <p class="text-foreground-900 mt-2 text-3xl font-semibold">{stats.totalProperties}</p>
+      <div class="bg-background-50 border-background-200 border p-4">
+        <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">Total</p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{stats.totalProperties}</p>
       </div>
 
       <!-- In Progress -->
-      <div class="bg-background-50 border-background-200 rounded-lg border p-5">
-        <p class="text-foreground-600 text-xs font-medium uppercase tracking-wide">In Progress</p>
-        <p class="mt-2 text-3xl font-semibold text-orange-600">{stats.inProgress}</p>
+      <div class="bg-background-50 border-background-200 border p-4">
+        <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">In Progress</p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{stats.inProgress}</p>
       </div>
 
       <!-- Completed -->
-      <div class="bg-background-50 border-background-200 rounded-lg border p-5">
-        <p class="text-foreground-600 text-xs font-medium uppercase tracking-wide">Completed</p>
-        <p class="mt-2 text-3xl font-semibold text-green-600">{stats.completed}</p>
+      <div class="bg-background-50 border-background-200 border p-4">
+        <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">Completed</p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{stats.completed}</p>
       </div>
 
       <!-- Today's Work -->
-      <div class="bg-background-50 border-background-200 rounded-lg border p-5">
-        <p class="text-foreground-600 text-xs font-medium uppercase tracking-wide">Today</p>
-        <p class="text-accent-600 mt-2 text-3xl font-semibold">{stats.todayProcessed}</p>
+      <div class="bg-background-50 border-background-200 border p-4">
+        <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">Today</p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{stats.todayProcessed}</p>
       </div>
     </div>
 
     <!-- Recent Properties -->
-    <div class="bg-background-50 border-background-200 rounded-lg border">
-      <div class="border-background-200 flex items-center justify-between border-b px-5 py-4">
-        <h2 class="text-foreground-900 text-base font-semibold">Recent Properties</h2>
+    <div class="bg-background-50 border-background-200 border">
+      <div class="border-background-200 flex items-center justify-between border-b px-4 py-3">
+        <h2 class="text-foreground-900 text-sm font-semibold">Recent Properties</h2>
         <a
           href="/properties"
-          class="text-accent-600 hover:text-accent-700 text-sm font-medium transition-colors"
+          class="text-accent-600 hover:text-accent-700 text-sm transition-colors"
         >
           View all
         </a>
       </div>
 
-      <div class="p-5">
+      <div class="">
         {#if recentProperties.length === 0 && !isLoading}
-          <div class="py-8 text-center">
-            <p class="text-foreground-500 mb-4 text-sm">No properties yet</p>
+          <div class="py-6 text-center">
+            <p class="text-foreground-500 mb-3 text-sm">No properties yet</p>
             <a
               href="/properties"
-              class="bg-accent-500 hover:bg-accent-600 inline-flex rounded-md px-4 py-2 text-sm font-medium text-white transition-colors"
+              class="bg-accent-500 hover:bg-accent-600 inline-flex px-4 py-2 text-sm font-medium text-white transition-colors"
             >
               Add Property
             </a>
           </div>
         {:else}
-          <div class="space-y-2">
+          <div class="flex flex-col">
             {#each recentProperties as property}
               <a
                 href="/properties/{property.id}"
-                class="bg-background-100 hover:bg-background-200 border-background-200 flex items-center justify-between rounded-md border px-4 py-3 transition-colors"
+                class="odd:bg-background-100 hover:bg-background-200 flex items-center justify-between px-3 py-2 transition-colors"
               >
                 <div class="flex items-center gap-3">
                   <div>
@@ -164,15 +162,57 @@
                   </div>
                 </div>
                 <div class="flex items-center gap-3">
-                  {#if property.completed}
-                    <span class="rounded bg-green-100 px-2 py-1 text-xs font-medium text-green-700">
-                      Completed
-                    </span>
-                  {:else}
-                    <span class="rounded bg-orange-100 px-2 py-1 text-xs font-medium text-orange-700">
-                      In Progress
-                    </span>
-                  {/if}
+                  <span
+                    class="inline-flex items-center gap-1 text-xs {property.status === 'DONE'
+                      ? ' text-green-300'
+                      : property.status === 'ARCHIVE'
+                        ? ' text-gray-300'
+                        : property.status === 'NOT_FOUND'
+                          ? ' text-yellow-300'
+                          : ' text-blue-300'}"
+                  >
+                    {#if property.status === 'DONE'}
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M5 13l4 4L19 7"
+                        />
+                      </svg>
+                      <span>Done</span>
+                    {:else if property.status === 'ARCHIVE'}
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"
+                        />
+                      </svg>
+                      <span>Archived</span>
+                    {:else if property.status === 'NOT_FOUND'}
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                        />
+                      </svg>
+                      <span>Not Found</span>
+                    {:else}
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                        />
+                      </svg>
+                      <span>New</span>
+                    {/if}
+                  </span>
                   <span class="text-foreground-500 text-xs">{formatDate(property.updated_at)}</span>
                 </div>
               </a>

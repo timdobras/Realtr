@@ -6,6 +6,9 @@
   import { flip } from 'svelte/animate';
   import { DatabaseService } from '$lib/services/databaseService';
   import type { Property } from '$lib/types/database';
+  import PerspectiveCorrectionModal from '$lib/components/PerspectiveCorrectionModal.svelte';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import { showSuccess, showError } from '$lib/stores/notification';
   export const prerender = false;
 
   interface ImageItem {
@@ -16,18 +19,19 @@
     newName?: string;
   }
 
-  let propertyId: number | null = null;
-  let property: Property | null = null;
-  let internetImages: ImageItem[] = [];
-  let error = '';
-  let loading = true;
-  let renamingImages = false;
-  let baseFileName = '';
-  let dragDisabled = false;
-  let isDragging = false; // Track drag state
+  let property: Property | null = $state(null);
+  let internetImages: ImageItem[] = $state([]);
+  let error = $state('');
+  let loading = $state(true);
+  let renamingImages = $state(false);
+  let baseFileName = $state('');
+  let dragDisabled = $state(false);
+  let isDragging = $state(false); // Track drag state
+  let showPerspectiveModal = $state(false);
+  let showRenameConfirm = $state(false);
 
   // Get the id from the URL params
-  $: propertyId = Number($page.params.id);
+  let propertyId = $derived(Number($page.params.id));
 
   onMount(async () => {
     if (!propertyId) {
@@ -58,14 +62,15 @@
 
     try {
       const response = await invoke('list_internet_images', {
-        folderPath: property.folder_path
+        folderPath: property.folder_path,
+        status: property.status
       });
 
       if (Array.isArray(response)) {
         // Sort filenames numerically before processing
-        const sortedFilenames = response.sort((a, b) => {
+        const sortedFilenames = response.sort((a: string, b: string) => {
           // Extract numeric part from filename
-          const getNumericValue = (filename) => {
+          const getNumericValue = (filename: string): number => {
             const match = filename.match(/^(\d+)/);
             return match ? parseInt(match[1]) : Infinity;
           };
@@ -90,6 +95,7 @@
           try {
             const base64Data = await invoke('get_internet_image_as_base64', {
               folderPath: property.folder_path,
+              status: property.status,
               filename: image.filename
             });
 
@@ -126,14 +132,14 @@
   }
 
   // Improved drag and drop handlers
-  function handleDndConsider(e) {
+  function handleDndConsider(e: any) {
     isDragging = true;
     dragDisabled = false;
     internetImages = e.detail.items;
     // Don't update names during dragging to reduce re-renders
   }
 
-  function handleDndFinalize(e) {
+  function handleDndFinalize(e: any) {
     isDragging = false;
     dragDisabled = false;
     internetImages = e.detail.items;
@@ -142,7 +148,7 @@
   }
 
   // Debounced name update function
-  let updateTimeout;
+  let updateTimeout: ReturnType<typeof setTimeout> | undefined;
   function updateNewNames() {
     clearTimeout(updateTimeout);
     updateTimeout = setTimeout(() => {
@@ -153,42 +159,14 @@
     }, 50); // Small delay to batch updates
   }
 
-  function updateNewNamesFromBase() {
-    if (!isDragging) {
-      updateNewNames();
-    }
-  }
-
-  // Move functions for buttons
-  function moveUp(index: number) {
-    if (index > 0 && !isDragging) {
-      const newImages = [...internetImages];
-      [newImages[index - 1], newImages[index]] = [newImages[index], newImages[index - 1]];
-      internetImages = newImages;
-      updateNewNames();
-    }
-  }
-
-  function moveDown(index: number) {
-    if (index < internetImages.length - 1 && !isDragging) {
-      const newImages = [...internetImages];
-      [newImages[index], newImages[index + 1]] = [newImages[index + 1], newImages[index]];
-      internetImages = newImages;
-      updateNewNames();
-    }
-  }
-
-  async function applyRenaming() {
+  function applyRenaming() {
     if (!property || internetImages.length === 0) return;
+    showRenameConfirm = true;
+  }
 
-    const confirmMessage = `Are you sure you want to rename ${internetImages.length} images? This action cannot be undone.\n\nExamples:\n${internetImages
-      .slice(0, 3)
-      .map((img) => `${img.filename} → ${img.newName}.${img.filename.split('.').pop()}`)
-      .join('\n')}`;
-
-    if (!confirm(confirmMessage)) {
-      return;
-    }
+  async function doRenaming() {
+    if (!property) return;
+    showRenameConfirm = false;
 
     try {
       renamingImages = true;
@@ -202,25 +180,34 @@
         };
       });
 
-      const result = await invoke('rename_internet_images', {
+      const result: any = await invoke('rename_internet_images', {
         folderPath: property.folder_path,
+        status: property.status,
         renameMap
       });
 
       if (result.success) {
         await loadInternetImages();
+        showSuccess(`Successfully renamed ${internetImages.length} images`);
       } else {
-        error = result.error || 'Failed to rename images';
+        showError(result.error || 'Failed to rename images');
       }
     } catch (e) {
-      error = `Failed to rename images: ${e}`;
+      showError(`Failed to rename images: ${e}`);
     } finally {
       renamingImages = false;
       dragDisabled = false;
     }
   }
 
-  async function openImageInEditor(filename: string, event) {
+  let renameConfirmMessage = $derived(
+    `This will rename ${internetImages.length} images. This action cannot be undone.\n\nExamples:\n${internetImages
+      .slice(0, 3)
+      .map((img) => `${img.filename} → ${img.newName}.${img.filename.split('.').pop()}`)
+      .join('\n')}`
+  );
+
+  async function openImageInEditor(filename: string, event: any) {
     // Prevent opening during drag
     if (isDragging) {
       event.preventDefault();
@@ -230,8 +217,9 @@
     if (!property) return;
 
     try {
-      const result = await invoke('open_image_in_editor', {
+      const result: any = await invoke('open_image_in_editor', {
         folderPath: property.folder_path,
+        status: property.status,
         filename,
         isFromInternet: true
       });
@@ -244,19 +232,26 @@
     }
   }
 
-  function autoNumberAll() {
-    internetImages = internetImages.map((image, index) => ({
-      ...image,
-      newName: baseFileName ? `${baseFileName}_${index + 1}` : `${index + 1}`
-    }));
+  function openPerspectiveModal() {
+    showPerspectiveModal = true;
+  }
+
+  function closePerspectiveModal() {
+    showPerspectiveModal = false;
+  }
+
+  async function handlePerspectiveComplete() {
+    showPerspectiveModal = false;
+    // Reload images after perspective corrections
+    await loadInternetImages();
   }
 </script>
 
 {#if loading}
   <div class="flex h-64 items-center justify-center">
-    <div class="flex items-center gap-2 text-sm text-foreground-500">
+    <div class="text-foreground-500 flex items-center gap-2 text-sm">
       <div
-        class="h-4 w-4 animate-spin rounded-full border-2 border-foreground-300 border-t-transparent"
+        class="border-foreground-300 h-4 w-4 animate-spin rounded-full border-2 border-t-transparent"
       ></div>
       <span>Loading...</span>
     </div>
@@ -268,7 +263,7 @@
     </div>
   </div>
 {:else if property}
-  <div class="min-h-full space-y-8 p-6">
+  <div class="min-h-full space-y-5 p-6">
     <!-- Step Header -->
     <!-- <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
       <div class="mb-4 flex items-center space-x-4">
@@ -379,86 +374,70 @@
 
     <!-- Action Bar -->
     {#if internetImages.length > 0}
-      <div class="bg-accent-50 border-accent-200 rounded-xl border p-6">
+      <div class="bg-background-50 border-background-200 border p-4">
         <div class="flex items-center justify-between">
-          <div class="flex items-center space-x-4">
-            <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-              <svg
-                class="text-accent-600 h-5 w-5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-            </div>
-            <div>
-              <p class="text-accent-900 font-semibold">Ready to apply changes?</p>
-              <p class="text-accent-700 text-sm">
-                Rename {internetImages.length} images with your new naming scheme
-              </p>
-            </div>
+          <div>
+            <p class="text-foreground-900 font-semibold">Ready to apply changes?</p>
+            <p class="text-foreground-600 text-sm">
+              Rename {internetImages.length} images with your new naming scheme
+            </p>
           </div>
 
-          <button
-            onclick={applyRenaming}
-            disabled={renamingImages || internetImages.length === 0 || isDragging}
-            class="bg-accent-500 hover:bg-accent-600 flex items-center space-x-3 rounded-lg px-6 py-3 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {#if renamingImages}
-              <div
-                class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
-              ></div>
-              <span>Renaming...</span>
-            {:else}
+          <div class="flex items-center space-x-3">
+            <!-- Auto-Straighten Button -->
+            <button
+              onclick={openPerspectiveModal}
+              disabled={renamingImages || internetImages.length === 0 || isDragging}
+              class="border-background-300 bg-background-100 text-foreground-700 hover:bg-background-200 flex items-center space-x-2 border px-4 py-3 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              title="Auto-straighten images using perspective correction"
+            >
               <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
                   stroke-linecap="round"
                   stroke-linejoin="round"
                   stroke-width="2"
-                  d="M9 12l2 2 4-4"
+                  d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
                 />
               </svg>
-              <span>Apply Renaming</span>
-            {/if}
-          </button>
+              <span>Auto-Straighten</span>
+            </button>
+
+            <button
+              onclick={applyRenaming}
+              disabled={renamingImages || internetImages.length === 0 || isDragging}
+              class="bg-accent-500 hover:bg-accent-600 flex items-center space-x-3 px-6 py-3 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {#if renamingImages}
+                <div class="h-4 w-4 animate-spin border-2 border-white border-t-transparent"></div>
+                <span>Renaming...</span>
+              {:else}
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M9 12l2 2 4-4"
+                  />
+                </svg>
+                <span>Apply Renaming</span>
+              {/if}
+            </button>
+          </div>
         </div>
       </div>
     {/if}
 
     <!-- Images Grid -->
-    <section class="bg-background-50 border-background-200 rounded-xl border shadow-sm">
-      <div class="p-6">
-        <div class="mb-6 flex items-center justify-between">
-          <div class="flex items-center space-x-3">
-            <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-              <svg
-                class="text-accent-600 h-5 w-5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                />
-              </svg>
-            </div>
-            <div>
-              <h2 class="text-foreground-900 text-xl font-semibold">
-                Image Gallery ({internetImages.length})
-              </h2>
-              <p class="text-foreground-600 text-sm">
-                {isDragging ? 'Dragging in progress...' : 'Drag images to reorder or use controls'}
-              </p>
-            </div>
+    <section class="bg-background-50 border-background-200 border">
+      <div class="p-4">
+        <div class="mb-4 flex items-center justify-between">
+          <div>
+            <h2 class="text-foreground-900 text-lg font-semibold">
+              Image Gallery ({internetImages.length})
+            </h2>
+            <p class="text-foreground-600 text-sm">
+              {isDragging ? 'Dragging...' : 'Drag images to reorder'}
+            </p>
           </div>
 
           {#if internetImages.length > 0}
@@ -477,39 +456,16 @@
         </div>
 
         {#if internetImages.length === 0}
-          <div class="py-16 text-center">
-            <div
-              class="bg-background-100 mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full"
-            >
-              <svg
-                class="text-foreground-400 h-10 w-10"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
-                />
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M8 5a2 2 0 012-2h4a2 2 0 012 2v6H8V5z"
-                />
-              </svg>
-            </div>
+          <div class="py-10 text-center">
             <h3 class="text-foreground-900 mb-2 text-lg font-semibold">
               No images in INTERNET folder
             </h3>
-            <p class="text-foreground-500 mx-auto mb-6 max-w-md">
+            <p class="text-foreground-500 mx-auto mb-5 max-w-md">
               You need to copy images from Step 1 before you can order and rename them.
             </p>
             <a
               href="/properties/{property.id}/step1"
-              class="bg-accent-500 hover:bg-accent-600 inline-flex items-center space-x-2 rounded-lg px-6 py-3 font-medium text-white transition-colors"
+              class="bg-accent-500 hover:bg-accent-600 inline-flex items-center space-x-2 px-6 py-3 font-medium text-white transition-colors"
             >
               <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
@@ -524,11 +480,11 @@
           </div>
         {:else}
           <div
-            class="grid grid-cols-2 gap-6 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
+            class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
             use:dndzone={{
               items: internetImages,
               dragDisabled,
-              flipDurationMs: isDragging ? 0 : 300,
+              flipDurationMs: isDragging ? 0 : 150,
               dropTargetStyle: {}
             }}
             onconsider={handleDndConsider}
@@ -536,21 +492,19 @@
           >
             {#each internetImages as image, index (image.id)}
               <div
-                class="bg-background-100 border-background-200 overflow-hidden rounded-md border {isDragging
-                  ? 'opacity-50'
-                  : ''}"
-                animate:flip={{ duration: isDragging ? 0 : 200 }}
+                class="bg-background-100 border-background-200 overflow-hidden border"
+                animate:flip={{ duration: isDragging ? 0 : 150 }}
               >
                 <!-- Image Preview -->
                 <div class="relative">
                   <button
-                    class="bg-background-100 flex h-48 w-full items-center justify-center"
+                    class="bg-background-100 flex aspect-square w-full items-center justify-center"
                     onclick={(e) => openImageInEditor(image.filename, e)}
                     disabled={isDragging}
                   >
                     {#if image.loading}
                       <div
-                        class="h-4 w-4 animate-spin rounded-full border-2 border-foreground-300 border-t-transparent"
+                        class="border-foreground-300 h-4 w-4 animate-spin rounded-full border-2 border-t-transparent"
                       ></div>
                     {:else if image.dataUrl}
                       <img
@@ -566,90 +520,12 @@
 
                   <!-- Order Badge -->
                   <div
-                    class="bg-accent-500 absolute top-2 left-2 flex h-6 w-6 items-center justify-center rounded text-xs font-semibold text-white"
+                    class="bg-accent-500 absolute top-2 left-2 flex h-6 w-6 items-center justify-center text-xs font-semibold text-white"
                   >
                     {index + 1}
                   </div>
                 </div>
 
-                <!-- Image Controls -->
-                <div class="p-4">
-                  <p
-                    class="text-foreground-800 mb-3 truncate text-sm font-medium"
-                    title={image.filename}
-                  >
-                    {image.filename}
-                  </p>
-
-                  <!-- New Name Input -->
-                  <div class="space-y-2">
-                    <label class="text-foreground-600 text-xs font-medium">New name:</label>
-                    <div class="flex items-center space-x-2">
-                      <input
-                        type="text"
-                        bind:value={image.newName}
-                        class="border-background-300 bg-background-50 focus:ring-accent-500 focus:border-accent-500 flex-1 rounded-lg border px-3 py-2 text-sm transition-colors focus:ring-2 focus:outline-none"
-                        placeholder="Enter name"
-                        disabled={isDragging}
-                      />
-                      <span class="text-foreground-500 font-mono text-xs">
-                        .{image.filename.split('.').pop()}
-                      </span>
-                    </div>
-                  </div>
-
-                  <!-- Move Controls -->
-                  <div class="mt-4 flex items-center justify-between">
-                    <div class="flex space-x-1">
-                      <button
-                        onclick={() => moveUp(index)}
-                        disabled={index === 0 || isDragging}
-                        class="border-background-300 bg-background-50 text-foreground-600 hover:bg-background-100 hover:text-foreground-900 flex h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-30"
-                        title="Move up"
-                      >
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M7 14l5-5 5 5"
-                          />
-                        </svg>
-                      </button>
-                      <button
-                        onclick={() => moveDown(index)}
-                        disabled={index === internetImages.length - 1 || isDragging}
-                        class="border-background-300 bg-background-50 text-foreground-600 hover:bg-background-100 hover:text-foreground-900 flex h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-30"
-                        title="Move down"
-                      >
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M17 10l-5 5-5-5"
-                          />
-                        </svg>
-                      </button>
-                    </div>
-
-                    <button
-                      onclick={(e) => openImageInEditor(image.filename, e)}
-                      class="text-accent-600 hover:text-accent-700 flex items-center space-x-1 text-xs font-medium transition-colors"
-                      disabled={isDragging}
-                    >
-                      <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          stroke-width="2"
-                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                        />
-                      </svg>
-                      <span>Edit</span>
-                    </button>
-                  </div>
-                </div>
               </div>
             {/each}
           </div>
@@ -658,35 +534,18 @@
     </section>
 
     <!-- Next Step Navigation -->
-    <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
+    <div class="bg-background-50 border-background-200 border p-4">
       <div class="flex items-center justify-between">
-        <div class="flex items-center space-x-4">
-          <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-green-100">
-            <svg
-              class="h-6 w-6 text-green-600"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-          </div>
-          <div>
-            <h3 class="text-foreground-900 font-semibold">Ready for the next step?</h3>
-            <p class="text-foreground-600 text-sm">
-              Once you've ordered and renamed your images, proceed to Step 3 for copying to AGGELIA.
-            </p>
-          </div>
+        <div>
+          <h3 class="text-foreground-900 font-semibold">Ready for the next step?</h3>
+          <p class="text-foreground-600 text-sm">
+            Once you've ordered and renamed your images, proceed to Step 3 for copying to AGGELIA.
+          </p>
         </div>
 
         <a
           href="/properties/{property.id}/step3"
-          class="inline-flex items-center space-x-2 rounded-lg px-6 py-3 font-medium transition-colors {internetImages.length ===
+          class="inline-flex items-center space-x-2 px-6 py-3 font-medium transition-colors {internetImages.length ===
           0
             ? 'bg-background-200 text-foreground-500 cursor-not-allowed'
             : 'bg-accent-500 hover:bg-accent-600 text-white'}"
@@ -705,4 +564,27 @@
       </div>
     </div>
   </div>
+
+  <!-- Perspective Correction Modal -->
+  {#if showPerspectiveModal && property}
+    <PerspectiveCorrectionModal
+      folderPath={property.folder_path}
+      status={property.status}
+      propertyId={property.id ?? 0}
+      onClose={closePerspectiveModal}
+      onComplete={handlePerspectiveComplete}
+    />
+  {/if}
+
+  <!-- Rename Confirmation Dialog -->
+  {#if showRenameConfirm}
+    <ConfirmDialog
+      title="Rename Images"
+      message={renameConfirmMessage}
+      confirmText="Rename"
+      destructive={true}
+      onConfirm={doRenaming}
+      onCancel={() => (showRenameConfirm = false)}
+    />
+  {/if}
 {/if}

@@ -5,22 +5,24 @@
   import { DatabaseService } from '$lib/services/databaseService';
   import type { Property } from '$lib/types/database';
   import { formatDate } from '$lib/utils/dateUtils';
+  import { showSuccess, showError } from '$lib/stores/notification';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   export const prerender = false;
 
-  let propertyId: number | null = null;
-  let property: Property | null = null;
-  let originalImages: { filename: string; dataUrl: string; loading: boolean }[] = [];
-  let internetImages: { filename: string; dataUrl: string; loading: boolean }[] = [];
-  let error = '';
-  let loading = true;
-  let copyingImages = false;
-  let copyProgress = { current: 0, total: 0 };
+  let property: Property | null = $state(null);
+  let originalImages: { filename: string; dataUrl: string; loading: boolean }[] = $state([]);
+  let internetImages: { filename: string; dataUrl: string; loading: boolean }[] = $state([]);
+  let error = $state('');
+  let loading = $state(true);
+  let copyingImages = $state(false);
+  let copyProgress = $state({ current: 0, total: 0 });
+  let showClearConfirm = $state(false);
 
   // Get the id from the URL params
-  $: propertyId = Number($page.params.id);
+  let propertyId = $derived(Number($page.params.id));
 
   onMount(async () => {
-    if (!propertyId) {
+    if (isNaN(propertyId) || propertyId < 1) {
       error = 'Invalid property ID';
       loading = false;
       return;
@@ -60,7 +62,8 @@
     if (!property) return;
 
     const response = await invoke('list_original_images', {
-      folderPath: property.folder_path
+      folderPath: property.folder_path,
+      status: property.status
     });
 
     if (Array.isArray(response)) {
@@ -76,6 +79,7 @@
         try {
           const base64Data = await invoke('get_image_as_base64', {
             folderPath: property.folder_path,
+            status: property.status,
             filename: image.filename
           });
 
@@ -99,7 +103,8 @@
 
     try {
       const response = await invoke('list_internet_images', {
-        folderPath: property.folder_path
+        folderPath: property.folder_path,
+        status: property.status
       });
 
       if (Array.isArray(response)) {
@@ -115,6 +120,7 @@
           try {
             const base64Data = await invoke('get_internet_image_as_base64', {
               folderPath: property.folder_path,
+              status: property.status,
               filename: image.filename
             });
 
@@ -158,18 +164,20 @@
       copyingImages = true;
       copyProgress = { current: 0, total: originalImages.length };
 
-      const result = await invoke('copy_images_to_internet', {
-        folderPath: property.folder_path
+      const result: any = await invoke('copy_images_to_internet', {
+        folderPath: property.folder_path,
+        status: property.status
       });
 
       if (result.success) {
         // Reload INTERNET images after copying
         await loadInternetImages();
+        showSuccess(`Copied ${originalImages.length} images to INTERNET folder`);
       } else {
-        error = result.error || 'Failed to copy images to INTERNET folder';
+        showError(result.error || 'Failed to copy images to INTERNET folder');
       }
     } catch (e) {
-      error = `Failed to copy images: ${e}`;
+      showError(`Failed to copy images: ${e}`);
     } finally {
       copyingImages = false;
     }
@@ -179,8 +187,9 @@
     if (!property) return;
 
     try {
-      const result = await invoke('open_image_in_editor', {
+      const result: any = await invoke('open_image_in_editor', {
         folderPath: property.folder_path,
+        status: property.status,
         filename,
         isFromInternet
       });
@@ -193,48 +202,48 @@
     }
   }
 
-  async function clearInternetFolder() {
-    if (
-      !confirm(
-        'Are you sure you want to clear all images from the INTERNET folder? This action cannot be undone.'
-      )
-    ) {
-      return;
-    }
+  function clearInternetFolder() {
+    if (!property) return;
+    showClearConfirm = true;
+  }
+
+  async function doClearInternet() {
+    if (!property) return;
+    showClearConfirm = false;
 
     try {
-      const result = await invoke('clear_internet_folder', {
-        folderPath: property.folder_path
+      const result: any = await invoke('clear_internet_folder', {
+        folderPath: property.folder_path,
+        status: property.status
       });
 
       if (result.success) {
         internetImages = [];
+        showSuccess('INTERNET folder cleared');
       } else {
-        error = result.error || 'Failed to clear INTERNET folder';
+        showError(result.error || 'Failed to clear INTERNET folder');
       }
     } catch (e) {
-      error = `Failed to clear folder: ${e}`;
+      showError(`Failed to clear folder: ${e}`);
     }
   }
 </script>
 
 {#if loading}
   <div class="flex h-64 items-center justify-center">
-    <div class="flex items-center gap-2 text-sm text-foreground-500">
-      <div
-        class="h-4 w-4 animate-spin rounded-full border-2 border-foreground-300 border-t-transparent"
-      ></div>
+    <div class="text-foreground-500 flex items-center gap-2 text-sm">
+      <div class="border-foreground-300 h-4 w-4 animate-spin border-2 border-t-transparent"></div>
       <span>Loading...</span>
     </div>
   </div>
 {:else if error}
-  <div class="p-8">
-    <div class="rounded-lg border border-red-300 bg-red-50 px-4 py-3">
-      <p class="text-sm text-red-800">{error}</p>
+  <div class="p-6">
+    <div class="border-background-300 bg-background-100 border px-3 py-2">
+      <p class="text-foreground-900 text-sm">{error}</p>
     </div>
   </div>
 {:else if property}
-  <div class="min-h-full space-y-8 p-6">
+  <div class="min-h-full space-y-5 p-5">
     <!-- Step Header -->
     <!-- <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
       <div class="mb-4 flex items-center space-x-4">
@@ -291,21 +300,23 @@
 
     <!-- Progress Section -->
     {#if copyingImages}
-      <div class="bg-accent-50 border-accent-200 rounded-xl border p-6">
-        <div class="flex items-center space-x-4">
+      <div class="bg-background-100 border-background-300 border p-4">
+        <div class="flex items-center space-x-3">
           <div
-            class="border-accent-500 h-6 w-6 animate-spin rounded-full border-2 border-t-transparent"
+            class="border-foreground-300 h-5 w-5 animate-spin border-2 border-t-transparent"
           ></div>
           <div>
-            <p class="text-accent-900 font-semibold">Copying images to INTERNET folder...</p>
-            <p class="text-accent-700 text-sm">
+            <p class="text-foreground-900 text-sm font-semibold">
+              Copying images to INTERNET folder...
+            </p>
+            <p class="text-foreground-600 text-xs">
               {copyProgress.current} of {copyProgress.total} images copied
             </p>
           </div>
         </div>
-        <div class="bg-accent-200 mt-4 h-2 w-full overflow-hidden rounded-full">
+        <div class="bg-background-200 mt-3 h-1 w-full overflow-hidden">
           <div
-            class="bg-accent-500 h-full rounded-full transition-all duration-300"
+            class="bg-foreground-900 h-full transition-all duration-300"
             style="width: {copyProgress.total > 0
               ? (copyProgress.current / copyProgress.total) * 100
               : 0}%"
@@ -315,93 +326,30 @@
     {/if}
 
     <!-- Statistics Summary -->
-    <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
-      <div class="bg-background-50 border-background-200 rounded-xl border p-6">
-        <div class="flex items-center space-x-3">
-          <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100">
-            <svg
-              class="h-5 w-5 text-green-600"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-              />
-            </svg>
-          </div>
-          <div>
-            <p class="text-foreground-500 text-sm font-medium">Original Images</p>
-            <p class="text-foreground-900 text-2xl font-bold">{originalImages.length}</p>
-          </div>
-        </div>
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div class="bg-background-50 border-background-200 border p-4">
+        <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">
+          Original Images
+        </p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{originalImages.length}</p>
       </div>
 
-      <div class="bg-background-50 border-background-200 rounded-xl border p-6">
-        <div class="flex items-center space-x-3">
-          <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-            <svg
-              class="text-accent-600 h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
-              />
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M8 5a2 2 0 012-2h4a2 2 0 012 2v6H8V5z"
-              />
-            </svg>
-          </div>
-          <div>
-            <p class="text-foreground-500 text-sm font-medium">INTERNET Folder</p>
-            <p class="text-foreground-900 text-2xl font-bold">{internetImages.length}</p>
-          </div>
-        </div>
+      <div class="bg-background-50 border-background-200 border p-4">
+        <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">
+          INTERNET Folder
+        </p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{internetImages.length}</p>
       </div>
     </div>
 
     <!-- INTERNET Images Section -->
-    <section class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
-      <div class="mb-6 flex items-center justify-between">
-        <div class="flex items-center space-x-3">
-          <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-            <svg
-              class="text-accent-600 h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
-              />
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M8 5a2 2 0 012-2h4a2 2 0 012 2v6H8V5z"
-              />
-            </svg>
-          </div>
-          <div>
-            <h2 class="text-foreground-900 text-xl font-semibold">
-              INTERNET Folder ({internetImages.length})
-            </h2>
-            <p class="text-foreground-600 text-sm">Click images to open in your editor</p>
-          </div>
+    <section class="bg-background-50 border-background-200 border p-4">
+      <div class="mb-4 flex items-center justify-between">
+        <div>
+          <h2 class="text-foreground-900 text-lg font-semibold">
+            INTERNET Folder ({internetImages.length})
+          </h2>
+          <p class="text-foreground-600 text-sm">Click images to open in your editor</p>
         </div>
 
         <div class="flex items-center space-x-3">
@@ -409,7 +357,7 @@
             <button
               onclick={clearInternetFolder}
               disabled={copyingImages}
-              class="flex items-center space-x-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50"
+              class="bg-background-100 border-background-300 text-foreground-700 hover:bg-background-200 flex items-center space-x-2 border px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50"
             >
               <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
@@ -425,7 +373,7 @@
 
           <button
             onclick={loadInternetImages}
-            class="border-background-300 bg-background-100 text-foreground-700 hover:bg-background-200 flex items-center space-x-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors"
+            class="border-background-300 bg-background-100 text-foreground-700 hover:bg-background-200 flex items-center space-x-2 border px-4 py-2 text-sm font-medium transition-colors"
           >
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
@@ -498,13 +446,13 @@
           {#each internetImages as image}
             <button
               onclick={() => openImageInEditor(image.filename, true)}
-              class="bg-background-100 border-background-200 hover:border-background-300 aspect-square overflow-hidden rounded-md border transition-colors"
+              class="bg-background-100 border-background-200 hover:border-background-300 aspect-square overflow-hidden border transition-colors"
               title={image.filename}
             >
               {#if image.loading}
                 <div class="flex h-full items-center justify-center">
                   <div
-                    class="h-4 w-4 animate-spin rounded-full border-2 border-foreground-300 border-t-transparent"
+                    class="border-foreground-300 h-4 w-4 animate-spin rounded-full border-2 border-t-transparent"
                   ></div>
                 </div>
               {:else if image.dataUrl}
@@ -515,7 +463,9 @@
                   class="h-full w-full object-cover"
                 />
               {:else}
-                <div class="flex h-full items-center justify-center text-xs text-red-700">Failed</div>
+                <div class="flex h-full items-center justify-center text-xs text-red-700">
+                  Failed
+                </div>
               {/if}
             </button>
           {/each}
@@ -524,35 +474,18 @@
     </section>
 
     <!-- Next Step Navigation -->
-    <div class="bg-background-50 border-background-200 rounded-xl border p-6 shadow-sm">
+    <div class="bg-background-50 border-background-200 border p-4">
       <div class="flex items-center justify-between">
-        <div class="flex items-center space-x-4">
-          <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-green-100">
-            <svg
-              class="h-6 w-6 text-green-600"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-          </div>
-          <div>
-            <h3 class="text-foreground-900 font-semibold">Ready for the next step?</h3>
-            <p class="text-foreground-600 text-sm">
-              Once you've finished editing your images, proceed to step 2 for ordering and renaming.
-            </p>
-          </div>
+        <div>
+          <h3 class="text-foreground-900 font-semibold">Ready for the next step?</h3>
+          <p class="text-foreground-600 text-sm">
+            Once you've finished editing your images, proceed to step 2 for ordering and renaming.
+          </p>
         </div>
 
         <a
           href="/properties/{property.id}/step2"
-          class="inline-flex items-center space-x-2 rounded-lg px-6 py-3 font-medium transition-colors {internetImages.length ===
+          class="inline-flex items-center space-x-2 px-6 py-3 font-medium transition-colors {internetImages.length ===
           0
             ? 'bg-background-200 text-foreground-500 cursor-not-allowed'
             : 'bg-accent-500 hover:bg-accent-600 text-white'}"
@@ -571,4 +504,16 @@
       </div>
     </div>
   </div>
+
+  <!-- Clear Confirmation Dialog -->
+  {#if showClearConfirm}
+    <ConfirmDialog
+      title="Clear INTERNET Folder"
+      message="Are you sure you want to clear all images from the INTERNET folder? This action cannot be undone."
+      confirmText="Clear"
+      destructive={true}
+      onConfirm={doClearInternet}
+      onCancel={() => (showClearConfirm = false)}
+    />
+  {/if}
 {/if}

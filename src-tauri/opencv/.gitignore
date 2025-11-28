@@ -1,0 +1,3 @@
+# OpenCV DLLs are bundled with the app but not committed to git
+# Run scripts/setup-opencv.ps1 to download them
+*.dll

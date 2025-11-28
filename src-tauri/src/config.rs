@@ -32,8 +32,23 @@ impl Default for WatermarkConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
+    // Legacy field for backward compatibility
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "rootPath")]
-    pub root_path: String,
+    pub root_path: Option<String>,
+    // New modular folder paths
+    #[serde(rename = "newFolderPath")]
+    #[serde(default)]
+    pub new_folder_path: String,
+    #[serde(rename = "doneFolderPath")]
+    #[serde(default)]
+    pub done_folder_path: String,
+    #[serde(rename = "notFoundFolderPath")]
+    #[serde(default)]
+    pub not_found_folder_path: String,
+    #[serde(rename = "archiveFolderPath")]
+    #[serde(default)]
+    pub archive_folder_path: String,
     #[serde(rename = "isValidPath")]
     pub is_valid_path: bool,
     #[serde(rename = "lastUpdated")]
@@ -53,7 +68,11 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            root_path: String::new(),
+            root_path: None,
+            new_folder_path: String::new(),
+            done_folder_path: String::new(),
+            not_found_folder_path: String::new(),
+            archive_folder_path: String::new(),
             is_valid_path: false,
             fast_editor_path: None,
             fast_editor_name: None,
@@ -93,6 +112,35 @@ pub async fn load_config(app: tauri::AppHandle) -> Result<Option<AppConfig>, Str
     if let Some(old_opacity) = config.watermark_opacity {
         config.watermark_config.opacity = old_opacity;
         config.watermark_opacity = None; // Clear legacy field
+    }
+
+    // Migrate old root_path to new 4-folder structure if present
+    if let Some(old_root) = config.root_path.clone() {
+        if config.new_folder_path.is_empty() {
+            config.new_folder_path = PathBuf::from(&old_root)
+                .join("FOTOGRAFIES - NEW")
+                .to_string_lossy()
+                .to_string();
+        }
+        if config.done_folder_path.is_empty() {
+            config.done_folder_path = PathBuf::from(&old_root)
+                .join("FOTOGRAFIES - DONE")
+                .to_string_lossy()
+                .to_string();
+        }
+        if config.not_found_folder_path.is_empty() {
+            config.not_found_folder_path = PathBuf::from(&old_root)
+                .join("NOT FOUND")
+                .to_string_lossy()
+                .to_string();
+        }
+        if config.archive_folder_path.is_empty() {
+            config.archive_folder_path = PathBuf::from(&old_root)
+                .join("ARCHIVE")
+                .to_string_lossy()
+                .to_string();
+        }
+        config.root_path = None; // Clear legacy field after migration
     }
 
     Ok(Some(config))

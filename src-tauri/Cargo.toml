@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.1.9"
+version = "0.1.10"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -30,8 +30,15 @@ tokio = { version = "1.0", features = ["full"] }
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4"] }
-image = { version = "0.24", features = ["png", "jpeg", "gif", "webp", "bmp"] }
+image = { version = "0.25", features = ["png", "jpeg", "gif", "webp", "bmp"] }
+rayon = "1.10"
 opener = "0.7"
+
+# Perspective correction dependencies (LSD + RANSAC approach)
+opencv = { version = "0.92", default-features = false, features = ["imgproc", "imgcodecs"] }
+rand = "0.8"
+nalgebra = "0.33"
+imageproc = "0.25"
 tauri-plugin-updater = "^2.0.0"
 tauri-plugin-process = "^2.0.0"
 

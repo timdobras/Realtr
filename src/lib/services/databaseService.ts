@@ -1,6 +1,17 @@
 import type { AppConfig } from '$lib/utils/configManager';
 import { invoke } from '@tauri-apps/api/core';
-import type { City, CommandResult, Property, ScanResult } from '../types/database';
+import type {
+  AcceptedCorrection,
+  City,
+  CommandResult,
+  CorrectionResult,
+  OpenCVStatus,
+  PerspectiveCommandResult,
+  Property,
+  PropertyStatus,
+  ScanResult,
+  SetupProgress
+} from '../types/database';
 
 export class DatabaseService {
   // Property operations
@@ -20,9 +31,9 @@ export class DatabaseService {
     return [];
   }
 
-  static async getPropertiesByStatus(completed: boolean): Promise<Property[]> {
+  static async getPropertiesByStatus(status: PropertyStatus): Promise<Property[]> {
     const result = await invoke<CommandResult>('get_properties_by_status', {
-      completed
+      status
     });
     if (result.success && result.data) {
       return result.data as Property[];
@@ -32,17 +43,24 @@ export class DatabaseService {
 
   static async updatePropertyStatus(
     propertyId: number,
-    completed: boolean
+    newStatus: PropertyStatus
   ): Promise<CommandResult> {
     return await invoke<CommandResult>('update_property_status', {
       propertyId,
-      completed
+      newStatus
     });
   }
 
   static async deleteProperty(propertyId: number): Promise<CommandResult> {
     return await invoke<CommandResult>('delete_property', {
       propertyId
+    });
+  }
+
+  static async setPropertyCode(propertyId: number, code: string): Promise<CommandResult> {
+    return await invoke<CommandResult>('set_property_code', {
+      propertyId,
+      code
     });
   }
 
@@ -86,10 +104,12 @@ export class DatabaseService {
   // Add this method to the DatabaseService class
   static async openImagesInFolder(
     folderPath: string,
+    status: string,
     selectedImage: string
   ): Promise<CommandResult> {
     return await invoke<CommandResult>('open_images_in_folder', {
       folderPath,
+      status,
       selectedImage
     });
   }
@@ -117,15 +137,77 @@ export class DatabaseService {
     if (editorType === 'fast') {
       return await invoke<CommandResult>('open_image_in_editor', {
         folderPath: property.folder_path,
+        status: property.status,
         filename,
         isFromInternet: folderType === 'internet'
       });
     } else {
       return await invoke<CommandResult>('open_image_in_advanced_editor', {
         folderPath: property.folder_path,
+        status: property.status,
         filename,
         fromAggelia: folderType === 'aggelia'
       });
     }
+  }
+
+  // Perspective Correction Operations (LSD + RANSAC)
+  static async processImagesForPerspective(
+    folderPath: string,
+    status: string,
+    propertyId: number
+  ): Promise<CorrectionResult[]> {
+    return await invoke<CorrectionResult[]>('process_images_for_perspective', {
+      folderPath,
+      status,
+      propertyId
+    });
+  }
+
+  static async acceptPerspectiveCorrections(
+    corrections: AcceptedCorrection[]
+  ): Promise<PerspectiveCommandResult> {
+    return await invoke<PerspectiveCommandResult>('accept_perspective_corrections', {
+      corrections
+    });
+  }
+
+  static async cleanupPerspectiveTemp(): Promise<void> {
+    return await invoke<void>('cleanup_perspective_temp');
+  }
+
+  static async getOriginalImageForComparison(imagePath: string): Promise<string> {
+    return await invoke<string>('get_original_image_for_comparison', {
+      imagePath
+    });
+  }
+
+  // OpenCV Setup Operations
+  static async checkOpenCVStatus(): Promise<OpenCVStatus> {
+    return await invoke<OpenCVStatus>('check_opencv_status');
+  }
+
+  static async runOpenCVSetup(): Promise<SetupProgress> {
+    return await invoke<SetupProgress>('run_opencv_setup');
+  }
+
+  static async skipOpenCVSetup(): Promise<void> {
+    return await invoke<void>('skip_opencv_setup');
+  }
+
+  static async wasOpenCVSetupSkipped(): Promise<boolean> {
+    return await invoke<boolean>('was_opencv_setup_skipped');
+  }
+
+  static async resetOpenCVSetupSkip(): Promise<void> {
+    return await invoke<void>('reset_opencv_setup_skip');
+  }
+
+  // Fill AGGELIA folders to 25 images
+  static async fillAggeliaTo25(folderPath: string, status: string): Promise<CommandResult> {
+    return await invoke<CommandResult>('fill_aggelia_to_25', {
+      folderPath,
+      status
+    });
   }
 }

@@ -4,10 +4,15 @@
   import { onMount } from 'svelte';
   import { browser } from '$app/environment';
   import { checkForUpdates } from '$lib/utils/updater';
+  import { DatabaseService } from '$lib/services/databaseService';
+  import OpenCVSetupModal from '$lib/components/OpenCVSetupModal.svelte';
+  import NotificationPortal from '$lib/components/NotificationPortal.svelte';
 
   let { children } = $props();
   let isDarkMode = $state(false);
   let currentPath = $derived($page.url.pathname);
+  let showOpenCVSetup = $state(false);
+  let checkingOpenCV = $state(true);
 
   // Navigation with SVG icons
   const navItems = [
@@ -48,7 +53,7 @@
     }
   }
 
-  onMount(() => {
+  onMount(async () => {
     if (browser) {
       const saved = localStorage.getItem('darkMode');
       isDarkMode = saved
@@ -57,27 +62,50 @@
       document.documentElement.classList.toggle('dark', isDarkMode);
     }
     setTimeout(() => checkForUpdates(false), 5000);
+
+    // Check OpenCV status on startup
+    try {
+      const wasSkipped = await DatabaseService.wasOpenCVSetupSkipped();
+      if (!wasSkipped) {
+        const status = await DatabaseService.checkOpenCVStatus();
+        if (!status.installed) {
+          showOpenCVSetup = true;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to check OpenCV status:', err);
+    } finally {
+      checkingOpenCV = false;
+    }
   });
+
+  function handleOpenCVComplete() {
+    showOpenCVSetup = false;
+  }
+
+  function handleOpenCVSkip() {
+    showOpenCVSetup = false;
+  }
 </script>
 
-<div class="font-plusjakarta bg-background-0 text-foreground-950 flex h-screen">
+<div class="bg-background-0 text-foreground-950 flex h-screen">
   <!-- Sidebar -->
   <aside class="bg-background-50 border-background-200 flex w-60 flex-col border-r">
     <!-- Logo Area -->
-    <div class="border-background-200 border-b px-6 py-5">
-      <h1 class="text-foreground-900 text-lg font-semibold tracking-tight">Realtr</h1>
+    <div class="border-background-200 flex h-20 flex-col items-center justify-center border-b">
+      <h1 class="text-foreground-900 text-base font-semibold">Realtr</h1>
       <p class="text-foreground-500 mt-0.5 text-xs">Photo Manager</p>
     </div>
 
     <!-- Navigation -->
-    <nav class="flex-1 space-y-0.5 px-3 py-4">
+    <nav class="flex-1 space-y-1 px-2 py-3">
       {#each navItems as item}
         <a
           href={item.href}
-          class="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors
+          class="relative flex items-center gap-3 px-3 py-2 text-sm transition-colors
             {isActive(item.href)
-            ? 'bg-accent-500 text-white'
-            : 'text-foreground-600 hover:bg-background-100 hover:text-foreground-900'}"
+            ? 'text-foreground-900 bg-background-100 border-foreground-900 border-l-2 font-medium'
+            : 'text-foreground-600 hover:bg-background-100 hover:text-foreground-900 border-l-2 border-transparent'}"
         >
           {@html item.icon}
           <span>{item.name}</span>
@@ -86,10 +114,10 @@
     </nav>
 
     <!-- Theme Toggle -->
-    <div class="border-background-200 border-t px-3 py-3">
+    <div class="border-background-200 border-t px-2 py-3">
       <button
         onclick={toggleTheme}
-        class="bg-background-100 hover:bg-background-200 text-foreground-700 flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors"
+        class="hover:bg-background-200 text-foreground-700 flex w-full items-center gap-3 px-3 py-2 text-sm transition-colors"
         aria-label="Toggle dark mode"
       >
         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -121,3 +149,11 @@
     </section>
   </main>
 </div>
+
+<!-- OpenCV Setup Modal -->
+{#if showOpenCVSetup}
+  <OpenCVSetupModal onComplete={handleOpenCVComplete} onSkip={handleOpenCVSkip} />
+{/if}
+
+<!-- Notifications -->
+<NotificationPortal />
