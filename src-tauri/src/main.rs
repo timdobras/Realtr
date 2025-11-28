@@ -2,7 +2,10 @@
 
 mod config;
 mod database;
+
+#[cfg(feature = "opencv")]
 mod opencv_setup;
+#[cfg(feature = "opencv")]
 mod perspective;
 
 use config::{
@@ -22,15 +25,114 @@ use database::{
     reset_database_with_proper_dates, scan_and_import_properties, search_cities,
     set_property_code, update_property_status,
 };
+
+#[cfg(feature = "opencv")]
 use opencv_setup::{
     check_opencv_status, reset_opencv_setup_skip, run_opencv_setup, skip_opencv_setup,
     was_opencv_setup_skipped,
 };
+#[cfg(feature = "opencv")]
 use perspective::commands::{
     accept_perspective_corrections, cleanup_perspective_temp,
     get_original_image_for_comparison, process_images_for_perspective,
 };
+
 use tauri::Manager;
+
+// Stub commands when opencv feature is not enabled
+#[cfg(not(feature = "opencv"))]
+mod opencv_stubs {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct OpenCVStatus {
+        pub available: bool,
+        pub version: Option<String>,
+        pub error: Option<String>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct PerspectiveCommandResult {
+        pub success: bool,
+        pub error: Option<String>,
+        pub data: Option<serde_json::Value>,
+    }
+
+    #[tauri::command]
+    pub fn check_opencv_status() -> OpenCVStatus {
+        OpenCVStatus {
+            available: false,
+            version: None,
+            error: Some("OpenCV feature not compiled. Rebuild with --features opencv".to_string()),
+        }
+    }
+
+    #[tauri::command]
+    pub async fn run_opencv_setup() -> Result<bool, String> {
+        Err("OpenCV feature not compiled. Rebuild with --features opencv".to_string())
+    }
+
+    #[tauri::command]
+    pub fn skip_opencv_setup(_app: tauri::AppHandle) -> Result<(), String> {
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub fn was_opencv_setup_skipped(_app: tauri::AppHandle) -> bool {
+        true
+    }
+
+    #[tauri::command]
+    pub fn reset_opencv_setup_skip(_app: tauri::AppHandle) -> Result<(), String> {
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub async fn process_images_for_perspective(
+        _app: tauri::AppHandle,
+        _folder_path: String,
+        _status: String,
+        _image_filenames: Vec<String>,
+    ) -> Result<PerspectiveCommandResult, String> {
+        Ok(PerspectiveCommandResult {
+            success: false,
+            error: Some("OpenCV feature not compiled. Rebuild with --features opencv".to_string()),
+            data: None,
+        })
+    }
+
+    #[tauri::command]
+    pub async fn accept_perspective_corrections(
+        _app: tauri::AppHandle,
+        _folder_path: String,
+        _status: String,
+        _corrections: Vec<serde_json::Value>,
+    ) -> Result<PerspectiveCommandResult, String> {
+        Ok(PerspectiveCommandResult {
+            success: false,
+            error: Some("OpenCV feature not compiled. Rebuild with --features opencv".to_string()),
+            data: None,
+        })
+    }
+
+    #[tauri::command]
+    pub fn cleanup_perspective_temp(_app: tauri::AppHandle) -> Result<(), String> {
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub async fn get_original_image_for_comparison(
+        _app: tauri::AppHandle,
+        _folder_path: String,
+        _status: String,
+        _filename: String,
+    ) -> Result<String, String> {
+        Err("OpenCV feature not compiled. Rebuild with --features opencv".to_string())
+    }
+}
+
+#[cfg(not(feature = "opencv"))]
+use opencv_stubs::*;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -103,7 +205,7 @@ pub fn run() {
             open_property_folder,
             get_full_property_path,
             generate_watermark_preview,
-            // Perspective correction commands (LSD + RANSAC approach)
+            // Perspective correction commands
             process_images_for_perspective,
             accept_perspective_corrections,
             cleanup_perspective_temp,

@@ -31,7 +31,9 @@
       "Bash(cmd /c:*)",
       "Bash(\"c:\\From D\\03_Web_Development\\realtor-photo-manager\\check-opencv.bat\")",
       "Bash(npm install:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(git commit:*)",
+      "Bash(gh release create v0.1.10 --title \"v0.1.10\" --notes \"$(cat <<''EOF''\n## What''s New\n\n### UI Improvements\n- **bits-ui Integration**: Migrated all modals to bits-ui Dialog components for better accessibility and consistency\n- **City Combobox**: New autocomplete dropdown for city selection with \"create new city\" feature\n- **Reusable Dialog Components**: Added Dialog, DialogContent, DialogHeader, DialogFooter wrapper components\n- **Confirmation Dialogs**: New ConfirmDialog component for delete confirmations and other actions\n\n### Settings Fixes\n- Fixed save button that was incorrectly disabled (was checking legacy rootPath field)\n- Fixed folder paths not being saved correctly to config\n- Fixed confirmation dialogs not triggering properly\n\n### Database Improvements\n- Added WAL checkpoint after clearing database to ensure data is properly flushed on Windows\n- Relaxed property folder validation - properties can now be imported even without INTERNET/WATERMARK folders\n- Properties without workflow folders will have them created when you start working on them\n\n### New Features\n- Perspective correction feature with OpenCV integration\n- BeforeAfterSlider component for image comparison\n- Notification system with stores\n\n### Bug Fixes\n- Database clear now properly removes all properties\n- Property scan no longer rejects folders without INTERNET/WATERMARK structure\nEOF\n)\")"
     ],
     "deny": [],
     "ask": []
