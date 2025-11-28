@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { invoke } from '@tauri-apps/api/core';
 	import { DatabaseService } from '$lib/services/databaseService';
 	import { Dialog, DialogContent, DialogHeader, CityCombobox } from '$lib/components/ui';
 	import type { City } from '$lib/types/database';
@@ -18,6 +19,7 @@
 	let cities = $state<City[]>([]);
 	let isSubmitting = $state(false);
 	let error = $state('');
+	let copiedPath = $state(false);
 
 	onMount(async () => {
 		try {
@@ -39,13 +41,31 @@
 			isSubmitting = true;
 			error = '';
 
+			const propertyName = name.trim().toUpperCase();
+			const propertyCity = city.trim().toUpperCase();
+
 			const result = await DatabaseService.createProperty(
-				name.trim().toUpperCase(),
-				city.trim().toUpperCase(),
+				propertyName,
+				propertyCity,
 				notes.trim() || undefined
 			);
 
 			if (result.success) {
+				// Copy the property path to clipboard
+				try {
+					const folderPath = `${propertyCity}/${propertyName}`;
+					const pathResult = await invoke<{ success: boolean; data?: { full_path: string } }>(
+						'get_full_property_path',
+						{ folderPath, status: 'NEW' }
+					);
+					if (pathResult.success && pathResult.data?.full_path) {
+						await navigator.clipboard.writeText(pathResult.data.full_path);
+						copiedPath = true;
+					}
+				} catch (copyErr) {
+					console.error('Failed to copy path:', copyErr);
+				}
+
 				onPropertyAdded();
 			} else {
 				error = result.error || 'Failed to create property';
