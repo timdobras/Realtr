@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
+  import { beforeNavigate } from '$app/navigation';
   import { invoke } from '@tauri-apps/api/core';
   import { dndzone } from 'svelte-dnd-action';
   import { flip } from 'svelte/animate';
@@ -30,8 +31,34 @@
   let showPerspectiveModal = $state(false);
   let showRenameConfirm = $state(false);
 
+  // Track unsaved reorder changes
+  let originalOrder: string[] = $state([]);
+  let hasUnsavedChanges = $state(false);
+  let showUnsavedDialog = $state(false);
+  let pendingNavigation: (() => void) | null = $state(null);
+
   // Get the id from the URL params
   let propertyId = $derived(Number($page.params.id));
+
+  // Check if current order differs from original
+  function checkForChanges() {
+    if (originalOrder.length === 0) return false;
+    const currentOrder = internetImages.map((img) => img.id);
+    if (currentOrder.length !== originalOrder.length) return false;
+    return currentOrder.some((id, index) => id !== originalOrder[index]);
+  }
+
+  // Intercept navigation when there are unsaved changes
+  beforeNavigate(({ cancel, to }) => {
+    if (hasUnsavedChanges && to) {
+      cancel();
+      pendingNavigation = () => {
+        hasUnsavedChanges = false;
+        window.location.href = to.url.pathname;
+      };
+      showUnsavedDialog = true;
+    }
+  });
 
   onMount(async () => {
     if (!propertyId) {
@@ -89,6 +116,10 @@
           newName: baseFileName ? `${baseFileName}_${index + 1}` : `${index + 1}`
         }));
 
+        // Save original order for change detection
+        originalOrder = sortedFilenames.slice();
+        hasUnsavedChanges = false;
+
         // Load thumbnails
         for (let i = 0; i < internetImages.length; i++) {
           const image = internetImages[i];
@@ -145,6 +176,8 @@
     internetImages = e.detail.items;
     // Update names only after drag is complete
     updateNewNames();
+    // Check if order changed from original
+    hasUnsavedChanges = checkForChanges();
   }
 
   // Debounced name update function
@@ -585,6 +618,25 @@
       destructive={true}
       onConfirm={doRenaming}
       onCancel={() => (showRenameConfirm = false)}
+    />
+  {/if}
+
+  <!-- Unsaved Changes Dialog -->
+  {#if showUnsavedDialog}
+    <ConfirmDialog
+      title="Unsaved Changes"
+      message="You have reordered images but haven't applied the rename. Your changes will be lost if you leave this page."
+      confirmText="Leave Page"
+      cancelText="Stay"
+      destructive={true}
+      onConfirm={() => {
+        showUnsavedDialog = false;
+        if (pendingNavigation) pendingNavigation();
+      }}
+      onCancel={() => {
+        showUnsavedDialog = false;
+        pendingNavigation = null;
+      }}
     />
   {/if}
 {/if}

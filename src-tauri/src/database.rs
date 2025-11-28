@@ -10,6 +10,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tauri::Manager;
 use tokio::process::Command;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Property {
     pub id: Option<i64>,
@@ -1388,12 +1394,15 @@ pub async fn open_images_in_folder(
 
         // Unblock the file using PowerShell (removes "downloaded from internet" marking)
         let _ = Command::new("powershell")
-            .args(["-Command", &format!("Unblock-File -Path '{}'", file_path)])
-            .output(); // Run and ignore result (file might not be blocked)
+            .args(["-Command", &format!("Unblock-File -Path \"{}\"", file_path)])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .await; // Run and ignore result (file might not be blocked)
 
         // Now open with default application using start command
         Command::new("cmd")
             .args(["/C", "start", "", file_path])
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn()
     } else if cfg!(target_os = "macos") {
         // macOS can handle multiple files
@@ -1746,6 +1755,16 @@ pub async fn open_image_in_editor(
         });
     }
 
+    // On Windows, unblock the file to remove security warning
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("powershell")
+            .args(["-Command", &format!("Unblock-File -Path \"{}\"", image_path.display())])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .await;
+    }
+
     // Use configured fast editor or system default
     let result = if let Some(editor_path) = &config.fast_editor_path {
         // Use custom fast editor
@@ -1757,6 +1776,7 @@ pub async fn open_image_in_editor(
         if cfg!(target_os = "windows") {
             Command::new("cmd")
                 .args(["/C", "start", "", image_path.to_str().unwrap()])
+                .creation_flags(CREATE_NO_WINDOW)
                 .spawn()
         } else if cfg!(target_os = "macos") {
             Command::new("open")
@@ -2095,6 +2115,16 @@ pub async fn open_image_in_advanced_editor(
         });
     }
 
+    // On Windows, unblock the file to remove security warning
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("powershell")
+            .args(["-Command", &format!("Unblock-File -Path \"{}\"", image_path.display())])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .await;
+    }
+
     // Use configured complex editor or system default
     let result = if let Some(editor_path) = &config.complex_editor_path {
         // Use custom complex editor
@@ -2106,6 +2136,7 @@ pub async fn open_image_in_advanced_editor(
         if cfg!(target_os = "windows") {
             Command::new("cmd")
                 .args(["/C", "start", "", image_path.to_str().unwrap()])
+                .creation_flags(CREATE_NO_WINDOW)
                 .spawn()
         } else if cfg!(target_os = "macos") {
             Command::new("open")
