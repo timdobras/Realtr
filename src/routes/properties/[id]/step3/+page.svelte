@@ -22,7 +22,6 @@
   let error = $state('');
   let loading = $state(true);
   let copyingImages = $state(false);
-  let showCopyConfirm = $state(false);
   let showClearConfirm = $state(false);
 
   // Get the id from the URL params
@@ -226,7 +225,7 @@
     }
   }
 
-  function copySelectedToAggelia() {
+  async function copySelectedToAggelia() {
     if (!property) return;
 
     const selectedImages = internetImages.filter((img) => img.selected);
@@ -234,15 +233,6 @@
       error = 'Please select at least one image to copy to AGGELIA';
       return;
     }
-
-    showCopyConfirm = true;
-  }
-
-  async function doCopyToAggelia() {
-    if (!property) return;
-    showCopyConfirm = false;
-
-    const selectedImages = internetImages.filter((img) => img.selected);
 
     try {
       copyingImages = true;
@@ -271,10 +261,6 @@
       copyingImages = false;
     }
   }
-
-  let copyConfirmMessage = $derived(
-    `Copy ${internetImages.filter((img) => img.selected).length} selected images to AGGELIA folder? This will prepare them for advanced editing.`
-  );
 
   async function openImageInAdvancedEditor(filename: string, fromAggelia: boolean = false) {
     if (!property) return;
@@ -680,17 +666,6 @@
       </div>
     </div>
   </div>
-
-  <!-- Copy to AGGELIA Confirmation Dialog -->
-  {#if showCopyConfirm}
-    <ConfirmDialog
-      title="Copy to AGGELIA"
-      message={copyConfirmMessage}
-      confirmText="Copy"
-      onConfirm={doCopyToAggelia}
-      onCancel={() => (showCopyConfirm = false)}
-    />
-  {/if}
 
   <!-- Clear AGGELIA Confirmation Dialog -->
   {#if showClearConfirm}

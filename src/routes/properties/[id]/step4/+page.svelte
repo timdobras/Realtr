@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
+  import { goto } from '$app/navigation';
   import { invoke } from '@tauri-apps/api/core';
   import { DatabaseService } from '$lib/services/databaseService';
   import type { Property } from '$lib/types/database';
@@ -320,7 +321,19 @@
 
   // Reactive values for UI
   let totalWatermarkedImages = $derived(watermarkImages.length + watermarkAggeliaImages.length);
-  const workflowProgress = 100; // Step 4 is 100% of workflow
+
+  async function completeAndNavigate() {
+    // Set status to DONE only if property is NEW
+    if (property && property.status === 'NEW') {
+      try {
+        await DatabaseService.updatePropertyStatus(property.id!, 'DONE');
+        showSuccess('Property marked as Done');
+      } catch (e) {
+        showError(`Failed to update status: ${e}`);
+      }
+    }
+    goto('/properties');
+  }
 </script>
 
 {#if loading}
@@ -401,8 +414,18 @@
               class="border-accent-500 h-5 w-5 animate-spin rounded-full border-2 border-t-transparent"
             ></div>
           {:else}
-            <svg class="text-accent-500 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            <svg
+              class="text-accent-500 h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M5 13l4 4L19 7"
+              />
             </svg>
           {/if}
           <div class="flex-1">
@@ -545,7 +568,9 @@
           class="bg-background-200 text-foreground-700 hover:bg-background-300 border-background-300 flex items-center justify-center space-x-2 border px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
           {#if fillingTo25}
-            <div class="border-foreground-500 h-4 w-4 animate-spin border-2 border-t-transparent"></div>
+            <div
+              class="border-foreground-500 h-4 w-4 animate-spin border-2 border-t-transparent"
+            ></div>
             <span>Filling...</span>
           {:else}
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -699,15 +724,23 @@
       <div
         class="flex flex-col items-center justify-center space-y-3 sm:flex-row sm:space-y-0 sm:space-x-3"
       >
-        <a
-          href="/properties/{property.id}"
+        <button
+          onclick={completeAndNavigate}
           class="bg-accent-500 hover:bg-accent-600 inline-flex items-center space-x-2 px-4 py-2 text-sm font-medium text-white transition-colors"
         >
-          <span>View Property</span>
-        </a>
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M5 13l4 4L19 7"
+            />
+          </svg>
+          <span>Complete</span>
+        </button>
 
         <a
-          href="/"
+          href="/properties"
           class="bg-background-200 text-foreground-700 hover:bg-background-300 inline-flex items-center space-x-2 px-4 py-2 text-sm font-medium transition-colors"
         >
           <span>Dashboard</span>

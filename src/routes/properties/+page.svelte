@@ -1,10 +1,45 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { browser } from '$app/environment';
+  import { Select } from 'bits-ui';
   import { DatabaseService } from '$lib/services/databaseService';
   import PropertyCard from '$lib/components/PropertyCard.svelte';
   import AddPropertyModal from '$lib/components/AddPropertyModal.svelte';
   import type { Property, PropertyStatus } from '$lib/types/database';
+
+  // Status display labels
+  const STATUS_LABELS: Record<PropertyStatus, string> = {
+    NEW: 'New',
+    DONE: 'Done',
+    NOT_FOUND: 'Not Found',
+    ARCHIVE: 'Archived'
+  };
+
+  // Sort options
+  const SORT_OPTIONS = [
+    { value: 'newest', label: 'Newest' },
+    { value: 'oldest', label: 'Oldest' },
+    { value: 'name-asc', label: 'A-Z' },
+    { value: 'name-desc', label: 'Z-A' }
+  ] as const;
+
+  // Filter persistence types and constants
+  type SortOption = 'newest' | 'oldest' | 'name-asc' | 'name-desc';
+
+  interface FilterSettings {
+    selectedStatuses: PropertyStatus[];
+    cityFilter: string;
+    sortOrder: SortOption;
+  }
+
+  const FILTER_STORAGE_KEY = 'realtr-properties-filters';
+  const ALL_STATUSES: PropertyStatus[] = ['NEW', 'DONE', 'NOT_FOUND', 'ARCHIVE'];
+  const DEFAULT_FILTERS: FilterSettings = {
+    selectedStatuses: ['NEW', 'DONE', 'NOT_FOUND'],
+    cityFilter: '',
+    sortOrder: 'newest'
+  };
 
   let properties = $state<Property[]>([]);
   let filteredProperties = $state<Property[]>([]);
@@ -15,15 +50,41 @@
 
   // Filters
   let searchQuery = $state('');
-  let statusFilter = $state<'ALL' | PropertyStatus>('ALL');
+  let selectedStatuses = $state<Set<PropertyStatus>>(new Set(DEFAULT_FILTERS.selectedStatuses));
   let cityFilter = $state('');
+  let sortOrder = $state<SortOption>('newest');
 
   // Get unique cities for filter
   let cities = $derived(Array.from(new Set(properties.map((p) => p.city))).sort());
 
   onMount(async () => {
+    // Load saved filter settings from localStorage
+    if (browser) {
+      const saved = localStorage.getItem(FILTER_STORAGE_KEY);
+      if (saved) {
+        try {
+          const settings = JSON.parse(saved) as FilterSettings;
+          selectedStatuses = new Set(settings.selectedStatuses);
+          cityFilter = settings.cityFilter;
+          sortOrder = settings.sortOrder;
+        } catch {
+          // Invalid JSON, use defaults
+        }
+      }
+    }
     await loadProperties();
   });
+
+  function saveFilters() {
+    if (browser) {
+      const settings: FilterSettings = {
+        selectedStatuses: Array.from(selectedStatuses),
+        cityFilter,
+        sortOrder
+      };
+      localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(settings));
+    }
+  }
 
   async function loadProperties() {
     try {
@@ -92,32 +153,57 @@
   }
 
   function applyFilters() {
-    filteredProperties = properties.filter((property) => {
-      // Text search
+    let result = properties.filter((property) => {
+      // Text search (name, city, or code)
       const matchesSearch =
         searchQuery === '' ||
         property.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        property.city.toLowerCase().includes(searchQuery.toLowerCase());
+        property.city.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (property.code && property.code.toLowerCase().includes(searchQuery.toLowerCase()));
 
-      // Status filter - hide ARCHIVE by default unless searching or explicitly selected
-      const matchesStatus =
-        statusFilter === 'ALL'
-          ? searchQuery !== '' || property.status !== 'ARCHIVE' // Hide archive unless searching
-          : property.status === statusFilter;
+      // Status filter - use checkbox selection
+      const matchesStatus = selectedStatuses.has(property.status);
 
       // City filter
       const matchesCity = cityFilter === '' || property.city === cityFilter;
 
       return matchesSearch && matchesStatus && matchesCity;
     });
+
+    // Apply sorting
+    result.sort((a, b) => {
+      switch (sortOrder) {
+        case 'newest':
+          return b.created_at - a.created_at;
+        case 'oldest':
+          return a.created_at - b.created_at;
+        case 'name-asc':
+          return a.name.localeCompare(b.name);
+        case 'name-desc':
+          return b.name.localeCompare(a.name);
+      }
+    });
+
+    filteredProperties = result;
   }
 
   // Watch for filter changes
   $effect(() => {
+    // Dependencies
     searchQuery;
-    statusFilter;
-    cityFilter; // Dependencies
+    selectedStatuses;
+    cityFilter;
+    sortOrder;
     applyFilters();
+  });
+
+  // Save filters when they change (but not search query)
+  $effect(() => {
+    // Dependencies for persistence
+    selectedStatuses;
+    cityFilter;
+    sortOrder;
+    saveFilters();
   });
 
   async function onPropertyAdded() {
@@ -135,9 +221,50 @@
 
   function clearAllFilters() {
     searchQuery = '';
-    statusFilter = 'ALL';
+    selectedStatuses = new Set(ALL_STATUSES);
     cityFilter = '';
+    sortOrder = 'newest';
   }
+
+  function resetToDefaults() {
+    searchQuery = '';
+    selectedStatuses = new Set(DEFAULT_FILTERS.selectedStatuses);
+    cityFilter = DEFAULT_FILTERS.cityFilter;
+    sortOrder = DEFAULT_FILTERS.sortOrder;
+    if (browser) {
+      localStorage.removeItem(FILTER_STORAGE_KEY);
+    }
+  }
+
+  function toggleStatus(status: PropertyStatus) {
+    const newSet = new Set(selectedStatuses);
+    if (newSet.has(status)) {
+      newSet.delete(status);
+    } else {
+      newSet.add(status);
+    }
+    selectedStatuses = newSet;
+  }
+
+  function selectAllStatuses() {
+    selectedStatuses = new Set(ALL_STATUSES);
+  }
+
+  function clearAllStatuses() {
+    selectedStatuses = new Set();
+  }
+
+  // Check if filters have been modified from defaults
+  let hasCustomFilters = $derived(
+    selectedStatuses.size !== DEFAULT_FILTERS.selectedStatuses.length ||
+      !DEFAULT_FILTERS.selectedStatuses.every((s) => selectedStatuses.has(s)) ||
+      cityFilter !== DEFAULT_FILTERS.cityFilter ||
+      sortOrder !== DEFAULT_FILTERS.sortOrder
+  );
+
+  // Derived labels for display
+  let sortLabel = $derived(SORT_OPTIONS.find((o) => o.value === sortOrder)?.label ?? 'Sort');
+  let cityLabel = $derived(cityFilter || 'All Cities');
 </script>
 
 <div class="bg-background-0 min-h-full">
@@ -169,72 +296,250 @@
     </div>
   </div>
 
-  <div class="mx-auto space-y-5 p-6">
-    <!-- Filters -->
-    <div class="bg-background-50 border-background-200 border p-4">
-      <div class="mb-3 flex items-center justify-between">
-        <h2 class="text-foreground-900 text-sm font-semibold">Filters</h2>
-
-        {#if searchQuery || statusFilter !== 'ALL' || cityFilter}
-          <button
-            onclick={clearAllFilters}
-            class="text-foreground-600 hover:text-foreground-900 text-xs font-medium transition-colors"
-          >
-            Clear
-          </button>
-        {/if}
-      </div>
-
-      <div class="grid grid-cols-1 gap-3 md:grid-cols-4">
+  <div class="mx-auto space-y-4 p-6">
+    <!-- Compact Filter Bar -->
+    <div class="bg-background-50 border-background-200 border p-3">
+      <div class="flex flex-wrap items-center gap-3">
         <!-- Search -->
-        <div>
-          <label class="text-foreground-700 mb-1 block text-xs font-medium">Search</label>
+        <div class="relative min-w-[200px] flex-1">
+          <svg
+            class="text-foreground-400 pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+            />
+          </svg>
           <input
             type="text"
             bind:value={searchQuery}
             placeholder="Search..."
-            class="border-background-300 bg-background-100 text-foreground-900 placeholder-foreground-500 focus:ring-accent-500 focus:border-accent-500 w-full border px-3 py-2 text-sm transition-colors focus:ring-1 focus:outline-none"
+            class="border-background-300 bg-background-100 text-foreground-900 placeholder-foreground-500 focus:border-accent-500 w-full border py-1.5 pr-3 pl-8 text-sm transition-colors focus:outline-none"
           />
         </div>
 
-        <!-- Status Filter -->
-        <div>
-          <label class="text-foreground-700 mb-1 block text-xs font-medium">Status</label>
-          <select
-            bind:value={statusFilter}
-            class="bg-background-100 border-background-300 text-foreground-900 focus:ring-accent-500 focus:border-accent-500 w-full border px-3 py-2 text-sm transition-colors focus:ring-1 focus:outline-none"
-          >
-            <option value="ALL">All (exclude archived)</option>
-            <option value="NEW">New</option>
-            <option value="DONE">Done</option>
-            <option value="NOT_FOUND">Not Found</option>
-            <option value="ARCHIVE">Archived</option>
-          </select>
-        </div>
+        <!-- Divider -->
+        <div class="bg-background-300 hidden h-6 w-px md:block"></div>
 
-        <!-- City Filter -->
-        <div>
-          <label class="text-foreground-700 mb-1 block text-xs font-medium">City</label>
-          <select
-            bind:value={cityFilter}
-            class="bg-background-100 border-background-300 text-foreground-900 focus:ring-accent-500 focus:border-accent-500 w-full border px-3 py-2 text-sm transition-colors focus:ring-1 focus:outline-none"
-          >
-            <option value="">All Cities</option>
-            {#each cities as city}
-              <option value={city}>{city}</option>
-            {/each}
-          </select>
-        </div>
-
-        <!-- Results Count -->
-        <div class="flex items-end">
-          <div class="bg-background-100 border-background-200 w-full border px-3 py-2">
-            <div class="text-foreground-600 text-xs">
-              <span class="text-foreground-900 font-semibold">{filteredProperties.length}</span>
-              <span class="text-foreground-500"> of </span>
-              <span class="text-foreground-700 font-semibold">{properties.length}</span>
-            </div>
+        <!-- Status Checkboxes -->
+        <div class="flex items-center gap-3">
+          {#each ALL_STATUSES as status}
+            {@const isChecked = selectedStatuses.has(status)}
+            <button
+              type="button"
+              onclick={() => toggleStatus(status)}
+              class="group flex cursor-pointer items-center gap-1.5"
+            >
+              <div
+                class="flex h-4 w-4 items-center justify-center border transition-colors
+                  {isChecked
+                  ? 'border-accent-500 bg-accent-500'
+                  : 'border-background-400 bg-transparent'}"
+              >
+                {#if isChecked}
+                  <svg
+                    class="h-3 w-3 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="3"
+                      d="M5 13l4 4L19 7"
+                    />
+                  </svg>
+                {/if}
+              </div>
+              <span class="text-foreground-700 text-sm">{STATUS_LABELS[status]}</span>
+            </button>
+          {/each}
+          <div class="flex gap-1 text-xs">
+            <button
+              onclick={selectAllStatuses}
+              class="text-foreground-500 hover:text-foreground-900 transition-colors"
+            >
+              All
+            </button>
+            <span class="text-foreground-300">/</span>
+            <button
+              onclick={clearAllStatuses}
+              class="text-foreground-500 hover:text-foreground-900 transition-colors"
+            >
+              None
+            </button>
           </div>
+        </div>
+
+        <!-- Divider -->
+        <div class="bg-background-300 hidden h-6 w-px md:block"></div>
+
+        <!-- City Select -->
+        <Select.Root type="single" value={cityFilter} onValueChange={(v) => (cityFilter = v ?? '')}>
+          <Select.Trigger
+            class="border-background-300 bg-background-100 hover:bg-background-200 text-foreground-700 flex min-w-[120px] items-center justify-between gap-2 border px-2.5 py-1.5 text-sm transition-colors"
+          >
+            <span class="truncate">{cityLabel}</span>
+            <svg
+              class="text-foreground-500 h-4 w-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M19 9l-7 7-7-7"
+              />
+            </svg>
+          </Select.Trigger>
+          <Select.Portal>
+            <Select.Content
+              sideOffset={4}
+              class="border-background-300 bg-background-50 z-50 max-h-60 min-w-[120px] overflow-y-auto border shadow-lg"
+            >
+              <Select.Viewport class="p-1">
+                <Select.Item
+                  value=""
+                  label="All Cities"
+                  class="data-[highlighted]:bg-background-200 hover:bg-background-100 flex cursor-pointer items-center justify-between px-2 py-1.5 text-sm outline-none"
+                >
+                  {#snippet children({ selected })}
+                    <span class="text-foreground-700">All Cities</span>
+                    {#if selected}
+                      <svg
+                        class="text-accent-500 h-4 w-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M5 13l4 4L19 7"
+                        />
+                      </svg>
+                    {/if}
+                  {/snippet}
+                </Select.Item>
+                {#each cities as city}
+                  <Select.Item
+                    value={city}
+                    label={city}
+                    class="data-[highlighted]:bg-background-200 hover:bg-background-100 flex cursor-pointer items-center justify-between px-2 py-1.5 text-sm outline-none"
+                  >
+                    {#snippet children({ selected })}
+                      <span class="text-foreground-900">{city}</span>
+                      {#if selected}
+                        <svg
+                          class="text-accent-500 h-4 w-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M5 13l4 4L19 7"
+                          />
+                        </svg>
+                      {/if}
+                    {/snippet}
+                  </Select.Item>
+                {/each}
+              </Select.Viewport>
+            </Select.Content>
+          </Select.Portal>
+        </Select.Root>
+
+        <!-- Sort Select -->
+        <Select.Root
+          type="single"
+          value={sortOrder}
+          onValueChange={(v) => (sortOrder = (v as SortOption) ?? 'newest')}
+        >
+          <Select.Trigger
+            class="border-background-300 bg-background-100 hover:bg-background-200 text-foreground-700 flex min-w-[90px] items-center justify-between gap-2 border px-2.5 py-1.5 text-sm transition-colors"
+          >
+            <span>{sortLabel}</span>
+            <svg
+              class="text-foreground-500 h-4 w-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M19 9l-7 7-7-7"
+              />
+            </svg>
+          </Select.Trigger>
+          <Select.Portal>
+            <Select.Content
+              sideOffset={4}
+              class="border-background-300 bg-background-50 z-50 min-w-[90px] border shadow-lg"
+            >
+              <Select.Viewport class="p-1">
+                {#each SORT_OPTIONS as option}
+                  <Select.Item
+                    value={option.value}
+                    label={option.label}
+                    class="data-[highlighted]:bg-background-200 hover:bg-background-100 flex cursor-pointer items-center justify-between px-2 py-1.5 text-sm outline-none"
+                  >
+                    {#snippet children({ selected })}
+                      <span class="text-foreground-900">{option.label}</span>
+                      {#if selected}
+                        <svg
+                          class="text-accent-500 h-4 w-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M5 13l4 4L19 7"
+                          />
+                        </svg>
+                      {/if}
+                    {/snippet}
+                  </Select.Item>
+                {/each}
+              </Select.Viewport>
+            </Select.Content>
+          </Select.Portal>
+        </Select.Root>
+
+        <!-- Divider -->
+        <div class="bg-background-300 hidden h-6 w-px md:block"></div>
+
+        <!-- Results & Reset -->
+        <div class="flex items-center gap-3">
+          <span class="text-foreground-500 text-sm">
+            <span class="text-foreground-900 font-medium">{filteredProperties.length}</span>
+            <span class="text-foreground-400">/</span>
+            <span>{properties.length}</span>
+          </span>
+          {#if hasCustomFilters}
+            <button
+              onclick={resetToDefaults}
+              class="text-foreground-500 hover:text-foreground-900 text-sm transition-colors"
+            >
+              Reset
+            </button>
+          {/if}
         </div>
       </div>
     </div>

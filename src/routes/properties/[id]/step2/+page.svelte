@@ -29,7 +29,6 @@
   let dragDisabled = $state(false);
   let isDragging = $state(false); // Track drag state
   let showPerspectiveModal = $state(false);
-  let showRenameConfirm = $state(false);
 
   // Track unsaved reorder changes
   let originalOrder: string[] = $state([]);
@@ -192,14 +191,8 @@
     }, 50); // Small delay to batch updates
   }
 
-  function applyRenaming() {
+  async function applyRenaming() {
     if (!property || internetImages.length === 0) return;
-    showRenameConfirm = true;
-  }
-
-  async function doRenaming() {
-    if (!property) return;
-    showRenameConfirm = false;
 
     try {
       renamingImages = true;
@@ -232,13 +225,6 @@
       dragDisabled = false;
     }
   }
-
-  let renameConfirmMessage = $derived(
-    `This will rename ${internetImages.length} images. This action cannot be undone.\n\nExamples:\n${internetImages
-      .slice(0, 3)
-      .map((img) => `${img.filename} → ${img.newName}.${img.filename.split('.').pop()}`)
-      .join('\n')}`
-  );
 
   async function openImageInEditor(filename: string, event: any) {
     // Prevent opening during drag
@@ -558,7 +544,6 @@
                     {index + 1}
                   </div>
                 </div>
-
               </div>
             {/each}
           </div>
@@ -606,18 +591,6 @@
       propertyId={property.id ?? 0}
       onClose={closePerspectiveModal}
       onComplete={handlePerspectiveComplete}
-    />
-  {/if}
-
-  <!-- Rename Confirmation Dialog -->
-  {#if showRenameConfirm}
-    <ConfirmDialog
-      title="Rename Images"
-      message={renameConfirmMessage}
-      confirmText="Rename"
-      destructive={true}
-      onConfirm={doRenaming}
-      onCancel={() => (showRenameConfirm = false)}
     />
   {/if}
 
