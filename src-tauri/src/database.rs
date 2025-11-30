@@ -2435,7 +2435,7 @@ fn apply_watermark_with_config(
             let max_size = (reference_size as f32 * config.size_percentage) as u32;
             let scale_x = max_size as f32 / wm_width as f32;
             let scale_y = max_size as f32 / wm_height as f32;
-            let scale = scale_x.min(scale_y).min(1.0);
+            let scale = scale_x.min(scale_y);
 
             (
                 (wm_width as f32 * scale) as u32,
@@ -2457,7 +2457,7 @@ fn apply_watermark_with_config(
         "tile" => (wm_width, wm_height), // Keep original size for tiling
         _ => {
             let max_size = (base_width.max(base_height) as f32 * config.size_percentage) as u32;
-            let scale = (max_size as f32 / wm_width.max(wm_height) as f32).min(1.0);
+            let scale = max_size as f32 / wm_width.max(wm_height) as f32;
             (
                 (wm_width as f32 * scale) as u32,
                 (wm_height as f32 * scale) as u32,
