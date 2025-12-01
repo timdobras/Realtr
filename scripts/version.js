@@ -13,6 +13,7 @@
  *   node scripts/version.js prerelease <tag>  - Set prerelease tag (beta/alpha/rc)
  *   node scripts/version.js release           - Remove prerelease tag
  *   node scripts/version.js set <major> <minor> [prerelease] - Set specific major.minor
+ *   node scripts/version.js tag               - Create and push git tag to trigger release
  */
 
 import { execSync } from 'child_process';
@@ -203,8 +204,40 @@ switch (command) {
 		break;
 	}
 
+	case 'tag': {
+		const versionStr = formatVersion(current);
+		const tagName = `v${versionStr}`;
+
+		try {
+			// Check if tag already exists
+			try {
+				execSync(`git rev-parse ${tagName}`, { encoding: 'utf-8', stdio: 'pipe' });
+				console.error(`Tag ${tagName} already exists. Commit new changes first.`);
+				process.exit(1);
+			} catch {
+				// Tag doesn't exist, we can create it
+			}
+
+			// Create and push the tag
+			console.log(`Creating tag: ${tagName}`);
+			execSync(`git tag ${tagName}`, { encoding: 'utf-8', stdio: 'inherit' });
+
+			console.log(`Pushing tag to origin...`);
+			execSync(`git push origin ${tagName}`, { encoding: 'utf-8', stdio: 'inherit' });
+
+			console.log(`\nRelease triggered! GitHub Actions will build and publish ${tagName}`);
+			console.log(`Check progress at: https://github.com/timdobras/Realtr/actions`);
+		} catch (err) {
+			console.error('Failed to create/push tag:', err.message);
+			process.exit(1);
+		}
+		break;
+	}
+
 	default:
 		console.error(`Unknown command: ${command}`);
-		console.log('Commands: sync, minor, major, prerelease <tag>, release, set <major> <minor> [prerelease]');
+		console.log(
+			'Commands: sync, minor, major, prerelease <tag>, release, set <major> <minor> [prerelease], tag'
+		);
 		process.exit(1);
 }

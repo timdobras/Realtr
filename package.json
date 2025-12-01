@@ -1,6 +1,6 @@
 {
 	"name": "tauri-app",
-	"version": "0.1.35-beta",
+	"version": "0.1.36-beta",
 	"description": "",
 	"type": "module",
 	"scripts": {
@@ -24,7 +24,8 @@
 		"version:major": "node scripts/version.js major",
 		"version:beta": "node scripts/version.js prerelease beta",
 		"version:alpha": "node scripts/version.js prerelease alpha",
-		"version:release": "node scripts/version.js release"
+		"version:release": "node scripts/version.js release",
+		"release": "node scripts/version.js tag"
 	},
 	"license": "MIT",
 	"dependencies": {
