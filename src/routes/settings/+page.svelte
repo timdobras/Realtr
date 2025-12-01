@@ -1026,7 +1026,16 @@
                   <button
                     type="button"
                     onclick={() => {
-                      config.watermarkConfig.positionAnchor = value as 'top-left' | 'top-center' | 'top-right' | 'center-left' | 'center' | 'center-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
+                      config.watermarkConfig.positionAnchor = value as
+                        | 'top-left'
+                        | 'top-center'
+                        | 'top-right'
+                        | 'center-left'
+                        | 'center'
+                        | 'center-right'
+                        | 'bottom-left'
+                        | 'bottom-center'
+                        | 'bottom-right';
                       schedulePreviewUpdate();
                     }}
                     class="border-background-300 hover:bg-accent-100 flex h-12 items-center justify-center rounded-lg border text-sm font-medium transition-colors {config
@@ -1188,12 +1197,7 @@
       <div class="rounded-xl border border-red-200 bg-red-50 p-6">
         <div class="mb-4 flex items-center space-x-3">
           <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-red-100">
-            <svg
-              class="h-5 w-5 text-red-600"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
+            <svg class="h-5 w-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 stroke-linecap="round"
                 stroke-linejoin="round"

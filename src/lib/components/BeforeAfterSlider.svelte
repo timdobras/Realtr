@@ -87,7 +87,7 @@
       class="absolute top-2 left-2 z-20 flex h-6 w-6 items-center justify-center rounded-md border-2 transition-all
         {selected
         ? 'border-accent-500 bg-accent-500 text-white'
-        : 'border-white bg-white/80 text-transparent hover:border-accent-400'}"
+        : 'hover:border-accent-400 border-white bg-white/80 text-transparent'}"
     >
       <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
@@ -96,15 +96,19 @@
   {/if}
 
   <!-- Confidence badge -->
-  <div class="absolute top-2 right-2 z-20 flex items-center gap-1.5 rounded-full bg-black/60 px-2 py-1">
+  <div
+    class="absolute top-2 right-2 z-20 flex items-center gap-1.5 rounded-full bg-black/60 px-2 py-1"
+  >
     <span class="h-2 w-2 rounded-full {confidenceInfo.colorClass}"></span>
     <span class="text-xs font-medium text-white">{confidenceInfo.label}</span>
   </div>
 
   <!-- Rotation info -->
   {#if needsCorrection && Math.abs(rotationApplied) > 0.1}
-    <div class="absolute bottom-2 right-2 z-20 rounded-full bg-black/60 px-2 py-1">
-      <span class="text-xs text-white">{rotationApplied > 0 ? '+' : ''}{rotationApplied.toFixed(1)}&deg;</span>
+    <div class="absolute right-2 bottom-2 z-20 rounded-full bg-black/60 px-2 py-1">
+      <span class="text-xs text-white"
+        >{rotationApplied > 0 ? '+' : ''}{rotationApplied.toFixed(1)}&deg;</span
+      >
     </div>
   {/if}
 
@@ -118,7 +122,7 @@
   <!-- Before/After comparison container -->
   <div
     bind:this={containerRef}
-    class="relative aspect-[4/3] w-full cursor-ew-resize select-none overflow-hidden rounded-lg bg-black"
+    class="relative aspect-[4/3] w-full cursor-ew-resize overflow-hidden rounded-lg bg-black select-none"
     role="slider"
     aria-valuenow={sliderPosition}
     aria-valuemin={0}
@@ -165,10 +169,7 @@
     </div>
 
     <!-- Slider handle -->
-    <div
-      class="absolute top-0 bottom-0 w-0.5 bg-white shadow-lg"
-      style="left: {sliderPosition}%"
-    >
+    <div class="absolute top-0 bottom-0 w-0.5 bg-white shadow-lg" style="left: {sliderPosition}%">
       <!-- Handle circle -->
       <div
         class="absolute top-1/2 left-1/2 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white shadow-lg"

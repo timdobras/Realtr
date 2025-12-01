@@ -26,11 +26,13 @@
 
   // Filter persistence types and constants
   type SortOption = 'newest' | 'oldest' | 'name-asc' | 'name-desc';
+  type CodeFilter = 'all' | 'with-code' | 'without-code';
 
   interface FilterSettings {
     selectedStatuses: PropertyStatus[];
     cityFilter: string;
     sortOrder: SortOption;
+    codeFilter: CodeFilter;
   }
 
   const FILTER_STORAGE_KEY = 'realtr-properties-filters';
@@ -38,12 +40,20 @@
   const DEFAULT_FILTERS: FilterSettings = {
     selectedStatuses: ['NEW', 'DONE', 'NOT_FOUND'],
     cityFilter: '',
-    sortOrder: 'newest'
+    sortOrder: 'newest',
+    codeFilter: 'all'
   };
+
+  const CODE_FILTER_OPTIONS = [
+    { value: 'all', label: 'All' },
+    { value: 'with-code', label: 'With Code' },
+    { value: 'without-code', label: 'No Code' }
+  ] as const;
 
   let properties = $state<Property[]>([]);
   let filteredProperties = $state<Property[]>([]);
   let propertyThumbnails = $state<Map<number, string[]>>(new Map());
+  let propertyImageCounts = $state<Map<number, number>>(new Map());
   let isLoading = $state(true);
   let error = $state<string>('');
   let showAddModal = $state(false);
@@ -53,6 +63,7 @@
   let selectedStatuses = $state<Set<PropertyStatus>>(new Set(DEFAULT_FILTERS.selectedStatuses));
   let cityFilter = $state('');
   let sortOrder = $state<SortOption>('newest');
+  let codeFilter = $state<CodeFilter>('all');
 
   // Get unique cities for filter
   let cities = $derived(Array.from(new Set(properties.map((p) => p.city))).sort());
@@ -67,6 +78,7 @@
           selectedStatuses = new Set(settings.selectedStatuses);
           cityFilter = settings.cityFilter;
           sortOrder = settings.sortOrder;
+          codeFilter = settings.codeFilter ?? 'all';
         } catch {
           // Invalid JSON, use defaults
         }
@@ -80,7 +92,8 @@
       const settings: FilterSettings = {
         selectedStatuses: Array.from(selectedStatuses),
         cityFilter,
-        sortOrder
+        sortOrder,
+        codeFilter
       };
       localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(settings));
     }
@@ -114,8 +127,13 @@
         });
 
         if (Array.isArray(response) && response.length > 0) {
-          const limit = Math.min(6, response.length);
+          const totalCount = response.length;
+          const limit = Math.min(6, totalCount);
           const filenames = response.slice(0, limit);
+
+          // Store the total image count
+          propertyImageCounts.set(property.id, totalCount);
+          propertyImageCounts = new Map(propertyImageCounts);
 
           // Load all thumbnails for this property in parallel
           const thumbnailPromises = filenames.map(async (filename) => {
@@ -167,7 +185,13 @@
       // City filter
       const matchesCity = cityFilter === '' || property.city === cityFilter;
 
-      return matchesSearch && matchesStatus && matchesCity;
+      // Code filter
+      const matchesCode =
+        codeFilter === 'all' ||
+        (codeFilter === 'with-code' && property.code && property.code.trim() !== '') ||
+        (codeFilter === 'without-code' && (!property.code || property.code.trim() === ''));
+
+      return matchesSearch && matchesStatus && matchesCity && matchesCode;
     });
 
     // Apply sorting
@@ -194,6 +218,7 @@
     selectedStatuses;
     cityFilter;
     sortOrder;
+    codeFilter;
     applyFilters();
   });
 
@@ -203,6 +228,7 @@
     selectedStatuses;
     cityFilter;
     sortOrder;
+    codeFilter;
     saveFilters();
   });
 
@@ -224,6 +250,7 @@
     selectedStatuses = new Set(ALL_STATUSES);
     cityFilter = '';
     sortOrder = 'newest';
+    codeFilter = 'all';
   }
 
   function resetToDefaults() {
@@ -231,6 +258,7 @@
     selectedStatuses = new Set(DEFAULT_FILTERS.selectedStatuses);
     cityFilter = DEFAULT_FILTERS.cityFilter;
     sortOrder = DEFAULT_FILTERS.sortOrder;
+    codeFilter = DEFAULT_FILTERS.codeFilter;
     if (browser) {
       localStorage.removeItem(FILTER_STORAGE_KEY);
     }
@@ -259,12 +287,16 @@
     selectedStatuses.size !== DEFAULT_FILTERS.selectedStatuses.length ||
       !DEFAULT_FILTERS.selectedStatuses.every((s) => selectedStatuses.has(s)) ||
       cityFilter !== DEFAULT_FILTERS.cityFilter ||
-      sortOrder !== DEFAULT_FILTERS.sortOrder
+      sortOrder !== DEFAULT_FILTERS.sortOrder ||
+      codeFilter !== DEFAULT_FILTERS.codeFilter
   );
 
   // Derived labels for display
   let sortLabel = $derived(SORT_OPTIONS.find((o) => o.value === sortOrder)?.label ?? 'Sort');
   let cityLabel = $derived(cityFilter || 'All Cities');
+  let codeFilterLabel = $derived(
+    CODE_FILTER_OPTIONS.find((o) => o.value === codeFilter)?.label ?? 'Code'
+  );
 </script>
 
 <div class="bg-background-0 min-h-full">
@@ -461,6 +493,67 @@
           </Select.Portal>
         </Select.Root>
 
+        <!-- Code Filter Select -->
+        <Select.Root
+          type="single"
+          value={codeFilter}
+          onValueChange={(v) => (codeFilter = (v as CodeFilter) ?? 'all')}
+        >
+          <Select.Trigger
+            class="border-background-300 bg-background-100 hover:bg-background-200 text-foreground-700 flex min-w-[90px] items-center justify-between gap-2 border px-2.5 py-1.5 text-sm transition-colors"
+          >
+            <span>{codeFilterLabel}</span>
+            <svg
+              class="text-foreground-500 h-4 w-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M19 9l-7 7-7-7"
+              />
+            </svg>
+          </Select.Trigger>
+          <Select.Portal>
+            <Select.Content
+              sideOffset={4}
+              class="border-background-300 bg-background-50 z-50 min-w-[90px] border shadow-lg"
+            >
+              <Select.Viewport class="p-1">
+                {#each CODE_FILTER_OPTIONS as option}
+                  <Select.Item
+                    value={option.value}
+                    label={option.label}
+                    class="data-[highlighted]:bg-background-200 hover:bg-background-100 flex cursor-pointer items-center justify-between px-2 py-1.5 text-sm outline-none"
+                  >
+                    {#snippet children({ selected })}
+                      <span class="text-foreground-900">{option.label}</span>
+                      {#if selected}
+                        <svg
+                          class="text-accent-500 h-4 w-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M5 13l4 4L19 7"
+                          />
+                        </svg>
+                      {/if}
+                    {/snippet}
+                  </Select.Item>
+                {/each}
+              </Select.Viewport>
+            </Select.Content>
+          </Select.Portal>
+        </Select.Root>
+
         <!-- Sort Select -->
         <Select.Root
           type="single"
@@ -594,6 +687,7 @@
           <PropertyCard
             {property}
             thumbnails={propertyThumbnails.get(property.id!) || []}
+            totalImageCount={propertyImageCounts.get(property.id!) || 0}
             onUpdate={onPropertyUpdated}
             onDelete={onPropertyDeleted}
           />

@@ -158,7 +158,9 @@
               <option value="ARCHIVE">Archive</option>
             </select>
             {#if isUpdatingStatus}
-              <div class="border-foreground-300 h-4 w-4 animate-spin border-2 border-t-transparent"></div>
+              <div
+                class="border-foreground-300 h-4 w-4 animate-spin border-2 border-t-transparent"
+              ></div>
             {/if}
           </div>
         </div>

@@ -271,7 +271,8 @@
           <div class="text-foreground-600 flex items-center gap-4 text-sm">
             <span>{property.city}</span>
             <span
-              class="inline-flex items-center rounded border px-2 py-0.5 text-xs {property.status === 'DONE'
+              class="inline-flex items-center rounded border px-2 py-0.5 text-xs {property.status ===
+              'DONE'
                 ? 'border-green-300 bg-green-50 text-green-700'
                 : property.status === 'ARCHIVE'
                   ? 'border-gray-300 bg-gray-50 text-gray-700'
@@ -363,12 +364,14 @@
       {#if property.notes}
         <div class="bg-background-100 mb-3 rounded px-3 py-2">
           <p class="text-foreground-500 mb-1 text-xs">Notes</p>
-          <p class="text-foreground-700 whitespace-pre-wrap text-sm">{property.notes}</p>
+          <p class="text-foreground-700 text-sm whitespace-pre-wrap">{property.notes}</p>
         </div>
       {/if}
 
       <!-- Timestamps -->
-      <div class="border-background-200 text-foreground-500 flex items-center gap-4 border-t pt-2 text-xs">
+      <div
+        class="border-background-200 text-foreground-500 flex items-center gap-4 border-t pt-2 text-xs"
+      >
         <span>Created: {formatDate(property.created_at)}</span>
         {#if property.updated_at !== property.created_at}
           <span>Updated: {formatDate(property.updated_at)}</span>
