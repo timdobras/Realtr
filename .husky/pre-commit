@@ -1,0 +1,2 @@
+node scripts/version.js sync --next
+git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml

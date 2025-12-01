@@ -3,16 +3,23 @@
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import { browser } from '$app/environment';
-  import { checkForUpdates } from '$lib/utils/updater';
+  import {
+    checkForUpdatesSilently,
+    updateAvailable,
+    promptInstallUpdate
+  } from '$lib/utils/updater';
   import { DatabaseService } from '$lib/services/databaseService';
+  import { getVersion } from '@tauri-apps/api/app';
   import OpenCVSetupModal from '$lib/components/OpenCVSetupModal.svelte';
   import NotificationPortal from '$lib/components/NotificationPortal.svelte';
+  import CustomTitleBar from '$lib/components/CustomTitleBar.svelte';
 
   let { children } = $props();
   let isDarkMode = $state(false);
   let currentPath = $derived($page.url.pathname);
   let showOpenCVSetup = $state(false);
   let checkingOpenCV = $state(true);
+  let appVersion = $state('');
 
   // Navigation with SVG icons
   const navItems = [
@@ -60,8 +67,15 @@
         ? saved === 'true'
         : window.matchMedia('(prefers-color-scheme: dark)').matches;
       document.documentElement.classList.toggle('dark', isDarkMode);
+
+      // Get app version
+      try {
+        appVersion = await getVersion();
+      } catch {
+        appVersion = '';
+      }
     }
-    setTimeout(() => checkForUpdates(false), 5000);
+    setTimeout(() => checkForUpdatesSilently(), 5000);
 
     // Check OpenCV status on startup
     try {
@@ -88,66 +102,93 @@
   }
 </script>
 
-<div class="bg-background-0 text-foreground-950 flex h-screen">
-  <!-- Sidebar -->
-  <aside class="bg-background-50 border-background-200 flex w-60 flex-col border-r">
-    <!-- Logo Area -->
-    <div class="border-background-200 flex h-20 flex-col items-center justify-center border-b">
-      <h1 class="text-foreground-900 text-base font-semibold">Realtr</h1>
-      <p class="text-foreground-500 mt-0.5 text-xs">Photo Manager</p>
-    </div>
+<div class="bg-background-0 text-foreground-950 flex h-screen flex-col">
+  <!-- Custom Title Bar -->
+  <CustomTitleBar />
 
-    <!-- Navigation -->
-    <nav class="flex-1 space-y-1 px-2 py-3">
-      {#each navItems as item}
-        <a
-          href={item.href}
-          class="relative flex items-center gap-3 px-3 py-2 text-sm transition-colors
+  <!-- Main App Container -->
+  <div class="flex flex-1 overflow-hidden">
+    <!-- Sidebar -->
+    <aside class="bg-background-50 border-background-200 flex w-60 flex-col border-r">
+      <!-- Logo Area -->
+      <div class="border-background-200 flex h-20 flex-col items-center justify-center border-b">
+        <h1 class="text-foreground-900 text-base font-semibold">Realtr</h1>
+        <p class="text-foreground-500 mt-0.5 text-xs">Photo Manager</p>
+      </div>
+
+      <!-- Navigation -->
+      <nav class="flex-1 space-y-1 px-2 py-3">
+        {#each navItems as item}
+          <a
+            href={item.href}
+            class="relative flex items-center gap-3 px-3 py-2 text-sm transition-colors
             {isActive(item.href)
-            ? 'text-foreground-900 bg-background-100 border-foreground-900 border-l-2 font-medium'
-            : 'text-foreground-600 hover:bg-background-100 hover:text-foreground-900 border-l-2 border-transparent'}"
+              ? 'text-foreground-900 bg-background-100 border-foreground-900 border-l-2 font-medium'
+              : 'text-foreground-600 hover:bg-background-100 hover:text-foreground-900 border-l-2 border-transparent'}"
+          >
+            {@html item.icon}
+            <span>{item.name}</span>
+          </a>
+        {/each}
+      </nav>
+
+      <!-- Theme Toggle -->
+      <div class="border-background-200 border-t px-2 py-3">
+        <button
+          onclick={toggleTheme}
+          class="hover:bg-background-200 text-foreground-700 flex w-full items-center gap-3 px-3 py-2 text-sm transition-colors"
+          aria-label="Toggle dark mode"
         >
-          {@html item.icon}
-          <span>{item.name}</span>
-        </a>
-      {/each}
-    </nav>
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            {#if isDarkMode}
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
+              />
+            {:else}
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
+              />
+            {/if}
+          </svg>
+          <span>{isDarkMode ? 'Light' : 'Dark'}</span>
+        </button>
+      </div>
 
-    <!-- Theme Toggle -->
-    <div class="border-background-200 border-t px-2 py-3">
-      <button
-        onclick={toggleTheme}
-        class="hover:bg-background-200 text-foreground-700 flex w-full items-center gap-3 px-3 py-2 text-sm transition-colors"
-        aria-label="Toggle dark mode"
-      >
-        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          {#if isDarkMode}
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
-            />
-          {:else}
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
-            />
-          {/if}
-        </svg>
-        <span>{isDarkMode ? 'Light' : 'Dark'}</span>
-      </button>
-    </div>
-  </aside>
+      <!-- Version -->
+      {#if appVersion}
+        <div class="border-background-200 border-t px-3 py-2">
+          <div class="flex items-center justify-between">
+            <span class="text-foreground-400 text-xs">v{appVersion}</span>
+            {#if $updateAvailable.available}
+              <button
+                onclick={promptInstallUpdate}
+                class="bg-accent-600 hover:bg-accent-700 flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-white transition-colors"
+                title="Update to {$updateAvailable.version}"
+              >
+                <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                <span>Update</span>
+              </button>
+            {/if}
+          </div>
+        </div>
+      {/if}
+    </aside>
 
-  <!-- Main Content -->
-  <main class="bg-background-0 flex flex-1 flex-col">
-    <section class="flex-1 overflow-auto">
-      {@render children()}
-    </section>
-  </main>
+    <!-- Main Content -->
+    <main class="bg-background-0 flex flex-1 flex-col">
+      <section class="flex-1 overflow-auto">
+        {@render children()}
+      </section>
+    </main>
+  </div>
 </div>
 
 <!-- OpenCV Setup Modal -->
