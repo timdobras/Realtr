@@ -60,6 +60,7 @@ export interface AppConfig {
   doneFolderPath: string;
   notFoundFolderPath: string;
   archiveFolderPath: string;
+  setsFolderPath: string;
   isValidPath: boolean;
   lastUpdated: string | null;
   fast_editor_path?: string;
@@ -107,4 +108,37 @@ export interface SetupProgress {
   message: string;
   complete: boolean;
   error?: string;
+}
+
+// Sets Types
+export interface Set {
+  id?: number;
+  name: string;
+  zip_path: string;
+  property_count: number;
+  created_at: number; // Milliseconds since epoch
+}
+
+export interface SetProperty {
+  id?: number;
+  setId: number;
+  propertyId?: number;
+  propertyName: string;
+  propertyCity: string;
+  propertyCode?: string;
+}
+
+export interface CompleteSetResult {
+  setId: number;
+  setName: string;
+  zipPath: string;
+  propertiesArchived: number;
+  propertiesMovedToNotFound: number;
+}
+
+// Repair Types
+export interface RepairResult {
+  propertiesChecked: number;
+  propertiesFixed: number;
+  errors: string[];
 }

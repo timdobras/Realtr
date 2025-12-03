@@ -14,6 +14,7 @@
     doneFolderPath: string;
     notFoundFolderPath: string;
     archiveFolderPath: string;
+    setsFolderPath: string;
     isValidPath: boolean;
     lastUpdated: string | null;
     fast_editor_path?: string;
@@ -36,6 +37,7 @@
     doneFolderPath: '',
     notFoundFolderPath: '',
     archiveFolderPath: '',
+    setsFolderPath: '',
     isValidPath: false,
     lastUpdated: null,
     fast_editor_path: undefined,
@@ -66,6 +68,11 @@
   // Confirmation dialog states
   let showResetConfigConfirm = $state(false);
   let showResetDatabaseConfirm = $state(false);
+
+  // Repair status state
+  let isRepairing = $state(false);
+  let repairResult = $state<{ propertiesChecked: number; propertiesFixed: number; errors: string[] } | null>(null);
+  let showRepairResult = $state(false);
 
   // Load config on mount
   onMount(async () => {
@@ -174,6 +181,26 @@
     }
   }
 
+  async function selectSetsFolder(): Promise<void> {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: 'Select folder for Sets (ZIP archives)'
+      });
+
+      if (selected && typeof selected === 'string') {
+        config.setsFolderPath = selected;
+        statusMessage = 'Sets folder path updated';
+        statusType = 'success';
+      }
+    } catch (error) {
+      console.error('Error selecting folder:', error);
+      statusMessage = `Error selecting folder: ${error}`;
+      statusType = 'error';
+    }
+  }
+
   // Validate that all folder paths are set
   function validateFolderPaths(): void {
     config.isValidPath =
@@ -208,6 +235,7 @@
           doneFolderPath: config.doneFolderPath,
           notFoundFolderPath: config.notFoundFolderPath,
           archiveFolderPath: config.archiveFolderPath,
+          setsFolderPath: config.setsFolderPath,
           isValidPath: config.isValidPath,
           lastUpdated: new Date().toISOString(),
           fast_editor_path: config.fast_editor_path,
@@ -250,6 +278,7 @@
         doneFolderPath: '',
         notFoundFolderPath: '',
         archiveFolderPath: '',
+        setsFolderPath: '',
         isValidPath: false,
         lastUpdated: null,
         watermarkConfig: {
@@ -337,6 +366,31 @@
     } catch (error) {
       statusMessage = `Reset failed: ${error}`;
       statusType = 'error';
+    }
+  }
+
+  // Function to repair property statuses
+  async function repairPropertyStatuses() {
+    try {
+      isRepairing = true;
+      repairResult = null;
+      const result = await DatabaseService.repairPropertyStatuses();
+      if (result) {
+        repairResult = result;
+        showRepairResult = true;
+        if (result.propertiesFixed > 0) {
+          statusMessage = `Repaired ${result.propertiesFixed} properties`;
+          statusType = 'success';
+        } else {
+          statusMessage = 'All properties are correctly synced';
+          statusType = 'info';
+        }
+      }
+    } catch (error) {
+      statusMessage = `Repair failed: ${error}`;
+      statusType = 'error';
+    } finally {
+      isRepairing = false;
     }
   }
 
@@ -644,6 +698,33 @@
           </div>
           <p class="text-foreground-500 mt-2 text-sm">
             Folder for properties that are done, uploaded, and sent to boss
+          </p>
+        </div>
+
+        <!-- Sets Folder Selection -->
+        <div>
+          <label class="text-foreground-700 mb-3 block text-sm font-medium">
+            Sets Folder (ZIP Archives)
+          </label>
+          <div class="flex items-center space-x-4">
+            <div class="min-w-0 flex-1">
+              <input
+                type="text"
+                readonly
+                value={config.setsFolderPath || 'No folder selected'}
+                class="text-foreground-900 border-background-300 bg-background-100 focus:ring-accent-500 focus:border-accent-500 w-full rounded-lg border px-4 py-3 focus:ring-2 focus:outline-none"
+              />
+            </div>
+            <button
+              onclick={selectSetsFolder}
+              disabled={isLoading}
+              class="bg-accent-500 hover:bg-accent-600 flex items-center space-x-2 rounded-lg px-6 py-3 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span>Browse</span>
+            </button>
+          </div>
+          <p class="text-foreground-500 mt-2 text-sm">
+            Folder where completed property sets will be saved as ZIP files
           </p>
         </div>
 
@@ -1192,6 +1273,57 @@
       </div>
     </div>
 
+    <!-- Database Repair Section -->
+    {#if config.isValidPath}
+      <div class="border-background-200 bg-background-50 rounded-xl border p-6">
+        <div class="mb-4 flex items-center space-x-3">
+          <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
+            <svg class="text-accent-600 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-foreground-900 text-xl font-semibold">Repair Database</h2>
+            <p class="text-foreground-600 text-sm">Sync property statuses with actual folder locations</p>
+          </div>
+        </div>
+
+        <p class="text-foreground-600 mb-4 text-sm">
+          If properties aren't showing correctly, this will check each property's actual folder location
+          and update the database status to match. Use this if properties were moved manually or after
+          a failed operation.
+        </p>
+
+        <div class="flex items-center space-x-4">
+          <button
+            onclick={repairPropertyStatuses}
+            disabled={isRepairing}
+            class="bg-accent-500 hover:bg-accent-600 flex items-center space-x-2 rounded-lg px-4 py-2 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {#if isRepairing}
+              <div class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+              <span>Repairing...</span>
+            {:else}
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                />
+              </svg>
+              <span>Repair Property Statuses</span>
+            {/if}
+          </button>
+        </div>
+      </div>
+    {/if}
+
     <!-- Database Management Section -->
     {#if config.isValidPath}
       <div class="rounded-xl border border-red-200 bg-red-50 p-6">
@@ -1456,3 +1588,92 @@
   onConfirm={doResetDatabase}
   onCancel={() => (showResetDatabaseConfirm = false)}
 />
+
+<!-- Repair Result Modal -->
+{#if showRepairResult && repairResult}
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    onclick={() => (showRepairResult = false)}
+    onkeydown={(e) => e.key === 'Escape' && (showRepairResult = false)}
+    role="dialog"
+    tabindex="-1"
+  >
+    <div
+      class="bg-background-0 mx-4 max-h-[80vh] w-full max-w-md overflow-y-auto rounded-lg p-6 shadow-xl"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+      role="document"
+    >
+      <div class="mb-4 flex items-center justify-between">
+        <h3 class="text-foreground-900 text-lg font-semibold">Repair Results</h3>
+        <button
+          onclick={() => (showRepairResult = false)}
+          class="text-foreground-400 hover:text-foreground-600 p-1"
+        >
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="space-y-4">
+        <!-- Stats -->
+        <div class="bg-background-50 border-background-200 grid grid-cols-2 gap-4 rounded-lg border p-4">
+          <div class="text-center">
+            <p class="text-foreground-500 text-xs">Checked</p>
+            <p class="text-foreground-900 text-2xl font-bold">{repairResult.propertiesChecked}</p>
+          </div>
+          <div class="text-center">
+            <p class="text-foreground-500 text-xs">Fixed</p>
+            <p class="text-2xl font-bold {repairResult.propertiesFixed > 0 ? 'text-green-600' : 'text-foreground-900'}">
+              {repairResult.propertiesFixed}
+            </p>
+          </div>
+        </div>
+
+        <!-- Status Message -->
+        {#if repairResult.propertiesFixed > 0}
+          <div class="flex items-start gap-2 rounded-lg border border-green-200 bg-green-50 p-3">
+            <svg class="mt-0.5 h-4 w-4 flex-shrink-0 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            </svg>
+            <p class="text-sm text-green-700">
+              Successfully repaired {repairResult.propertiesFixed} {repairResult.propertiesFixed === 1 ? 'property' : 'properties'}.
+              The database is now synced with the actual folder locations.
+            </p>
+          </div>
+        {:else}
+          <div class="bg-background-50 border-background-200 flex items-start gap-2 rounded-lg border p-3">
+            <svg class="text-foreground-400 mt-0.5 h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            </svg>
+            <p class="text-foreground-600 text-sm">
+              All properties are correctly synced. No repairs needed.
+            </p>
+          </div>
+        {/if}
+
+        <!-- Errors (if any) -->
+        {#if repairResult.errors.length > 0}
+          <div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p class="mb-2 text-sm font-medium text-amber-800">Warnings ({repairResult.errors.length})</p>
+            <div class="max-h-32 overflow-y-auto">
+              {#each repairResult.errors as error}
+                <p class="text-xs text-amber-700">{error}</p>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <div class="mt-6 flex justify-end">
+        <button
+          onclick={() => (showRepairResult = false)}
+          class="bg-accent-500 hover:bg-accent-600 rounded-lg px-6 py-2 font-medium text-white transition-colors"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}

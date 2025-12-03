@@ -60,6 +60,37 @@ pub struct CommandResult {
     pub data: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Set {
+    pub id: Option<i64>,
+    pub name: String,
+    pub zip_path: String,
+    pub property_count: i64,
+    #[serde(with = "chrono::serde::ts_milliseconds")]
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SetProperty {
+    pub id: Option<i64>,
+    pub set_id: i64,
+    pub property_id: Option<i64>,
+    pub property_name: String,
+    pub property_city: String,
+    pub property_code: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompleteSetResult {
+    pub set_id: i64,
+    pub set_name: String,
+    pub zip_path: String,
+    pub properties_archived: usize,
+    pub properties_moved_to_not_found: usize,
+}
+
 // Helper function to safely get the database pool
 fn get_database_pool(app: &tauri::AppHandle) -> Result<&SqlitePool, String> {
     match app.try_state::<SqlitePool>() {
@@ -307,6 +338,51 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), String> {
             .await
             .map_err(|e| format!("Failed to create code index: {}", e))?;
     }
+
+    // Create sets table for tracking completed property sets
+    sqlx::query(
+        r"
+        CREATE TABLE IF NOT EXISTS sets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            zip_path TEXT NOT NULL,
+            property_count INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        )
+        ",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to create sets table: {}", e))?;
+
+    // Create set_properties junction table for tracking which properties were in each set
+    sqlx::query(
+        r"
+        CREATE TABLE IF NOT EXISTS set_properties (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            set_id INTEGER NOT NULL,
+            property_id INTEGER,
+            property_name TEXT NOT NULL,
+            property_city TEXT NOT NULL,
+            property_code TEXT,
+            FOREIGN KEY (set_id) REFERENCES sets(id) ON DELETE CASCADE
+        )
+        ",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to create set_properties table: {}", e))?;
+
+    // Create indexes for sets tables
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_sets_created_at ON sets(created_at)")
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to create sets created_at index: {}", e))?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_set_properties_set_id ON set_properties(set_id)")
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to create set_properties set_id index: {}", e))?;
 
     Ok(())
 }
@@ -629,14 +705,20 @@ pub async fn set_property_code(
     let name: String = property_row.get("name");
     let city: String = property_row.get("city");
     let status: String = property_row.get("status");
-    let old_code: Option<String> = property_row.get("code");
+    let folder_path: String = property_row.get("folder_path");
 
-    // Calculate old and new folder names
-    let old_folder_name = match &old_code {
-        Some(c) if !c.is_empty() => format!("{} ({})", name, c),
-        _ => name.clone(),
-    };
-    let new_folder_name = format!("{} ({})", name, code);
+    // Extract the actual folder name from the stored folder_path (format: "city/folder_name")
+    // This ensures we use the real folder name on disk, not a reconstructed one
+    let old_folder_name = folder_path
+        .split('/')
+        .last()
+        .unwrap_or(&name)
+        .to_string();
+
+    // For folder names, replace "/" with "-" since "/" is not allowed in folder names
+    // This allows codes like "204905/44538" to be saved as "204905-44538" in the folder name
+    let folder_safe_code = code.replace('/', "-");
+    let new_folder_name = format!("{} ({})", name, folder_safe_code);
 
     // Calculate new folder path (relative) for database storage
     let new_folder_path = format!("{}/{}", city, new_folder_name);
@@ -917,6 +999,102 @@ pub async fn scan_and_import_properties(app: tauri::AppHandle) -> Result<Command
         success: true,
         error: None,
         data: Some(serde_json::to_value(scan_result).map_err(|e| e.to_string())?),
+    })
+}
+
+/// Repair result structure
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairResult {
+    pub properties_checked: usize,
+    pub properties_fixed: usize,
+    pub errors: Vec<String>,
+}
+
+/// Repair property statuses by checking actual folder locations
+/// This fixes properties where the database status doesn't match where the folder actually exists
+#[tauri::command]
+pub async fn repair_property_statuses(app: tauri::AppHandle) -> Result<CommandResult, String> {
+    let pool = get_database_pool(&app)?;
+
+    let config = crate::config::load_config(app.clone())
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("App configuration not found")?;
+
+    let mut result = RepairResult {
+        properties_checked: 0,
+        properties_fixed: 0,
+        errors: Vec::new(),
+    };
+
+    // Get all properties from database
+    let properties: Vec<(i64, String, String, String)> = sqlx::query_as(
+        "SELECT id, folder_path, status, name FROM properties"
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch properties: {}", e))?;
+
+    // Get base paths for all statuses
+    let status_paths = [
+        ("NEW", get_base_path_for_status(&config, "NEW").ok()),
+        ("DONE", get_base_path_for_status(&config, "DONE").ok()),
+        ("NOT_FOUND", get_base_path_for_status(&config, "NOT_FOUND").ok()),
+        ("ARCHIVE", get_base_path_for_status(&config, "ARCHIVE").ok()),
+    ];
+
+    for (id, folder_path, db_status, name) in properties {
+        result.properties_checked += 1;
+
+        // Find where the folder actually exists
+        let mut actual_status: Option<&str> = None;
+        for (status, base_path_opt) in &status_paths {
+            if let Some(base_path) = base_path_opt {
+                let full_path = base_path.join(&folder_path);
+                if full_path.exists() {
+                    actual_status = Some(status);
+                    break;
+                }
+            }
+        }
+
+        // If folder found in different location than database says, update database
+        if let Some(found_status) = actual_status {
+            if found_status != db_status {
+                let now_ts = chrono::Utc::now().timestamp_millis();
+                match sqlx::query("UPDATE properties SET status = ?, updated_at = ? WHERE id = ?")
+                    .bind(found_status)
+                    .bind(now_ts)
+                    .bind(id)
+                    .execute(pool)
+                    .await
+                {
+                    Ok(_) => {
+                        result.properties_fixed += 1;
+                    }
+                    Err(e) => {
+                        result.errors.push(format!(
+                            "Failed to update status for '{}': {}",
+                            name, e
+                        ));
+                    }
+                }
+            }
+        } else {
+            // Folder not found in any location - this is a warning but not necessarily an error
+            // The property might have been manually deleted from the filesystem
+            result.errors.push(format!(
+                "Property '{}' folder not found in any configured location",
+                name
+            ));
+        }
+    }
+
+    Ok(CommandResult {
+        success: true,
+        error: None,
+        data: Some(serde_json::to_value(result).map_err(|e| e.to_string())?),
     })
 }
 
@@ -2960,44 +3138,55 @@ pub async fn fill_aggelia_to_25(
     }
 
     let images_to_add = 25 - current_count;
+
+    // Process images in parallel using rayon
+    use rayon::prelude::*;
+
+    let results: Vec<Result<String, String>> = (0..images_to_add)
+        .into_par_iter()
+        .map(|i| {
+            // Cycle through existing images
+            let source_filename = &existing_images[i % current_count];
+            let source_path = internet_aggelia_path.join(source_filename);
+
+            // Get the extension from source
+            let ext = source_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("jpg")
+                .to_lowercase();
+
+            // New filename with next sequential number
+            let new_number = max_number + (i as u32) + 1;
+            let new_filename = format!("{:02}.{}", new_number, ext);
+
+            let dest_internet_path = internet_aggelia_path.join(&new_filename);
+            let dest_watermark_path = watermark_aggelia_path.join(&new_filename);
+
+            // Process for INTERNET/AGGELIA
+            match crop_and_save_image(&source_path, &dest_internet_path) {
+                Ok(()) => {
+                    // Also create cropped version for WATERMARK/AGGELIA if source exists there
+                    let watermark_source = watermark_aggelia_path.join(source_filename);
+                    if watermark_source.exists() {
+                        if let Err(e) = crop_and_save_image(&watermark_source, &dest_watermark_path) {
+                            return Err(format!("Failed to create watermark copy for {}: {}", new_filename, e));
+                        }
+                    }
+                    Ok(new_filename)
+                }
+                Err(e) => Err(format!("Failed to create {}: {}", new_filename, e)),
+            }
+        })
+        .collect();
+
+    // Aggregate results
     let mut added_count = 0;
     let mut errors: Vec<String> = Vec::new();
-
-    for i in 0..images_to_add {
-        // Cycle through existing images
-        let source_filename = &existing_images[i % current_count];
-        let source_path = internet_aggelia_path.join(source_filename);
-
-        // Get the extension from source
-        let ext = source_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("jpg")
-            .to_lowercase();
-
-        // New filename with next sequential number
-        let new_number = max_number + (i as u32) + 1;
-        let new_filename = format!("{:02}.{}", new_number, ext);
-
-        let dest_internet_path = internet_aggelia_path.join(&new_filename);
-        let dest_watermark_path = watermark_aggelia_path.join(&new_filename);
-
-        // Process for INTERNET/AGGELIA
-        match crop_and_save_image(&source_path, &dest_internet_path) {
-            Ok(_) => {
-                added_count += 1;
-
-                // Also create cropped version for WATERMARK/AGGELIA if source exists there
-                let watermark_source = watermark_aggelia_path.join(source_filename);
-                if watermark_source.exists() {
-                    if let Err(e) = crop_and_save_image(&watermark_source, &dest_watermark_path) {
-                        errors.push(format!("Failed to create watermark copy for {}: {}", new_filename, e));
-                    }
-                }
-            }
-            Err(e) => {
-                errors.push(format!("Failed to create {}: {}", new_filename, e));
-            }
+    for result in results {
+        match result {
+            Ok(_) => added_count += 1,
+            Err(e) => errors.push(e),
         }
     }
 
@@ -3071,4 +3260,423 @@ fn crop_and_save_image(source_path: &PathBuf, dest_path: &PathBuf) -> Result<(),
     }
 
     Ok(())
+}
+
+// ============================================================================
+// Sets Commands
+// ============================================================================
+
+/// Helper function to recursively add a directory to a ZIP file
+fn add_directory_to_zip<W: std::io::Write + std::io::Seek>(
+    zip: &mut zip::ZipWriter<W>,
+    dir_path: &std::path::Path,
+    base_path: &std::path::Path,
+    options: zip::write::SimpleFileOptions,
+) -> Result<(), String> {
+    use walkdir::WalkDir;
+
+    for entry in WalkDir::new(dir_path) {
+        let entry = entry.map_err(|e| format!("Failed to walk directory: {}", e))?;
+        let path = entry.path();
+
+        // Calculate relative path from the base
+        let relative_path = path
+            .strip_prefix(base_path)
+            .map_err(|e| format!("Failed to strip prefix: {}", e))?;
+
+        let relative_path_str = relative_path
+            .to_str()
+            .ok_or("Invalid path encoding")?
+            .replace('\\', "/"); // Ensure forward slashes in ZIP
+
+        if path.is_dir() {
+            // Add directory entry (with trailing slash)
+            if !relative_path_str.is_empty() {
+                let dir_name = format!("{}/", relative_path_str);
+                zip.add_directory(&dir_name, options)
+                    .map_err(|e| format!("Failed to add directory to ZIP: {}", e))?;
+            }
+        } else {
+            // Add file
+            zip.start_file(&relative_path_str, options)
+                .map_err(|e| format!("Failed to start file in ZIP: {}", e))?;
+
+            let file_content = std::fs::read(path)
+                .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
+
+            use std::io::Write;
+            zip.write_all(&file_content)
+                .map_err(|e| format!("Failed to write file to ZIP: {}", e))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Complete a set: ZIP all DONE properties with codes, move to ARCHIVE,
+/// move properties without codes to NOT_FOUND
+#[tauri::command]
+pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, String> {
+    let pool = get_database_pool(&app)?;
+
+    // Load config
+    let config = crate::config::load_config(app.clone())
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("App configuration not found")?;
+
+    // Validate sets folder path is configured
+    if config.sets_folder_path.is_empty() {
+        return Err("Sets folder path is not configured. Please configure it in Settings.".to_string());
+    }
+
+    let sets_folder = PathBuf::from(&config.sets_folder_path);
+    if !sets_folder.exists() {
+        std::fs::create_dir_all(&sets_folder)
+            .map_err(|e| format!("Failed to create sets folder: {}", e))?;
+    }
+
+    // Get all DONE properties
+    let done_properties: Vec<Property> = sqlx::query_as::<_, (
+        i64,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        i64,
+        i64,
+    )>(
+        "SELECT id, name, city, status, folder_path, notes, code, created_at, updated_at
+         FROM properties WHERE status = 'DONE'"
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch DONE properties: {}", e))?
+    .into_iter()
+    .map(|(id, name, city, status, folder_path, notes, code, created_at, updated_at)| Property {
+        id: Some(id),
+        name,
+        city,
+        status,
+        folder_path,
+        notes,
+        code,
+        created_at: chrono::DateTime::from_timestamp_millis(created_at)
+            .unwrap_or_else(chrono::Utc::now),
+        updated_at: chrono::DateTime::from_timestamp_millis(updated_at)
+            .unwrap_or_else(chrono::Utc::now),
+        completed: None,
+    })
+    .collect();
+
+    // Separate properties by whether they have a code
+    let (with_code, without_code): (Vec<_>, Vec<_>) = done_properties
+        .into_iter()
+        .partition(|p| p.code.as_ref().is_some_and(|c| !c.is_empty()));
+
+    if with_code.is_empty() {
+        return Err("No DONE properties with codes found to create a set.".to_string());
+    }
+
+    // Create ZIP file
+    let now = chrono::Local::now();
+    let set_name = format!("Done - {}", now.format("%Y-%m-%d %H-%M-%S"));
+    let zip_filename = format!("{}.zip", set_name);
+    let zip_path = sets_folder.join(&zip_filename);
+
+    let file = std::fs::File::create(&zip_path)
+        .map_err(|e| format!("Failed to create ZIP file: {}", e))?;
+
+    let mut zip = zip::ZipWriter::new(file);
+    // Use Stored (no compression) instead of Deflated for speed
+    // Photos are already compressed (JPEG/PNG), so deflate provides minimal benefit
+    // but takes much longer. Stored mode is ~10x faster with minimal size increase.
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored);
+
+    // Add each property to the ZIP
+    let done_base_path = get_base_path_for_status(&config, "DONE")?;
+    for property in &with_code {
+        // Use folder_path which contains the actual folder name (including code suffix)
+        let property_path = done_base_path.join(&property.folder_path);
+
+        if property_path.exists() {
+            // The ZIP will have structure: City/PropertyName/...
+            // We need to create the City folder in the ZIP
+            let city_folder = format!("{}/", property.city);
+            let _ = zip.add_directory(&city_folder, options); // Ignore if already exists
+
+            // Add the property folder with its contents
+            add_directory_to_zip(
+                &mut zip,
+                &property_path,
+                &done_base_path,
+                options,
+            )?;
+        }
+    }
+
+    zip.finish()
+        .map_err(|e| format!("Failed to finish ZIP file: {}", e))?;
+
+    // Insert set record into database
+    let now_timestamp = chrono::Utc::now().timestamp_millis();
+    let zip_path_str = zip_path.to_string_lossy().to_string();
+
+    let set_id = sqlx::query(
+        "INSERT INTO sets (name, zip_path, property_count, created_at) VALUES (?, ?, ?, ?)"
+    )
+    .bind(&set_name)
+    .bind(&zip_path_str)
+    .bind(with_code.len() as i64)
+    .bind(now_timestamp)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to insert set record: {}", e))?
+    .last_insert_rowid();
+
+    // Insert set_properties records
+    for property in &with_code {
+        sqlx::query(
+            "INSERT INTO set_properties (set_id, property_id, property_name, property_city, property_code)
+             VALUES (?, ?, ?, ?, ?)"
+        )
+        .bind(set_id)
+        .bind(property.id)
+        .bind(&property.name)
+        .bind(&property.city)
+        .bind(&property.code)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to insert set_property record: {}", e))?;
+    }
+
+    // Move properties with code to ARCHIVE
+    let archive_base_path = get_base_path_for_status(&config, "ARCHIVE")?;
+    let properties_archived = with_code.len();
+    for property in &with_code {
+        if let Some(property_id) = property.id {
+            // Update status in database
+            let now_ts = chrono::Utc::now().timestamp_millis();
+            sqlx::query("UPDATE properties SET status = 'ARCHIVE', updated_at = ? WHERE id = ?")
+                .bind(now_ts)
+                .bind(property_id)
+                .execute(pool)
+                .await
+                .map_err(|e| format!("Failed to update property status: {}", e))?;
+
+            // Move folder - use folder_path which has the actual folder name
+            let old_path = done_base_path.join(&property.folder_path);
+            let new_path = archive_base_path.join(&property.folder_path);
+
+            if old_path.exists() && old_path != new_path {
+                if let Some(parent) = new_path.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("Failed to create parent directory: {}", e))?;
+                }
+                std::fs::rename(&old_path, &new_path)
+                    .map_err(|e| format!("Failed to move folder to archive: {}", e))?;
+            }
+        }
+    }
+
+    // Move properties without code to NOT_FOUND
+    let not_found_base_path = get_base_path_for_status(&config, "NOT_FOUND")?;
+    let properties_moved_to_not_found = without_code.len();
+    for property in &without_code {
+        if let Some(property_id) = property.id {
+            // Update status in database
+            let now_ts = chrono::Utc::now().timestamp_millis();
+            sqlx::query("UPDATE properties SET status = 'NOT_FOUND', updated_at = ? WHERE id = ?")
+                .bind(now_ts)
+                .bind(property_id)
+                .execute(pool)
+                .await
+                .map_err(|e| format!("Failed to update property status: {}", e))?;
+
+            // Move folder - use folder_path which has the actual folder name
+            let old_path = done_base_path.join(&property.folder_path);
+            let new_path = not_found_base_path.join(&property.folder_path);
+
+            if old_path.exists() && old_path != new_path {
+                if let Some(parent) = new_path.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("Failed to create parent directory: {}", e))?;
+                }
+                std::fs::rename(&old_path, &new_path)
+                    .map_err(|e| format!("Failed to move folder to not found: {}", e))?;
+            }
+        }
+    }
+
+    Ok(CompleteSetResult {
+        set_id,
+        set_name,
+        zip_path: zip_path_str,
+        properties_archived,
+        properties_moved_to_not_found,
+    })
+}
+
+/// Get all sets
+#[tauri::command]
+pub async fn get_sets(app: tauri::AppHandle) -> Result<CommandResult, String> {
+    let pool = get_database_pool(&app)?;
+
+    let sets: Vec<Set> = sqlx::query_as::<_, (i64, String, String, i64, i64)>(
+        "SELECT id, name, zip_path, property_count, created_at FROM sets ORDER BY created_at DESC"
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch sets: {}", e))?
+    .into_iter()
+    .map(|(id, name, zip_path, property_count, created_at)| Set {
+        id: Some(id),
+        name,
+        zip_path,
+        property_count,
+        created_at: chrono::DateTime::from_timestamp_millis(created_at)
+            .unwrap_or_else(chrono::Utc::now),
+    })
+    .collect();
+
+    Ok(CommandResult {
+        success: true,
+        error: None,
+        data: Some(serde_json::to_value(sets).map_err(|e| e.to_string())?),
+    })
+}
+
+/// Get properties that were included in a specific set
+#[tauri::command]
+pub async fn get_set_properties(
+    app: tauri::AppHandle,
+    set_id: i64,
+) -> Result<CommandResult, String> {
+    let pool = get_database_pool(&app)?;
+
+    let set_properties: Vec<SetProperty> = sqlx::query_as::<_, (i64, i64, Option<i64>, String, String, Option<String>)>(
+        "SELECT id, set_id, property_id, property_name, property_city, property_code
+         FROM set_properties WHERE set_id = ?"
+    )
+    .bind(set_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch set properties: {}", e))?
+    .into_iter()
+    .map(|(id, set_id, property_id, property_name, property_city, property_code)| SetProperty {
+        id: Some(id),
+        set_id,
+        property_id,
+        property_name,
+        property_city,
+        property_code,
+    })
+    .collect();
+
+    Ok(CommandResult {
+        success: true,
+        error: None,
+        data: Some(serde_json::to_value(set_properties).map_err(|e| e.to_string())?),
+    })
+}
+
+/// Open the sets folder in file explorer
+#[tauri::command]
+pub async fn open_sets_folder(app: tauri::AppHandle) -> Result<CommandResult, String> {
+    let config = crate::config::load_config(app.clone())
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("App configuration not found")?;
+
+    if config.sets_folder_path.is_empty() {
+        return Ok(CommandResult {
+            success: false,
+            error: Some("Sets folder path is not configured".to_string()),
+            data: None,
+        });
+    }
+
+    let sets_folder = PathBuf::from(&config.sets_folder_path);
+
+    if !sets_folder.exists() {
+        return Ok(CommandResult {
+            success: false,
+            error: Some("Sets folder does not exist".to_string()),
+            data: None,
+        });
+    }
+
+    match opener::open(&sets_folder) {
+        Ok(()) => Ok(CommandResult {
+            success: true,
+            error: None,
+            data: Some(serde_json::json!({
+                "opened_path": sets_folder.to_string_lossy()
+            })),
+        }),
+        Err(e) => Ok(CommandResult {
+            success: false,
+            error: Some(format!("Failed to open folder: {}", e)),
+            data: None,
+        }),
+    }
+}
+
+/// Delete a set record and optionally the ZIP file
+#[tauri::command]
+pub async fn delete_set(
+    app: tauri::AppHandle,
+    set_id: i64,
+    delete_zip: bool,
+) -> Result<CommandResult, String> {
+    let pool = get_database_pool(&app)?;
+
+    // Get the set info first
+    let set_row = sqlx::query("SELECT zip_path FROM sets WHERE id = ?")
+        .bind(set_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch set: {}", e))?;
+
+    let Some(set_row) = set_row else {
+        return Ok(CommandResult {
+            success: false,
+            error: Some("Set not found".to_string()),
+            data: None,
+        });
+    };
+
+    let zip_path: String = set_row.get("zip_path");
+
+    // Delete the ZIP file if requested
+    if delete_zip {
+        let zip_file = PathBuf::from(&zip_path);
+        if zip_file.exists() {
+            std::fs::remove_file(&zip_file)
+                .map_err(|e| format!("Failed to delete ZIP file: {}", e))?;
+        }
+    }
+
+    // Delete set_properties records (CASCADE should handle this, but be explicit)
+    sqlx::query("DELETE FROM set_properties WHERE set_id = ?")
+        .bind(set_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to delete set properties: {}", e))?;
+
+    // Delete the set record
+    sqlx::query("DELETE FROM sets WHERE id = ?")
+        .bind(set_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to delete set: {}", e))?;
+
+    Ok(CommandResult {
+        success: true,
+        error: None,
+        data: None,
+    })
 }

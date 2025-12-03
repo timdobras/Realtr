@@ -49,6 +49,9 @@ pub struct AppConfig {
     #[serde(rename = "archiveFolderPath")]
     #[serde(default)]
     pub archive_folder_path: String,
+    #[serde(rename = "setsFolderPath")]
+    #[serde(default)]
+    pub sets_folder_path: String,
     #[serde(rename = "isValidPath")]
     pub is_valid_path: bool,
     #[serde(rename = "lastUpdated")]
@@ -73,6 +76,7 @@ impl Default for AppConfig {
             done_folder_path: String::new(),
             not_found_folder_path: String::new(),
             archive_folder_path: String::new(),
+            sets_folder_path: String::new(),
             is_valid_path: false,
             fast_editor_path: None,
             fast_editor_name: None,

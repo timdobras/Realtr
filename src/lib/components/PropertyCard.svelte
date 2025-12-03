@@ -155,7 +155,9 @@
       </h3>
       <div class="flex items-center gap-2">
         {#if property.code}
-          <span class="bg-accent-100 text-accent-700 rounded px-1.5 py-0.5 text-[10px] font-medium">
+          <span
+            class="bg-accent-100 text-accent-700 max-w-[60px] truncate rounded px-1.5 py-0.5 text-[10px] font-medium"
+          >
             {property.code}
           </span>
         {/if}

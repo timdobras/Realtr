@@ -1,20 +1,30 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { DatabaseService } from '$lib/services/databaseService';
-  import type { Property } from '$lib/types/database';
+  import type { Property, CompleteSetResult } from '$lib/types/database';
   import { formatRelativeTime, isToday, isValidDate } from '$lib/utils/dateUtils';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
   // Reactive state
   let stats = $state({
     totalProperties: 0,
     inProgress: 0,
     completed: 0,
-    todayProcessed: 0
+    todayProcessed: 0,
+    doneWithCode: 0,
+    doneWithoutCode: 0
   });
 
   let recentProperties = $state<Property[]>([]);
   let isLoading = $state(true);
   let error = $state<string>('');
+
+  // Complete Set state
+  let isCompletingSet = $state(false);
+  let showCompleteSetConfirm = $state(false);
+  let completeSetResult = $state<CompleteSetResult | null>(null);
+  let showCompleteSetResult = $state(false);
+  let completeSetError = $state<string>('');
 
   onMount(async () => {
     await loadDashboardData();
@@ -32,6 +42,11 @@
       const completed = properties.filter((p) => p.status === 'DONE' || p.status === 'ARCHIVE');
       const inProgress = properties.filter((p) => p.status === 'NEW' || p.status === 'NOT_FOUND');
 
+      // Calculate DONE properties with and without codes
+      const doneProperties = properties.filter((p) => p.status === 'DONE');
+      const doneWithCode = doneProperties.filter((p) => p.code && p.code.trim() !== '').length;
+      const doneWithoutCode = doneProperties.length - doneWithCode;
+
       // Calculate today's processed (completed today)
       const todayProcessed = completed.filter(
         (p) => isValidDate(p.updated_at) && isToday(p.updated_at)
@@ -41,7 +56,9 @@
         totalProperties: properties.length,
         inProgress: inProgress.length,
         completed: completed.length,
-        todayProcessed
+        todayProcessed,
+        doneWithCode,
+        doneWithoutCode
       };
 
       // Get recent properties (last 5)
@@ -67,6 +84,26 @@
       await loadDashboardData(); // Refresh data
     } catch (err) {
       console.error('Error updating property status:', err);
+    }
+  }
+
+  function promptCompleteSet() {
+    showCompleteSetConfirm = true;
+  }
+
+  async function doCompleteSet() {
+    showCompleteSetConfirm = false;
+    try {
+      isCompletingSet = true;
+      completeSetError = '';
+      completeSetResult = await DatabaseService.completeSet();
+      showCompleteSetResult = true;
+      await loadDashboardData(); // Refresh data
+    } catch (err) {
+      console.error('Error completing set:', err);
+      completeSetError = err instanceof Error ? err.message : String(err);
+    } finally {
+      isCompletingSet = false;
     }
   }
 </script>
@@ -124,6 +161,50 @@
         <p class="text-foreground-900 mt-1 text-2xl font-semibold">{stats.todayProcessed}</p>
       </div>
     </div>
+
+    <!-- Complete Set Action -->
+    {#if stats.doneWithCode > 0 || stats.doneWithoutCode > 0}
+      <div class="bg-background-50 border-background-200 border p-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="text-foreground-900 text-sm font-semibold">Complete Set</h2>
+            <p class="text-foreground-600 mt-0.5 text-xs">
+              {stats.doneWithCode} properties with code will be zipped and archived.
+              {#if stats.doneWithoutCode > 0}
+                {stats.doneWithoutCode} without code will be moved to Not Found.
+              {/if}
+            </p>
+          </div>
+          <button
+            onclick={promptCompleteSet}
+            disabled={isCompletingSet || stats.doneWithCode === 0}
+            class="bg-accent-500 hover:bg-accent-600 flex items-center gap-2 px-4 py-2 text-sm font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {#if isCompletingSet}
+              <div
+                class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
+              ></div>
+              <span>Processing...</span>
+            {:else}
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"
+                />
+              </svg>
+              <span>Complete Set</span>
+            {/if}
+          </button>
+        </div>
+        {#if completeSetError}
+          <div class="mt-3 border border-red-300 bg-red-50 px-3 py-2">
+            <p class="text-sm text-red-800">{completeSetError}</p>
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     <!-- Recent Properties -->
     <div class="bg-background-50 border-background-200 border">
@@ -223,3 +304,85 @@
     </div>
   </div>
 </div>
+
+<!-- Complete Set Confirmation Dialog -->
+<ConfirmDialog
+  bind:open={showCompleteSetConfirm}
+  title="Complete Set"
+  message="This will create a ZIP archive of {stats.doneWithCode} properties with codes and move them to Archive.{stats.doneWithoutCode >
+  0
+    ? ` ${stats.doneWithoutCode} properties without codes will be moved to Not Found.`
+    : ''} Continue?"
+  confirmText="Complete Set"
+  destructive={false}
+  onConfirm={doCompleteSet}
+  onCancel={() => (showCompleteSetConfirm = false)}
+/>
+
+<!-- Complete Set Result Modal -->
+{#if showCompleteSetResult && completeSetResult}
+  <div class="bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center bg-black">
+    <div class="bg-background-50 border-background-200 mx-4 w-full max-w-md border">
+      <div class="border-background-200 flex items-center justify-between border-b p-4">
+        <h3 class="text-foreground-900 text-lg font-semibold">Set Created</h3>
+        <button
+          onclick={() => (showCompleteSetResult = false)}
+          class="text-foreground-400 hover:text-foreground-600 p-1"
+        >
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M6 18L18 6M6 6l12 12"
+            />
+          </svg>
+        </button>
+      </div>
+
+      <div class="space-y-4 p-4">
+        <div class="bg-background-100 rounded p-3">
+          <p class="text-foreground-600 text-xs font-medium uppercase">Set Name</p>
+          <p class="text-foreground-900 mt-1 text-sm font-medium">{completeSetResult.setName}</p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-background-100 rounded p-3 text-center">
+            <p class="text-foreground-900 text-xl font-semibold">
+              {completeSetResult.propertiesArchived}
+            </p>
+            <p class="text-foreground-600 text-xs">Archived</p>
+          </div>
+          <div class="bg-background-100 rounded p-3 text-center">
+            <p class="text-foreground-900 text-xl font-semibold">
+              {completeSetResult.propertiesMovedToNotFound}
+            </p>
+            <p class="text-foreground-600 text-xs">Moved to Not Found</p>
+          </div>
+        </div>
+
+        <div class="bg-background-100 rounded p-3">
+          <p class="text-foreground-600 text-xs font-medium uppercase">ZIP Location</p>
+          <p class="text-foreground-900 mt-1 font-mono text-xs break-all">
+            {completeSetResult.zipPath}
+          </p>
+        </div>
+
+        <div class="flex justify-end gap-2">
+          <a
+            href="/sets"
+            class="bg-background-200 text-foreground-700 hover:bg-background-300 px-4 py-2 text-sm font-medium transition-colors"
+          >
+            View Sets
+          </a>
+          <button
+            onclick={() => (showCompleteSetResult = false)}
+            class="bg-accent-500 hover:bg-accent-600 px-4 py-2 text-sm font-medium text-white transition-colors"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}

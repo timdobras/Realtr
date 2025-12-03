@@ -4,12 +4,16 @@ import type {
   AcceptedCorrection,
   City,
   CommandResult,
+  CompleteSetResult,
   CorrectionResult,
   OpenCVStatus,
   PerspectiveCommandResult,
   Property,
   PropertyStatus,
+  RepairResult,
   ScanResult,
+  Set,
+  SetProperty,
   SetupProgress
 } from '../types/database';
 
@@ -209,5 +213,43 @@ export class DatabaseService {
       folderPath,
       status
     });
+  }
+
+  // Sets Operations
+  static async completeSet(): Promise<CompleteSetResult> {
+    return await invoke<CompleteSetResult>('complete_set');
+  }
+
+  static async getSets(): Promise<Set[]> {
+    const result = await invoke<CommandResult>('get_sets');
+    if (result.success && result.data) {
+      return result.data as Set[];
+    }
+    return [];
+  }
+
+  static async getSetProperties(setId: number): Promise<SetProperty[]> {
+    const result = await invoke<CommandResult>('get_set_properties', { setId });
+    if (result.success && result.data) {
+      return result.data as SetProperty[];
+    }
+    return [];
+  }
+
+  static async openSetsFolder(): Promise<CommandResult> {
+    return await invoke<CommandResult>('open_sets_folder');
+  }
+
+  static async deleteSet(setId: number, deleteZip: boolean = false): Promise<CommandResult> {
+    return await invoke<CommandResult>('delete_set', { setId, deleteZip });
+  }
+
+  // Repair operations
+  static async repairPropertyStatuses(): Promise<RepairResult | null> {
+    const result = await invoke<CommandResult>('repair_property_statuses');
+    if (result.success && result.data) {
+      return result.data as RepairResult;
+    }
+    return null;
   }
 }
