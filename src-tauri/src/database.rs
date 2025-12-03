@@ -178,6 +178,31 @@ async fn get_property_base_path(
     Ok(base_path.join(folder_path))
 }
 
+// Helper to find where a property folder actually exists across all status folders
+// Returns (full_path, actual_status) if found
+fn find_actual_folder_location(
+    config: &crate::config::AppConfig,
+    folder_path: &str,
+) -> Option<(PathBuf, String)> {
+    let status_paths = [
+        (&config.new_folder_path, "NEW"),
+        (&config.done_folder_path, "DONE"),
+        (&config.not_found_folder_path, "NOT_FOUND"),
+        (&config.archive_folder_path, "ARCHIVE"),
+    ];
+
+    for (base_path_str, status) in status_paths {
+        if base_path_str.is_empty() {
+            continue;
+        }
+        let full_path = PathBuf::from(base_path_str).join(folder_path);
+        if full_path.exists() && full_path.is_dir() {
+            return Some((full_path, status.to_string()));
+        }
+    }
+    None
+}
+
 // Database initialization
 pub async fn init_database(app: &tauri::AppHandle) -> Result<SqlitePool, String> {
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -612,9 +637,12 @@ pub async fn update_property_status(
     let current_status: String = property_row.get("status");
     let city: String = property_row.get("city");
     let name: String = property_row.get("name");
+    // Get the actual folder_path from database - this is the real folder name on disk
+    // which may include a code suffix like "PROPERTY NAME (CODE)"
+    let db_folder_path: String = property_row.get("folder_path");
 
-    // folder_path remains relative (city/name), no change needed
-    let folder_path = get_relative_folder_path(&city, &name);
+    // Use the database folder_path for operations, don't reconstruct it
+    let folder_path = db_folder_path;
 
     let result = sqlx::query(
         "UPDATE properties SET status = ?, folder_path = ?, updated_at = ? WHERE id = ?",
@@ -632,24 +660,44 @@ pub async fn update_property_status(
             if current_status != new_status {
                 let config_result = crate::config::load_config(app.clone()).await;
                 if let Ok(Some(config)) = config_result {
-                    match (
-                        construct_property_path_from_parts(&config, &current_status, &city, &name),
-                        construct_property_path_from_parts(&config, &new_status, &city, &name),
-                    ) {
-                        (Ok(old_path), Ok(new_path)) => {
-                            if old_path.exists() && old_path != new_path {
-                                // Create parent directory for new path
-                                if let Some(parent) = new_path.parent() {
-                                    std::fs::create_dir_all(parent).map_err(|e| {
-                                        format!("Failed to create parent directory: {}", e)
-                                    })?;
+                    // Get base paths using actual folder_path from database
+                    let new_base = get_base_path_for_status(&config, &new_status);
+                    let old_base = get_base_path_for_status(&config, &current_status);
+
+                    match new_base {
+                        Ok(new_base_path) => {
+                            let new_path = new_base_path.join(&folder_path);
+
+                            // First try the expected location based on current_status
+                            let expected_old_path = old_base.ok().map(|b| b.join(&folder_path));
+
+                            // Find actual folder location - check expected location first, then search all
+                            let actual_old_path = match expected_old_path {
+                                Some(ref path) if path.exists() => Some(path.clone()),
+                                _ => {
+                                    // Folder not at expected location, search all status folders
+                                    find_actual_folder_location(&config, &folder_path)
+                                        .map(|(path, _)| path)
                                 }
-                                // Move the folder
-                                std::fs::rename(&old_path, &new_path)
-                                    .map_err(|e| format!("Failed to move folder: {}", e))?;
+                            };
+
+                            if let Some(old_path) = actual_old_path {
+                                if old_path != new_path {
+                                    // Create parent directory for new path
+                                    if let Some(parent) = new_path.parent() {
+                                        std::fs::create_dir_all(parent).map_err(|e| {
+                                            format!("Failed to create parent directory: {}", e)
+                                        })?;
+                                    }
+                                    // Move the folder
+                                    std::fs::rename(&old_path, &new_path)
+                                        .map_err(|e| format!("Failed to move folder: {}", e))?;
+                                }
                             }
+                            // If folder not found anywhere, just update status without moving
+                            // (folder might have been manually deleted)
                         }
-                        (Err(e), _) | (_, Err(e)) => {
+                        Err(e) => {
                             return Ok(CommandResult {
                                 success: false,
                                 error: Some(format!("Failed to get property path: {}", e)),
@@ -1460,9 +1508,17 @@ pub async fn list_original_images(
     // Get base path for the property's status
     let base_path = get_base_path_for_status(&config, &status)?;
     let full_path = base_path.join(&folder_path);
-    if !full_path.exists() || !full_path.is_dir() {
-        return Err(format!("Folder not found: {}", full_path.display()));
-    }
+
+    // If not found at expected location, try to find it in other status folders
+    let full_path = if full_path.exists() && full_path.is_dir() {
+        full_path
+    } else {
+        // Fallback: search all status folders for the actual folder location
+        match find_actual_folder_location(&config, &folder_path) {
+            Some((found_path, _actual_status)) => found_path,
+            None => return Err(format!("Folder not found: {}", full_path.display())),
+        }
+    };
 
     let mut images = Vec::new();
 
@@ -1841,6 +1897,212 @@ pub async fn get_thumbnail_as_base64(
 
     let base64_string = general_purpose::STANDARD.encode(&image_bytes);
     Ok(base64_string)
+}
+
+/// Get a gallery-sized thumbnail for workflow step displays.
+/// This is larger than the property list thumbnails (400px vs 100px)
+/// and supports different subfolders (INTERNET, AGGELIA, WATERMARK, etc.)
+#[tauri::command]
+pub async fn get_gallery_thumbnail_as_base64(
+    app: tauri::AppHandle,
+    folder_path: String,
+    status: String,
+    subfolder: String,
+    filename: String,
+    max_dimension: Option<u32>,
+) -> Result<String, String> {
+    let max_size = max_dimension.unwrap_or(400);
+
+    // Get app data directory for gallery thumbnails
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+
+    // Use separate directory for gallery thumbnails with size in path
+    let thumbnails_base = app_data_dir.join("thumbnails").join(format!("gallery_{}", max_size));
+    let safe_folder_name = folder_path.replace('/', "_").replace('\\', "_");
+    let safe_subfolder = if subfolder.is_empty() {
+        "root".to_string()
+    } else {
+        subfolder.replace('/', "_").replace('\\', "_")
+    };
+    let thumbnails_dir = thumbnails_base.join(&safe_folder_name).join(&safe_subfolder);
+    let thumbnail_path = thumbnails_dir.join(&filename).with_extension("jpg");
+
+    // If thumbnail doesn't exist, generate it on-demand
+    if !thumbnail_path.exists() {
+        // Create thumbnails directory if it doesn't exist
+        fs::create_dir_all(&thumbnails_dir)
+            .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
+
+        // Get the original image path
+        let property_path = get_property_base_path(&app, &folder_path, &status).await?;
+        let source_dir = if subfolder.is_empty() {
+            property_path
+        } else {
+            property_path.join(&subfolder)
+        };
+        let source_path = source_dir.join(&filename);
+
+        if !source_path.exists() {
+            return Err(format!("Source image not found: {}", source_path.display()));
+        }
+
+        // Generate thumbnail
+        generate_thumbnail(&source_path, &thumbnail_path, max_size)
+            .map_err(|e| format!("Failed to generate gallery thumbnail: {}", e))?;
+    }
+
+    let image_bytes = fs::read(&thumbnail_path)
+        .map_err(|e| format!("Failed to read gallery thumbnail file: {}", e))?;
+
+    let base64_string = general_purpose::STANDARD.encode(&image_bytes);
+    Ok(base64_string)
+}
+
+/// Pre-generate gallery thumbnails for all images in a subfolder.
+/// This runs in parallel for faster generation.
+#[tauri::command]
+pub async fn pregenerate_gallery_thumbnails(
+    app: tauri::AppHandle,
+    folder_path: String,
+    status: String,
+    subfolder: String,
+    max_dimension: Option<u32>,
+) -> Result<CommandResult, String> {
+    use std::sync::Arc;
+    use std::thread;
+
+    let max_size = max_dimension.unwrap_or(400);
+
+    // Get app data directory for gallery thumbnails
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+
+    // Get the source directory
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
+    let source_dir = if subfolder.is_empty() {
+        property_path.clone()
+    } else {
+        property_path.join(&subfolder)
+    };
+
+    if !source_dir.exists() {
+        return Ok(CommandResult {
+            success: true,
+            error: None,
+            data: Some(serde_json::json!({"generated": 0, "cached": 0})),
+        });
+    }
+
+    // Get list of image files
+    let supported_extensions = ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"];
+    let mut filenames: Vec<String> = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(&source_dir) {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if let Some(ext) = path.extension() {
+                if supported_extensions.contains(&ext.to_string_lossy().to_lowercase().as_str()) {
+                    if let Some(name) = path.file_name() {
+                        filenames.push(name.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    if filenames.is_empty() {
+        return Ok(CommandResult {
+            success: true,
+            error: None,
+            data: Some(serde_json::json!({"generated": 0, "cached": 0})),
+        });
+    }
+
+    // Setup thumbnail directory
+    let thumbnails_base = app_data_dir.join("thumbnails").join(format!("gallery_{}", max_size));
+    let safe_folder_name = folder_path.replace('/', "_").replace('\\', "_");
+    let safe_subfolder = if subfolder.is_empty() {
+        "root".to_string()
+    } else {
+        subfolder.replace('/', "_").replace('\\', "_")
+    };
+    let thumbnails_dir = thumbnails_base.join(&safe_folder_name).join(&safe_subfolder);
+    fs::create_dir_all(&thumbnails_dir)
+        .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
+
+    // Filter to only files that need generation
+    let mut to_generate: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut cached_count = 0;
+
+    for filename in &filenames {
+        let thumbnail_path = thumbnails_dir.join(filename).with_extension("jpg");
+        if thumbnail_path.exists() {
+            cached_count += 1;
+        } else {
+            let source_path = source_dir.join(filename);
+            if source_path.exists() {
+                to_generate.push((source_path, thumbnail_path));
+            }
+        }
+    }
+
+    if to_generate.is_empty() {
+        return Ok(CommandResult {
+            success: true,
+            error: None,
+            data: Some(serde_json::json!({"generated": 0, "cached": cached_count})),
+        });
+    }
+
+    // Generate thumbnails in parallel using threads
+    let to_generate = Arc::new(to_generate);
+    let num_threads = std::cmp::min(8, to_generate.len()); // Max 8 threads
+    let chunk_size = (to_generate.len() + num_threads - 1) / num_threads;
+
+    let mut handles = Vec::new();
+
+    for i in 0..num_threads {
+        let to_generate = Arc::clone(&to_generate);
+        let start = i * chunk_size;
+        let end = std::cmp::min(start + chunk_size, to_generate.len());
+
+        if start >= end {
+            break;
+        }
+
+        let handle = thread::spawn(move || {
+            let mut generated = 0;
+            for j in start..end {
+                let (source_path, thumbnail_path) = &to_generate[j];
+                if generate_thumbnail(source_path, thumbnail_path, max_size).is_ok() {
+                    generated += 1;
+                }
+            }
+            generated
+        });
+        handles.push(handle);
+    }
+
+    // Wait for all threads and sum results
+    let generated_count: usize = handles
+        .into_iter()
+        .filter_map(|h| h.join().ok())
+        .sum();
+
+    Ok(CommandResult {
+        success: true,
+        error: None,
+        data: Some(serde_json::json!({
+            "generated": generated_count,
+            "cached": cached_count,
+            "total": filenames.len()
+        })),
+    })
 }
 
 #[tauri::command]
