@@ -10,6 +10,7 @@
     class?: string;
     maxDimension?: number;
     onclick?: () => void;
+    refreshKey?: number; // Increment to force reload
   }
 
   let {
@@ -20,7 +21,8 @@
     alt = '',
     class: className = '',
     maxDimension = 400,
-    onclick
+    onclick,
+    refreshKey = 0
   }: Props = $props();
 
   let containerRef: HTMLDivElement | null = $state(null);
@@ -28,6 +30,18 @@
   let loading = $state(false);
   let error = $state(false);
   let hasBeenVisible = $state(false);
+  let lastRefreshKey = $state(refreshKey);
+
+  // Watch for refreshKey changes to force reload
+  $effect(() => {
+    if (refreshKey !== lastRefreshKey && hasBeenVisible) {
+      lastRefreshKey = refreshKey;
+      // Clear current image and reload
+      dataUrl = null;
+      error = false;
+      loadImage();
+    }
+  });
 
   // Intersection Observer to detect when image enters viewport
   $effect(() => {
@@ -91,6 +105,13 @@
     };
     return mimeTypes[ext.toLowerCase()] || 'image/jpeg';
   }
+
+  function retryLoad(e: MouseEvent) {
+    e.stopPropagation(); // Don't trigger parent onclick
+    error = false;
+    dataUrl = null;
+    loadImage();
+  }
 </script>
 
 <div
@@ -107,12 +128,18 @@
       <div class="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground/20 border-t-muted-foreground"></div>
     </div>
   {:else if error}
-    <!-- Error state -->
+    <!-- Error state with retry button -->
     <div class="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">
-      <svg class="h-8 w-8 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg class="h-6 w-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
       </svg>
-      <span class="text-xs">Failed</span>
+      <span class="text-xs mb-1">Failed to load</span>
+      <button
+        onclick={retryLoad}
+        class="text-xs px-2 py-0.5 bg-background-200 hover:bg-background-300 rounded transition-colors"
+      >
+        Retry
+      </button>
     </div>
   {:else if dataUrl}
     <!-- Loaded image -->

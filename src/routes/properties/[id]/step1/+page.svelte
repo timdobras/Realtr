@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { invoke } from '@tauri-apps/api/core';
   import { DatabaseService } from '$lib/services/databaseService';
@@ -18,11 +18,19 @@
   let copyingImages = $state(false);
   let copyProgress = $state({ current: 0, total: 0 });
   let showClearConfirm = $state(false);
+  let imageRefreshKey = $state(0); // Increment to force image refresh
 
   // Get the id from the URL params
   let propertyId = $derived(Number($page.params.id));
 
+  // Refresh images when window regains focus (user returns from external editor)
+  function handleWindowFocus() {
+    imageRefreshKey++;
+  }
+
   onMount(async () => {
+    // Listen for window focus to refresh images
+    window.addEventListener('focus', handleWindowFocus);
     if (isNaN(propertyId) || propertyId < 1) {
       error = 'Invalid property ID';
       loading = false;
@@ -44,6 +52,10 @@
     } finally {
       loading = false;
     }
+  });
+
+  onDestroy(() => {
+    window.removeEventListener('focus', handleWindowFocus);
   });
 
   async function loadImages() {
@@ -395,6 +407,7 @@
               alt={filename}
               class="aspect-square cursor-pointer border border-background-200 hover:border-background-300 transition-colors"
               onclick={() => openImageInEditor(filename, true)}
+              refreshKey={imageRefreshKey}
             />
           {/each}
         </div>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { beforeNavigate } from '$app/navigation';
   import { invoke } from '@tauri-apps/api/core';
@@ -28,6 +28,7 @@
   let dragDisabled = $state(false);
   let isDragging = $state(false); // Track drag state
   let showPerspectiveModal = $state(false);
+  let imageRefreshKey = $state(0); // Increment to force image refresh
 
   // Track unsaved reorder changes
   let originalOrder: string[] = $state([]);
@@ -37,6 +38,11 @@
 
   // Get the id from the URL params
   let propertyId = $derived(Number($page.params.id));
+
+  // Refresh images when window regains focus (user returns from external editor)
+  function handleWindowFocus() {
+    imageRefreshKey++;
+  }
 
   // Check if current order differs from original
   function checkForChanges() {
@@ -59,6 +65,9 @@
   });
 
   onMount(async () => {
+    // Listen for window focus to refresh images
+    window.addEventListener('focus', handleWindowFocus);
+
     if (!propertyId) {
       error = 'Invalid property ID';
       loading = false;
@@ -80,6 +89,10 @@
     } finally {
       loading = false;
     }
+  });
+
+  onDestroy(() => {
+    window.removeEventListener('focus', handleWindowFocus);
   });
 
   async function loadInternetImages() {
@@ -488,6 +501,7 @@
                     alt={image.filename}
                     class="aspect-square w-full cursor-pointer"
                     onclick={() => !isDragging && openImageInEditor(image.filename, { preventDefault: () => {} })}
+                    refreshKey={imageRefreshKey}
                   />
 
                   <!-- Order Badge -->

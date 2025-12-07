@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { invoke } from '@tauri-apps/api/core';
@@ -27,9 +27,15 @@
   let showWatermarkConfirm = $state(false);
   let showClearConfirm = $state(false);
   let fillingTo25 = $state(false);
+  let imageRefreshKey = $state(0); // Increment to force image refresh
 
   // Get the id from the URL params
   let propertyId = $derived(Number($page.params.id));
+
+  // Refresh images when window regains focus (user returns from external editor)
+  function handleWindowFocus() {
+    imageRefreshKey++;
+  }
 
   // Helper function for numeric filename sorting
   function sortImagesByNumericFilename(filenames: string[]): string[] {
@@ -51,6 +57,9 @@
   }
 
   onMount(async () => {
+    // Listen for window focus to refresh images
+    window.addEventListener('focus', handleWindowFocus);
+
     if (!propertyId) {
       error = 'Invalid property ID';
       loading = false;
@@ -73,6 +82,10 @@
     } finally {
       loading = false;
     }
+  });
+
+  onDestroy(() => {
+    window.removeEventListener('focus', handleWindowFocus);
   });
 
   async function loadWatermarkConfig() {
@@ -561,6 +574,7 @@
                   {filename}
                   alt={filename}
                   class="h-full w-full"
+                  refreshKey={imageRefreshKey}
                 />
 
                 <!-- Filename on hover -->
@@ -610,6 +624,7 @@
                   {filename}
                   alt={filename}
                   class="h-full w-full"
+                  refreshKey={imageRefreshKey}
                 />
 
                 <!-- Filename on hover -->
