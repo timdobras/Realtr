@@ -107,14 +107,30 @@
       if (Array.isArray(response)) {
         // Sort filenames numerically before processing
         const sortedFilenames = response.sort((a: string, b: string) => {
-          // Extract numeric part from filename
+          // Extract numeric part from filename - try start first, then anywhere
           const getNumericValue = (filename: string): number => {
-            const match = filename.match(/^(\d+)/);
-            return match ? parseInt(match[1]) : Infinity;
+            // First try to match number at start (e.g., "1.jpg", "02.jpg")
+            const startMatch = filename.match(/^(\d+)/);
+            if (startMatch) return parseInt(startMatch[1]);
+
+            // Then try to match number after underscore or at end (e.g., "house_1.jpg")
+            const underscoreMatch = filename.match(/_(\d+)\./);
+            if (underscoreMatch) return parseInt(underscoreMatch[1]);
+
+            // Finally try any number in filename
+            const anyMatch = filename.match(/(\d+)/);
+            if (anyMatch) return parseInt(anyMatch[1]);
+
+            return Infinity;
           };
 
           const numA = getNumericValue(a);
           const numB = getNumericValue(b);
+
+          // If both have same numeric value (or both Infinity), sort alphabetically
+          if (numA === numB) {
+            return a.localeCompare(b);
+          }
 
           return numA - numB;
         });
