@@ -6,12 +6,11 @@
   import { onMount } from 'svelte';
   import { showSuccess, showError } from '$lib/stores/notification';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import LazyImage from '$lib/components/LazyImage.svelte';
   export const prerender = false;
 
   interface ImageItem {
     filename: string;
-    dataUrl: string;
-    loading: boolean;
     selected: boolean;
     inAggelia: boolean;
   }
@@ -57,9 +56,20 @@
     try {
       await loadInternetImages();
       await loadAggeliaImages();
+
+      // Pre-generate thumbnails in parallel for faster display
+      pregenerateThumbnails();
     } catch (e) {
       error = `Failed to load images: ${e}`;
     }
+  }
+
+  // Pre-generate thumbnails in background (don't await - fire and forget)
+  function pregenerateThumbnails() {
+    if (!property) return;
+    // Pre-generate both INTERNET and AGGELIA folder thumbnails
+    DatabaseService.pregenerateGalleryThumbnails(property.folder_path, property.status, 'INTERNET');
+    DatabaseService.pregenerateGalleryThumbnails(property.folder_path, property.status, 'INTERNET/AGGELIA');
   }
 
   // Helper function for numeric filename sorting
@@ -93,14 +103,6 @@
       // Sort filenames numerically
       const sortedFilenames = sortImagesByNumericFilename(response);
 
-      internetImages = sortedFilenames.map((filename) => ({
-        filename,
-        dataUrl: '',
-        loading: true,
-        selected: false,
-        inAggelia: false
-      }));
-
       // Check which images are already in AGGELIA
       const aggeliaFileList = await invoke('list_aggelia_images', {
         folderPath: property.folder_path,
@@ -109,31 +111,12 @@
 
       const aggeliaFiles = Array.isArray(aggeliaFileList) ? aggeliaFileList : [];
 
-      // Load thumbnails and mark AGGELIA status
-      for (let i = 0; i < internetImages.length; i++) {
-        const image = internetImages[i];
-
-        image.inAggelia = aggeliaFiles.includes(image.filename);
-
-        try {
-          const base64Data = await invoke('get_internet_image_as_base64', {
-            folderPath: property.folder_path,
-            status: property.status,
-            filename: image.filename
-          });
-
-          const ext = image.filename.split('.').pop()?.toLowerCase() || '';
-          const mimeType = getMimeType(ext);
-
-          internetImages[i] = {
-            ...image,
-            dataUrl: `data:${mimeType};base64,${base64Data}`,
-            loading: false
-          };
-        } catch (e) {
-          internetImages[i] = { ...image, dataUrl: '', loading: false };
-        }
-      }
+      // Just store filenames with selection state - LazyImage handles loading
+      internetImages = sortedFilenames.map((filename) => ({
+        filename,
+        selected: false,
+        inAggelia: aggeliaFiles.includes(filename)
+      }));
     }
   }
 
@@ -150,54 +133,16 @@
         // Sort filenames numerically
         const sortedFilenames = sortImagesByNumericFilename(response);
 
+        // Just store filenames - LazyImage handles loading
         aggeliaImages = sortedFilenames.map((filename) => ({
           filename,
-          dataUrl: '',
-          loading: true,
           selected: false,
           inAggelia: true
         }));
-
-        // Load thumbnails
-        for (let i = 0; i < aggeliaImages.length; i++) {
-          const image = aggeliaImages[i];
-          try {
-            const base64Data = await invoke('get_aggelia_image_as_base64', {
-              folderPath: property.folder_path,
-              status: property.status,
-              filename: image.filename
-            });
-
-            const ext = image.filename.split('.').pop()?.toLowerCase() || '';
-            const mimeType = getMimeType(ext);
-
-            aggeliaImages[i] = {
-              ...image,
-              dataUrl: `data:${mimeType};base64,${base64Data}`,
-              loading: false
-            };
-          } catch (e) {
-            aggeliaImages[i] = { ...image, dataUrl: '', loading: false };
-          }
-        }
       }
     } catch (e) {
       aggeliaImages = [];
     }
-  }
-
-  function getMimeType(ext: string): string {
-    return ['jpg', 'jpeg'].includes(ext)
-      ? 'image/jpeg'
-      : ext === 'png'
-        ? 'image/png'
-        : ext === 'gif'
-          ? 'image/gif'
-          : ext === 'webp'
-            ? 'image/webp'
-            : ext === 'bmp'
-              ? 'image/bmp'
-              : 'image/jpeg';
   }
 
   // Select all available images
@@ -517,36 +462,23 @@
           <div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {#each internetImages as image, index}
               <button
-                class="bg-background-100 border-background-200 group relative aspect-square w-full overflow-hidden border transition-opacity hover:opacity-75 {image.selected
+                class="group relative aspect-square w-full overflow-hidden border transition-opacity hover:opacity-75 {image.selected
                   ? 'border-accent-500'
-                  : ''} {image.inAggelia ? 'opacity-50' : ''}"
+                  : 'border-background-200'} {image.inAggelia ? 'opacity-50' : ''}"
                 onclick={() =>
                   image.inAggelia
                     ? openImageInAdvancedEditor(image.filename, false)
                     : toggleImageSelection(index)}
                 disabled={copyingImages}
               >
-                {#if image.loading}
-                  <div class="bg-background-100 flex h-full w-full items-center justify-center">
-                    <div class="text-center">
-                      <div
-                        class="border-foreground-300 mx-auto mb-2 h-5 w-5 animate-spin border-2 border-t-transparent"
-                      ></div>
-                      <p class="text-foreground-500 text-xs font-medium">Loading...</p>
-                    </div>
-                  </div>
-                {:else if image.dataUrl}
-                  <img
-                    src={image.dataUrl}
-                    alt={image.filename}
-                    loading="lazy"
-                    class="h-full w-full object-cover"
-                  />
-                {:else}
-                  <div class="bg-background-100 flex h-full w-full items-center justify-center">
-                    <p class="text-foreground-500 text-xs">Failed</p>
-                  </div>
-                {/if}
+                <LazyImage
+                  folderPath={property.folder_path}
+                  status={property.status}
+                  subfolder="INTERNET"
+                  filename={image.filename}
+                  alt={image.filename}
+                  class="h-full w-full"
+                />
 
                 <!-- Selected indicator -->
                 {#if image.selected}
@@ -600,31 +532,18 @@
           <div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {#each aggeliaImages as image}
               <button
-                class="bg-background-100 border-background-200 group relative aspect-square w-full overflow-hidden border transition-opacity hover:opacity-75"
+                class="border-background-200 group relative aspect-square w-full overflow-hidden border transition-opacity hover:opacity-75"
                 onclick={() => openImageInAdvancedEditor(image.filename, true)}
                 disabled={copyingImages}
               >
-                {#if image.loading}
-                  <div class="bg-background-100 flex h-full w-full items-center justify-center">
-                    <div class="text-center">
-                      <div
-                        class="border-foreground-300 mx-auto mb-2 h-5 w-5 animate-spin border-2 border-t-transparent"
-                      ></div>
-                      <p class="text-foreground-500 text-xs font-medium">Loading...</p>
-                    </div>
-                  </div>
-                {:else if image.dataUrl}
-                  <img
-                    src={image.dataUrl}
-                    alt={image.filename}
-                    loading="lazy"
-                    class="h-full w-full object-cover"
-                  />
-                {:else}
-                  <div class="bg-background-100 flex h-full w-full items-center justify-center">
-                    <p class="text-foreground-500 text-xs">Failed</p>
-                  </div>
-                {/if}
+                <LazyImage
+                  folderPath={property.folder_path}
+                  status={property.status}
+                  subfolder="INTERNET/AGGELIA"
+                  filename={image.filename}
+                  alt={image.filename}
+                  class="h-full w-full"
+                />
 
                 <!-- Filename on hover -->
                 <div

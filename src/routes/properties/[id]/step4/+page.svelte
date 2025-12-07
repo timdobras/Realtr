@@ -7,16 +7,12 @@
   import type { Property } from '$lib/types/database';
   import { showSuccess, showError } from '$lib/stores/notification';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import LazyImage from '$lib/components/LazyImage.svelte';
 
-  interface ImageItem {
-    filename: string;
-    dataUrl: string;
-    loading: boolean;
-  }
-
+  // Just store filenames - LazyImage handles loading
   let property: Property | null = $state(null);
-  let watermarkImages: ImageItem[] = $state([]);
-  let watermarkAggeliaImages: ImageItem[] = $state([]);
+  let watermarkFilenames: string[] = $state([]);
+  let watermarkAggeliaFilenames: string[] = $state([]);
   let error = $state('');
   let loading = $state(true);
   let processingWatermarksVar = $state(false);
@@ -99,101 +95,40 @@
     if (!property) return;
 
     try {
-      // Load WATERMARK images
+      // Load WATERMARK images - just filenames, LazyImage handles loading
       const watermarkList = await invoke('list_watermark_images', {
         folderPath: property.folder_path,
         status: property.status
       });
 
       if (Array.isArray(watermarkList)) {
-        const sortedWatermarkList = sortImagesByNumericFilename(watermarkList);
-        watermarkImages = sortedWatermarkList.map((filename) => ({
-          filename,
-          dataUrl: '',
-          loading: true
-        }));
-
-        // Load thumbnails
-        for (let i = 0; i < watermarkImages.length; i++) {
-          const image = watermarkImages[i];
-          try {
-            const base64Data = await invoke('get_watermark_image_as_base64', {
-              folderPath: property.folder_path,
-              status: property.status,
-              filename: image.filename,
-              fromAggelia: false
-            });
-
-            const ext = image.filename.split('.').pop()?.toLowerCase() || '';
-            const mimeType = getMimeType(ext);
-
-            watermarkImages[i] = {
-              ...image,
-              dataUrl: `data:${mimeType};base64,${base64Data}`,
-              loading: false
-            };
-          } catch (e) {
-            watermarkImages[i] = { ...image, dataUrl: '', loading: false };
-          }
-        }
+        watermarkFilenames = sortImagesByNumericFilename(watermarkList);
       }
 
-      // Load WATERMARK/AGGELIA images
+      // Load WATERMARK/AGGELIA images - just filenames
       const aggeliaList = await invoke('list_watermark_aggelia_images', {
         folderPath: property.folder_path,
         status: property.status
       });
 
       if (Array.isArray(aggeliaList)) {
-        const sortedAggeliaList = sortImagesByNumericFilename(aggeliaList);
-        watermarkAggeliaImages = sortedAggeliaList.map((filename) => ({
-          filename,
-          dataUrl: '',
-          loading: true
-        }));
-
-        // Load thumbnails
-        for (let i = 0; i < watermarkAggeliaImages.length; i++) {
-          const image = watermarkAggeliaImages[i];
-          try {
-            const base64Data = await invoke('get_watermark_image_as_base64', {
-              folderPath: property.folder_path,
-              status: property.status,
-              filename: image.filename,
-              fromAggelia: true
-            });
-
-            const ext = image.filename.split('.').pop()?.toLowerCase() || '';
-            const mimeType = getMimeType(ext);
-
-            watermarkAggeliaImages[i] = {
-              ...image,
-              dataUrl: `data:${mimeType};base64,${base64Data}`,
-              loading: false
-            };
-          } catch (e) {
-            watermarkAggeliaImages[i] = { ...image, dataUrl: '', loading: false };
-          }
-        }
+        watermarkAggeliaFilenames = sortImagesByNumericFilename(aggeliaList);
       }
+
+      // Pre-generate thumbnails in parallel for faster display
+      pregenerateThumbnails();
     } catch (e) {
-      watermarkImages = [];
-      watermarkAggeliaImages = [];
+      watermarkFilenames = [];
+      watermarkAggeliaFilenames = [];
     }
   }
 
-  function getMimeType(ext: string): string {
-    return ['jpg', 'jpeg'].includes(ext)
-      ? 'image/jpeg'
-      : ext === 'png'
-        ? 'image/png'
-        : ext === 'gif'
-          ? 'image/gif'
-          : ext === 'webp'
-            ? 'image/webp'
-            : ext === 'bmp'
-              ? 'image/bmp'
-              : 'image/jpeg';
+  // Pre-generate thumbnails in background (don't await - fire and forget)
+  function pregenerateThumbnails() {
+    if (!property) return;
+    // Pre-generate WATERMARK folder thumbnails
+    DatabaseService.pregenerateGalleryThumbnails(property.folder_path, property.status, 'WATERMARK');
+    DatabaseService.pregenerateGalleryThumbnails(property.folder_path, property.status, 'WATERMARK/AGGELIA');
   }
 
   function applyWatermarksToAllImages() {
@@ -320,7 +255,7 @@
   }
 
   // Reactive values for UI
-  let totalWatermarkedImages = $derived(watermarkImages.length + watermarkAggeliaImages.length);
+  let totalWatermarkedImages = $derived(watermarkFilenames.length + watermarkAggeliaFilenames.length);
 
   async function completeAndNavigate() {
     // Set status to DONE only if property is NEW
@@ -446,7 +381,7 @@
     <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
       <div class="bg-background-50 border-background-200 border p-4">
         <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">Watermarked</p>
-        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{watermarkImages.length}</p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{watermarkFilenames.length}</p>
       </div>
 
       <div class="bg-background-50 border-background-200 border p-4">
@@ -454,7 +389,7 @@
           Advanced + Watermark
         </p>
         <p class="text-foreground-900 mt-1 text-2xl font-semibold">
-          {watermarkAggeliaImages.length}
+          {watermarkAggeliaFilenames.length}
         </p>
       </div>
 
@@ -592,14 +527,14 @@
       <div class="p-4">
         <div class="mb-3">
           <h2 class="text-foreground-900 text-sm font-semibold">
-            WATERMARK Folder ({watermarkImages.length})
+            WATERMARK Folder ({watermarkFilenames.length})
           </h2>
           <p class="text-foreground-600 text-xs">
             Publication-ready images with watermarks applied
           </p>
         </div>
 
-        {#if watermarkImages.length === 0}
+        {#if watermarkFilenames.length === 0}
           <div class="py-8 text-center">
             <p class="text-foreground-500 mb-3 text-sm">No watermarked images yet</p>
             <p class="text-foreground-600 text-xs">
@@ -608,40 +543,27 @@
           </div>
         {:else}
           <div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {#each watermarkImages as image}
+            {#each watermarkFilenames as filename}
               <button
-                class="bg-background-100 border-background-200 group relative aspect-square w-full overflow-hidden border transition-opacity hover:opacity-75"
-                onclick={() => openWatermarkedImage(image.filename, false)}
+                class="border-background-200 group relative aspect-square w-full overflow-hidden border transition-opacity hover:opacity-75"
+                onclick={() => openWatermarkedImage(filename, false)}
                 disabled={processingWatermarksVar}
               >
-                {#if image.loading}
-                  <div class="bg-background-100 flex h-full w-full items-center justify-center">
-                    <div class="text-center">
-                      <div
-                        class="border-foreground-300 mx-auto mb-2 h-5 w-5 animate-spin border-2 border-t-transparent"
-                      ></div>
-                      <p class="text-foreground-500 text-xs font-medium">Loading...</p>
-                    </div>
-                  </div>
-                {:else if image.dataUrl}
-                  <img
-                    src={image.dataUrl}
-                    alt={image.filename}
-                    loading="lazy"
-                    class="h-full w-full object-cover"
-                  />
-                {:else}
-                  <div class="bg-background-100 flex h-full w-full items-center justify-center">
-                    <p class="text-foreground-500 text-xs">Failed</p>
-                  </div>
-                {/if}
+                <LazyImage
+                  folderPath={property.folder_path}
+                  status={property.status}
+                  subfolder="WATERMARK"
+                  {filename}
+                  alt={filename}
+                  class="h-full w-full"
+                />
 
                 <!-- Filename on hover -->
                 <div
                   class="bg-foreground-900/75 absolute inset-x-0 bottom-0 p-2 opacity-0 transition-opacity group-hover:opacity-100"
                 >
-                  <p class="truncate text-xs text-white" title={image.filename}>
-                    {image.filename}
+                  <p class="truncate text-xs text-white" title={filename}>
+                    {filename}
                   </p>
                 </div>
               </button>
@@ -656,12 +578,12 @@
       <div class="p-4">
         <div class="mb-3">
           <h2 class="text-foreground-900 text-sm font-semibold">
-            WATERMARK/AGGELIA Folder ({watermarkAggeliaImages.length})
+            WATERMARK/AGGELIA Folder ({watermarkAggeliaFilenames.length})
           </h2>
           <p class="text-foreground-600 text-xs">Advanced edited images with watermarks</p>
         </div>
 
-        {#if watermarkAggeliaImages.length === 0}
+        {#if watermarkAggeliaFilenames.length === 0}
           <div class="py-8 text-center">
             <p class="text-foreground-500 mb-3 text-sm">No advanced watermarked images yet</p>
             <p class="text-foreground-600 text-xs">
@@ -670,40 +592,27 @@
           </div>
         {:else}
           <div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {#each watermarkAggeliaImages as image}
+            {#each watermarkAggeliaFilenames as filename}
               <button
-                class="bg-background-100 border-background-200 group relative aspect-square w-full overflow-hidden border transition-opacity hover:opacity-75"
-                onclick={() => openWatermarkedImage(image.filename, true)}
+                class="border-background-200 group relative aspect-square w-full overflow-hidden border transition-opacity hover:opacity-75"
+                onclick={() => openWatermarkedImage(filename, true)}
                 disabled={processingWatermarksVar}
               >
-                {#if image.loading}
-                  <div class="bg-background-100 flex h-full w-full items-center justify-center">
-                    <div class="text-center">
-                      <div
-                        class="border-foreground-300 mx-auto mb-2 h-5 w-5 animate-spin border-2 border-t-transparent"
-                      ></div>
-                      <p class="text-foreground-500 text-xs font-medium">Loading...</p>
-                    </div>
-                  </div>
-                {:else if image.dataUrl}
-                  <img
-                    src={image.dataUrl}
-                    alt={image.filename}
-                    loading="lazy"
-                    class="h-full w-full object-cover"
-                  />
-                {:else}
-                  <div class="bg-background-100 flex h-full w-full items-center justify-center">
-                    <p class="text-foreground-500 text-xs">Failed</p>
-                  </div>
-                {/if}
+                <LazyImage
+                  folderPath={property.folder_path}
+                  status={property.status}
+                  subfolder="WATERMARK/AGGELIA"
+                  {filename}
+                  alt={filename}
+                  class="h-full w-full"
+                />
 
                 <!-- Filename on hover -->
                 <div
                   class="bg-foreground-900/75 absolute inset-x-0 bottom-0 p-2 opacity-0 transition-opacity group-hover:opacity-100"
                 >
-                  <p class="truncate text-xs text-white" title={image.filename}>
-                    {image.filename}
+                  <p class="truncate text-xs text-white" title={filename}>
+                    {filename}
                   </p>
                 </div>
               </button>

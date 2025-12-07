@@ -9,14 +9,13 @@
   import type { Property } from '$lib/types/database';
   import PerspectiveCorrectionModal from '$lib/components/PerspectiveCorrectionModal.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import LazyImage from '$lib/components/LazyImage.svelte';
   import { showSuccess, showError } from '$lib/stores/notification';
   export const prerender = false;
 
   interface ImageItem {
     id: string; // Use filename as stable ID
     filename: string;
-    dataUrl: string;
-    loading: boolean;
     newName?: string;
   }
 
@@ -107,11 +106,10 @@
           return numA - numB;
         });
 
+        // Just store filenames - LazyImage handles loading
         internetImages = sortedFilenames.map((filename, index) => ({
           id: filename, // Use filename as stable ID
           filename,
-          dataUrl: '',
-          loading: true,
           newName: baseFileName ? `${baseFileName}_${index + 1}` : `${index + 1}`
         }));
 
@@ -119,46 +117,12 @@
         originalOrder = sortedFilenames.slice();
         hasUnsavedChanges = false;
 
-        // Load thumbnails
-        for (let i = 0; i < internetImages.length; i++) {
-          const image = internetImages[i];
-          try {
-            const base64Data = await invoke('get_internet_image_as_base64', {
-              folderPath: property.folder_path,
-              status: property.status,
-              filename: image.filename
-            });
-
-            const ext = image.filename.split('.').pop()?.toLowerCase() || '';
-            const mimeType = getMimeType(ext);
-
-            internetImages[i] = {
-              ...image,
-              dataUrl: `data:${mimeType};base64,${base64Data}`,
-              loading: false
-            };
-          } catch (e) {
-            internetImages[i] = { ...image, dataUrl: '', loading: false };
-          }
-        }
+        // Pre-generate thumbnails in parallel for faster display
+        DatabaseService.pregenerateGalleryThumbnails(property.folder_path, property.status, 'INTERNET');
       }
     } catch (e) {
       error = `Failed to load images: ${e}`;
     }
-  }
-
-  function getMimeType(ext: string): string {
-    return ['jpg', 'jpeg'].includes(ext)
-      ? 'image/jpeg'
-      : ext === 'png'
-        ? 'image/png'
-        : ext === 'gif'
-          ? 'image/gif'
-          : ext === 'webp'
-            ? 'image/webp'
-            : ext === 'bmp'
-              ? 'image/bmp'
-              : 'image/jpeg';
   }
 
   // Improved drag and drop handlers
@@ -516,26 +480,15 @@
               >
                 <!-- Image Preview -->
                 <div class="relative">
-                  <button
-                    class="bg-background-100 flex aspect-square w-full items-center justify-center"
-                    onclick={(e) => openImageInEditor(image.filename, e)}
-                    disabled={isDragging}
-                  >
-                    {#if image.loading}
-                      <div
-                        class="border-foreground-300 h-4 w-4 animate-spin rounded-full border-2 border-t-transparent"
-                      ></div>
-                    {:else if image.dataUrl}
-                      <img
-                        src={image.dataUrl}
-                        alt={image.filename}
-                        loading="lazy"
-                        class="h-full w-full object-cover"
-                      />
-                    {:else}
-                      <div class="text-xs text-red-700">Failed</div>
-                    {/if}
-                  </button>
+                  <LazyImage
+                    folderPath={property.folder_path}
+                    status={property.status}
+                    subfolder="INTERNET"
+                    filename={image.filename}
+                    alt={image.filename}
+                    class="aspect-square w-full cursor-pointer"
+                    onclick={() => !isDragging && openImageInEditor(image.filename, { preventDefault: () => {} })}
+                  />
 
                   <!-- Order Badge -->
                   <div

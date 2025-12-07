@@ -4,14 +4,15 @@
   import { invoke } from '@tauri-apps/api/core';
   import { DatabaseService } from '$lib/services/databaseService';
   import type { Property } from '$lib/types/database';
-  import { formatDate } from '$lib/utils/dateUtils';
   import { showSuccess, showError } from '$lib/stores/notification';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import LazyImage from '$lib/components/LazyImage.svelte';
   export const prerender = false;
 
   let property: Property | null = $state(null);
-  let originalImages: { filename: string; dataUrl: string; loading: boolean }[] = $state([]);
-  let internetImages: { filename: string; dataUrl: string; loading: boolean }[] = $state([]);
+  // Only store filenames, not data URLs - LazyImage handles loading
+  let originalImageFilenames: string[] = $state([]);
+  let internetImageFilenames: string[] = $state([]);
   let error = $state('');
   let loading = $state(true);
   let copyingImages = $state(false);
@@ -49,13 +50,23 @@
     if (!property) return;
 
     try {
-      // Load original images
+      // Load original images (just filenames)
       await loadOriginalImages();
-      // Load INTERNET folder images
+      // Load INTERNET folder images (just filenames)
       await loadInternetImages();
+
+      // Pre-generate thumbnails in parallel for faster display
+      pregenerateThumbnails();
     } catch (e) {
       error = `Failed to load images: ${e}`;
     }
+  }
+
+  // Pre-generate thumbnails in background (don't await - fire and forget)
+  function pregenerateThumbnails() {
+    if (!property) return;
+    // Pre-generate INTERNET folder thumbnails in parallel
+    DatabaseService.pregenerateGalleryThumbnails(property.folder_path, property.status, 'INTERNET');
   }
 
   async function loadOriginalImages() {
@@ -67,34 +78,7 @@
     });
 
     if (Array.isArray(response)) {
-      originalImages = response.map((filename) => ({
-        filename,
-        dataUrl: '',
-        loading: true
-      }));
-
-      // Load thumbnails for original images
-      for (let i = 0; i < originalImages.length; i++) {
-        const image = originalImages[i];
-        try {
-          const base64Data = await invoke('get_image_as_base64', {
-            folderPath: property.folder_path,
-            status: property.status,
-            filename: image.filename
-          });
-
-          const ext = image.filename.split('.').pop()?.toLowerCase() || '';
-          const mimeType = getMimeType(ext);
-
-          originalImages[i] = {
-            ...image,
-            dataUrl: `data:${mimeType};base64,${base64Data}`,
-            loading: false
-          };
-        } catch (e) {
-          originalImages[i] = { ...image, dataUrl: '', loading: false };
-        }
-      }
+      originalImageFilenames = response as string[];
     }
   }
 
@@ -108,53 +92,12 @@
       });
 
       if (Array.isArray(response)) {
-        internetImages = response.map((filename) => ({
-          filename,
-          dataUrl: '',
-          loading: true
-        }));
-
-        // Load thumbnails for INTERNET images
-        for (let i = 0; i < internetImages.length; i++) {
-          const image = internetImages[i];
-          try {
-            const base64Data = await invoke('get_internet_image_as_base64', {
-              folderPath: property.folder_path,
-              status: property.status,
-              filename: image.filename
-            });
-
-            const ext = image.filename.split('.').pop()?.toLowerCase() || '';
-            const mimeType = getMimeType(ext);
-
-            internetImages[i] = {
-              ...image,
-              dataUrl: `data:${mimeType};base64,${base64Data}`,
-              loading: false
-            };
-          } catch (e) {
-            internetImages[i] = { ...image, dataUrl: '', loading: false };
-          }
-        }
+        internetImageFilenames = response as string[];
       }
     } catch (e) {
       // INTERNET folder might not exist yet, that's ok
-      internetImages = [];
+      internetImageFilenames = [];
     }
-  }
-
-  function getMimeType(ext: string): string {
-    return ['jpg', 'jpeg'].includes(ext)
-      ? 'image/jpeg'
-      : ext === 'png'
-        ? 'image/png'
-        : ext === 'gif'
-          ? 'image/gif'
-          : ext === 'webp'
-            ? 'image/webp'
-            : ext === 'bmp'
-              ? 'image/bmp'
-              : 'image/jpeg';
   }
 
   async function copyAllToInternet() {
@@ -162,7 +105,7 @@
 
     try {
       copyingImages = true;
-      copyProgress = { current: 0, total: originalImages.length };
+      copyProgress = { current: 0, total: originalImageFilenames.length };
 
       const result: any = await invoke('copy_images_to_internet', {
         folderPath: property.folder_path,
@@ -172,7 +115,7 @@
       if (result.success) {
         // Reload INTERNET images after copying
         await loadInternetImages();
-        showSuccess(`Copied ${originalImages.length} images to INTERNET folder`);
+        showSuccess(`Copied ${originalImageFilenames.length} images to INTERNET folder`);
       } else {
         showError(result.error || 'Failed to copy images to INTERNET folder');
       }
@@ -218,7 +161,7 @@
       });
 
       if (result.success) {
-        internetImages = [];
+        internetImageFilenames = [];
         showSuccess('INTERNET folder cleared');
       } else {
         showError(result.error || 'Failed to clear INTERNET folder');
@@ -331,14 +274,14 @@
         <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">
           Original Images
         </p>
-        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{originalImages.length}</p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{originalImageFilenames.length}</p>
       </div>
 
       <div class="bg-background-50 border-background-200 border p-4">
         <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">
           INTERNET Folder
         </p>
-        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{internetImages.length}</p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{internetImageFilenames.length}</p>
       </div>
     </div>
 
@@ -347,13 +290,13 @@
       <div class="mb-4 flex items-center justify-between">
         <div>
           <h2 class="text-foreground-900 text-lg font-semibold">
-            INTERNET Folder ({internetImages.length})
+            INTERNET Folder ({internetImageFilenames.length})
           </h2>
           <p class="text-foreground-600 text-sm">Click images to open in your editor</p>
         </div>
 
         <div class="flex items-center space-x-3">
-          {#if internetImages.length > 0}
+          {#if internetImageFilenames.length > 0}
             <button
               onclick={clearInternetFolder}
               disabled={copyingImages}
@@ -388,7 +331,7 @@
         </div>
       </div>
 
-      {#if internetImages.length === 0}
+      {#if internetImageFilenames.length === 0}
         <div class="py-16 text-center">
           <div
             class="bg-background-100 mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full"
@@ -420,7 +363,7 @@
           </p>
           <button
             onclick={copyAllToInternet}
-            disabled={copyingImages || originalImages.length === 0}
+            disabled={copyingImages || originalImageFilenames.length === 0}
             class="bg-accent-500 hover:bg-accent-600 inline-flex items-center space-x-2 rounded-lg px-6 py-3 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
             {#if copyingImages}
@@ -437,37 +380,22 @@
                   d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
                 />
               </svg>
-              <span>Copy All to INTERNET ({originalImages.length} images)</span>
+              <span>Copy All to INTERNET ({originalImageFilenames.length} images)</span>
             {/if}
           </button>
         </div>
       {:else}
         <div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-          {#each internetImages as image}
-            <button
-              onclick={() => openImageInEditor(image.filename, true)}
-              class="bg-background-100 border-background-200 hover:border-background-300 aspect-square overflow-hidden border transition-colors"
-              title={image.filename}
-            >
-              {#if image.loading}
-                <div class="flex h-full items-center justify-center">
-                  <div
-                    class="border-foreground-300 h-4 w-4 animate-spin rounded-full border-2 border-t-transparent"
-                  ></div>
-                </div>
-              {:else if image.dataUrl}
-                <img
-                  src={image.dataUrl}
-                  alt={image.filename}
-                  loading="lazy"
-                  class="h-full w-full object-cover"
-                />
-              {:else}
-                <div class="flex h-full items-center justify-center text-xs text-red-700">
-                  Failed
-                </div>
-              {/if}
-            </button>
+          {#each internetImageFilenames as filename}
+            <LazyImage
+              folderPath={property.folder_path}
+              status={property.status}
+              subfolder="INTERNET"
+              {filename}
+              alt={filename}
+              class="aspect-square cursor-pointer border border-background-200 hover:border-background-300 transition-colors"
+              onclick={() => openImageInEditor(filename, true)}
+            />
           {/each}
         </div>
       {/if}
@@ -485,11 +413,11 @@
 
         <a
           href="/properties/{property.id}/step2"
-          class="inline-flex items-center space-x-2 px-6 py-3 font-medium transition-colors {internetImages.length ===
+          class="inline-flex items-center space-x-2 px-6 py-3 font-medium transition-colors {internetImageFilenames.length ===
           0
             ? 'bg-background-200 text-foreground-500 cursor-not-allowed'
             : 'bg-accent-500 hover:bg-accent-600 text-white'}"
-          class:pointer-events-none={internetImages.length === 0}
+          class:pointer-events-none={internetImageFilenames.length === 0}
         >
           <span>Step 2: Order & Rename</span>
           <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
