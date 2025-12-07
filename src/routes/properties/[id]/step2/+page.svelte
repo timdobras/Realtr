@@ -193,9 +193,11 @@
 
       const renameMap = internetImages.map((image, index) => {
         const extension = image.filename.split('.').pop() || 'jpg';
+        // Calculate newName directly from index to avoid race condition with debounced updateNewNames
+        const newName = baseFileName ? `${baseFileName}_${index + 1}` : `${index + 1}`;
         return {
           old_name: image.filename,
-          new_name: `${image.newName}.${extension}`
+          new_name: `${newName}.${extension}`
         };
       });
 
@@ -207,6 +209,7 @@
 
       if (result.success) {
         await loadInternetImages();
+        imageRefreshKey++; // Force all thumbnails to reload with new filenames
         showSuccess(`Successfully renamed ${internetImages.length} images`);
       } else {
         showError(result.error || 'Failed to rename images');
