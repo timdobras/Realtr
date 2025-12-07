@@ -16,7 +16,25 @@
     required = false
   }: Props = $props();
 
-  let searchValue = $state('');
+  // Initialize searchValue from value prop so it shows the current value
+  let searchValue = $state(value || '');
+
+  // Track if user is actively editing to avoid overwriting their input
+  let isEditing = $state(false);
+
+  // Ref to the input element for setting value directly
+  let inputRef = $state<HTMLInputElement | null>(null);
+
+  // Sync searchValue when value prop changes externally (e.g., when editing a property)
+  $effect(() => {
+    if (!isEditing && value && value !== searchValue) {
+      searchValue = value;
+      // Also update the actual input element
+      if (inputRef) {
+        inputRef.value = value;
+      }
+    }
+  });
 
   // Filter cities based on search input
   let filteredCities = $derived(
@@ -58,9 +76,14 @@
     <Combobox.Input
       {placeholder}
       {required}
+      bind:ref={inputRef}
+      onfocus={() => (isEditing = true)}
+      onblur={() => (isEditing = false)}
       oninput={(e) => {
-        searchValue = e.currentTarget.value;
-        value = e.currentTarget.value;
+        const uppercased = e.currentTarget.value.toUpperCase();
+        searchValue = uppercased;
+        value = uppercased;
+        e.currentTarget.value = uppercased;
       }}
       class="border-background-300 bg-background-100 text-foreground-900 placeholder-foreground-500 focus:ring-accent-500 focus:border-accent-500 w-full rounded-md border px-3 py-2 pr-8 text-sm transition-colors focus:ring-1 focus:outline-none"
     />

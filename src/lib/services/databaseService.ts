@@ -68,6 +68,20 @@ export class DatabaseService {
     });
   }
 
+  static async updateProperty(
+    propertyId: number,
+    name: string,
+    city: string,
+    notes?: string
+  ): Promise<CommandResult> {
+    return await invoke<CommandResult>('update_property', {
+      propertyId,
+      name,
+      city,
+      notes: notes || null
+    });
+  }
+
   static async getPropertyById(propertyId: number): Promise<Property | null> {
     const result = await invoke<CommandResult>('get_property_by_id', {
       propertyId
@@ -212,6 +226,38 @@ export class DatabaseService {
     return await invoke<CommandResult>('fill_aggelia_to_25', {
       folderPath,
       status
+    });
+  }
+
+  // Gallery thumbnail for workflow steps (400px by default, cached)
+  static async getGalleryThumbnail(
+    folderPath: string,
+    status: string,
+    subfolder: string,
+    filename: string,
+    maxDimension?: number
+  ): Promise<string> {
+    return await invoke<string>('get_gallery_thumbnail_as_base64', {
+      folderPath,
+      status,
+      subfolder,
+      filename,
+      maxDimension
+    });
+  }
+
+  // Pre-generate all gallery thumbnails for a subfolder (parallel processing)
+  static async pregenerateGalleryThumbnails(
+    folderPath: string,
+    status: string,
+    subfolder: string,
+    maxDimension?: number
+  ): Promise<CommandResult> {
+    return await invoke<CommandResult>('pregenerate_gallery_thumbnails', {
+      folderPath,
+      status,
+      subfolder,
+      maxDimension
     });
   }
 

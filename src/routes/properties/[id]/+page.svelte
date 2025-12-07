@@ -6,15 +6,19 @@
   import type { Property } from '$lib/types/database';
   import { formatDate } from '$lib/utils/dateUtils';
   import SetCodeModal from '$lib/components/SetCodeModal.svelte';
+  import EditPropertyModal from '$lib/components/EditPropertyModal.svelte';
+  import LazyImage from '$lib/components/LazyImage.svelte';
   export const prerender = false;
 
   let property = $state<Property | null>(null);
-  let originalImages = $state<{ filename: string; dataUrl: string; loading: boolean }[]>([]);
+  // Just store filenames - LazyImage handles loading
+  let originalImageFilenames = $state<string[]>([]);
   let error = $state('');
   let loading = $state(true);
   let folderMessage = $state('');
   let folderMessageType = $state<'success' | 'error' | ''>('');
   let showCodeModal = $state(false);
+  let showEditModal = $state(false);
 
   // Get the id from the URL params
   let propertyId = $derived(Number($page.params.id));
@@ -47,61 +51,18 @@
     if (!property) return;
 
     try {
-      // Get list of image filenames
+      // Get list of image filenames - LazyImage handles loading
       const response = await invoke('list_original_images', {
         folderPath: property.folder_path,
         status: property.status
       });
 
       if (Array.isArray(response)) {
-        // Initialize array with filenames and loading states
-        originalImages = response.map((filename) => ({
-          filename,
-          dataUrl: '',
-          loading: true
-        }));
-
-        // Load each image as base64
-        for (let i = 0; i < originalImages.length; i++) {
-          const image = originalImages[i];
-          try {
-            const base64Data = await invoke('get_image_as_base64', {
-              folderPath: property.folder_path,
-              status: property.status,
-              filename: image.filename
-            });
-
-            // Determine MIME type based on file extension
-            const ext = image.filename.split('.').pop()?.toLowerCase() || '';
-            const mimeType = ['jpg', 'jpeg'].includes(ext)
-              ? 'image/jpeg'
-              : ext === 'png'
-                ? 'image/png'
-                : ext === 'gif'
-                  ? 'image/gif'
-                  : ext === 'webp'
-                    ? 'image/webp'
-                    : ext === 'bmp'
-                      ? 'image/bmp'
-                      : 'image/jpeg'; // default
-
-            // Update the image with base64 data
-            originalImages[i] = {
-              ...image,
-              dataUrl: `data:${mimeType};base64,${base64Data}`,
-              loading: false
-            };
-          } catch (e) {
-            console.error(`Failed to load image ${image.filename}:`, e);
-            originalImages[i] = {
-              ...image,
-              dataUrl: '',
-              loading: false
-            };
-          }
-        }
+        originalImageFilenames = response as string[];
+        // Pre-generate thumbnails in parallel for faster display
+        DatabaseService.pregenerateGalleryThumbnails(property.folder_path, property.status, '');
       } else {
-        originalImages = [];
+        originalImageFilenames = [];
       }
     } catch (e) {
       error = `Failed to load original images: ${e}`;
@@ -294,6 +255,22 @@
         <!-- Action Buttons -->
         <div class="flex items-center gap-2">
           <button
+            onclick={() => (showEditModal = true)}
+            class="bg-background-100 hover:bg-background-200 text-foreground-700 flex items-center gap-1.5 rounded px-3 py-1.5 text-xs transition-colors"
+            title="Edit Property"
+          >
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+              />
+            </svg>
+            <span>Edit</span>
+          </button>
+
+          <button
             onclick={() => (showCodeModal = true)}
             class="bg-background-100 hover:bg-background-200 text-foreground-700 flex items-center gap-1.5 rounded px-3 py-1.5 text-xs transition-colors"
             title={property.code ? 'Edit Code' : 'Add Code'}
@@ -407,14 +384,14 @@
     <section class="bg-background-50 border-background-200 rounded-lg border p-4">
       <div class="mb-3 flex items-center justify-between">
         <h2 class="text-foreground-900 text-sm font-semibold">
-          Original Images ({originalImages.length})
+          Original Images ({originalImageFilenames.length})
         </h2>
-        {#if originalImages.length > 0}
+        {#if originalImageFilenames.length > 0}
           <span class="text-foreground-500 text-xs">Click to open</span>
         {/if}
       </div>
 
-      {#if originalImages.length === 0}
+      {#if originalImageFilenames.length === 0}
         <div class="bg-background-100 rounded py-8 text-center">
           <p class="text-foreground-500 mb-3 text-sm">No original images found</p>
           <button
@@ -434,31 +411,16 @@
         </div>
       {:else}
         <div class="grid grid-cols-3 gap-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {#each originalImages as image}
-            <button
-              onclick={() => openImage(image.filename)}
-              class="bg-background-100 hover:bg-background-200 aspect-square overflow-hidden rounded transition-colors"
-              title={image.filename}
-            >
-              {#if image.loading}
-                <div class="flex h-full items-center justify-center">
-                  <div
-                    class="border-foreground-300 h-3 w-3 animate-spin rounded-full border-2 border-t-transparent"
-                  ></div>
-                </div>
-              {:else if image.dataUrl}
-                <img
-                  src={image.dataUrl}
-                  alt={image.filename}
-                  loading="lazy"
-                  class="h-full w-full object-cover"
-                />
-              {:else}
-                <div class="flex h-full items-center justify-center text-xs text-red-700">
-                  Failed
-                </div>
-              {/if}
-            </button>
+          {#each originalImageFilenames as filename}
+            <LazyImage
+              folderPath={property.folder_path}
+              status={property.status}
+              subfolder=""
+              {filename}
+              alt={filename}
+              class="aspect-square cursor-pointer rounded"
+              onclick={() => openImage(filename)}
+            />
           {/each}
         </div>
       {/if}
@@ -475,6 +437,18 @@
     onClose={() => (showCodeModal = false)}
     onCodeSet={() => {
       showCodeModal = false;
+      refreshProperty();
+    }}
+  />
+{/if}
+
+<!-- Edit Property Modal -->
+{#if showEditModal && property}
+  <EditPropertyModal
+    {property}
+    onClose={() => (showEditModal = false)}
+    onSave={() => {
+      showEditModal = false;
       refreshProperty();
     }}
   />

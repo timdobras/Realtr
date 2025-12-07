@@ -817,6 +817,162 @@ pub async fn set_property_code(
 }
 
 #[tauri::command]
+pub async fn update_property(
+    app: tauri::AppHandle,
+    property_id: i64,
+    name: String,
+    city: String,
+    notes: Option<String>,
+) -> Result<CommandResult, String> {
+    let pool = get_database_pool(&app)?;
+
+    // Validate inputs
+    let name = name.trim();
+    let city = city.trim();
+    if name.is_empty() {
+        return Ok(CommandResult {
+            success: false,
+            error: Some("Property name cannot be empty".to_string()),
+            data: None,
+        });
+    }
+    if city.is_empty() {
+        return Ok(CommandResult {
+            success: false,
+            error: Some("City cannot be empty".to_string()),
+            data: None,
+        });
+    }
+
+    let now = chrono::Utc::now();
+    let now_timestamp = now.timestamp_millis();
+
+    // Get current property info
+    let property_row = sqlx::query("SELECT * FROM properties WHERE id = ?")
+        .bind(property_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Property not found: {}", e))?;
+
+    let old_name: String = property_row.get("name");
+    let old_city: String = property_row.get("city");
+    let status: String = property_row.get("status");
+    let folder_path: String = property_row.get("folder_path");
+    let code: Option<String> = property_row.get("code");
+
+    // Extract current folder name from folder_path (format: "city/folder_name")
+    let old_folder_name = folder_path
+        .split('/')
+        .last()
+        .unwrap_or(&old_name)
+        .to_string();
+
+    // Determine what changed
+    let name_changed = name != old_name;
+    let city_changed = city != old_city;
+
+    // Calculate the new folder name
+    // If there's a code, the folder name format is "{name} ({code})"
+    // We need to preserve the code suffix when renaming
+    let new_folder_name = if let Some(ref c) = code {
+        let folder_safe_code = c.replace('/', "-");
+        format!("{} ({})", name, folder_safe_code)
+    } else {
+        name.to_string()
+    };
+
+    // Calculate new folder path (relative) for database storage
+    let new_folder_path = format!("{}/{}", city, new_folder_name);
+
+    // Get config for absolute paths
+    let config = crate::config::load_config(app.clone())
+        .await
+        .map_err(|e| format!("Failed to load config: {}", e))?
+        .ok_or("App configuration not found")?;
+
+    let base_path = get_base_path_for_status(&config, &status)?;
+
+    // Handle folder operations if name or city changed
+    if name_changed || city_changed {
+        let old_absolute_path = base_path.join(&old_city).join(&old_folder_name);
+        let new_absolute_path = base_path.join(&city).join(&new_folder_name);
+
+        // Check if source folder exists
+        if old_absolute_path.exists() {
+            // Check if target folder already exists (would be a conflict)
+            if old_absolute_path != new_absolute_path && new_absolute_path.exists() {
+                return Ok(CommandResult {
+                    success: false,
+                    error: Some(format!(
+                        "Cannot move/rename: folder '{}' already exists",
+                        new_absolute_path.display()
+                    )),
+                    data: None,
+                });
+            }
+
+            // If city changed, ensure the new city directory exists
+            if city_changed {
+                let new_city_path = base_path.join(&city);
+                if !new_city_path.exists() {
+                    std::fs::create_dir_all(&new_city_path)
+                        .map_err(|e| format!("Failed to create city folder: {}", e))?;
+                }
+            }
+
+            // Move/rename the folder
+            if old_absolute_path != new_absolute_path {
+                std::fs::rename(&old_absolute_path, &new_absolute_path)
+                    .map_err(|e| format!("Failed to move/rename folder: {}", e))?;
+            }
+        }
+    }
+
+    // Update database
+    let result = sqlx::query(
+        "UPDATE properties SET name = ?, city = ?, notes = ?, folder_path = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(name)
+    .bind(city)
+    .bind(&notes)
+    .bind(&new_folder_path)
+    .bind(now_timestamp)
+    .bind(property_id)
+    .execute(pool)
+    .await;
+
+    match result {
+        Ok(_) => {
+            // Also update city usage count
+            let _ = sqlx::query(
+                "INSERT INTO cities (name, usage_count, created_at) VALUES (?, 1, ?)
+                 ON CONFLICT(name) DO UPDATE SET usage_count = usage_count + 1",
+            )
+            .bind(city)
+            .bind(now_timestamp)
+            .execute(pool)
+            .await;
+
+            Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({
+                    "name": name,
+                    "city": city,
+                    "notes": notes,
+                    "folder_path": new_folder_path
+                })),
+            })
+        }
+        Err(e) => Ok(CommandResult {
+            success: false,
+            error: Some(format!("Failed to update property: {}", e)),
+            data: None,
+        }),
+    }
+}
+
+#[tauri::command]
 pub async fn delete_property(
     app: tauri::AppHandle,
     property_id: i64,

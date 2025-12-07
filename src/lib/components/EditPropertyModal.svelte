@@ -1,17 +1,17 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core';
   import { DatabaseService } from '$lib/services/databaseService';
   import { Dialog, DialogContent, DialogHeader, CityCombobox } from '$lib/components/ui';
-  import type { City } from '$lib/types/database';
+  import type { City, Property } from '$lib/types/database';
   import { onMount } from 'svelte';
 
   interface Props {
     open?: boolean;
+    property: Property;
     onClose: () => void;
-    onPropertyAdded: () => void;
+    onSave: () => void;
   }
 
-  let { open = $bindable(true), onClose, onPropertyAdded }: Props = $props();
+  let { open = $bindable(true), property, onClose, onSave }: Props = $props();
 
   let name = $state('');
   let city = $state('');
@@ -19,9 +19,13 @@
   let cities = $state<City[]>([]);
   let isSubmitting = $state(false);
   let error = $state('');
-  let copiedPath = $state(false);
 
   onMount(async () => {
+    // Pre-populate form with current property values
+    name = property.name;
+    city = property.city;
+    notes = property.notes || '';
+
     try {
       cities = await DatabaseService.getCities();
     } catch (err) {
@@ -44,35 +48,21 @@
       const propertyName = name.trim().toUpperCase();
       const propertyCity = city.trim().toUpperCase();
 
-      const result = await DatabaseService.createProperty(
+      const result = await DatabaseService.updateProperty(
+        property.id!,
         propertyName,
         propertyCity,
         notes.trim() || undefined
       );
 
       if (result.success) {
-        // Copy the property path to clipboard
-        try {
-          const folderPath = `${propertyCity}/${propertyName}`;
-          const pathResult = await invoke<{ success: boolean; data?: { full_path: string } }>(
-            'get_full_property_path',
-            { folderPath, status: 'NEW' }
-          );
-          if (pathResult.success && pathResult.data?.full_path) {
-            await navigator.clipboard.writeText(pathResult.data.full_path);
-            copiedPath = true;
-          }
-        } catch (copyErr) {
-          console.error('Failed to copy path:', copyErr);
-        }
-
-        onPropertyAdded();
+        onSave();
       } else {
-        error = result.error || 'Failed to create property';
+        error = result.error || 'Failed to update property';
       }
     } catch (err) {
-      console.error('Error creating property:', err);
-      error = 'Failed to create property';
+      console.error('Error updating property:', err);
+      error = 'Failed to update property';
     } finally {
       isSubmitting = false;
     }
@@ -87,7 +77,7 @@
 
 <Dialog bind:open onOpenChange={handleOpenChange}>
   <DialogContent class="max-h-[90vh] overflow-y-auto rounded-xl">
-    <DialogHeader title="Add New Property" {onClose} />
+    <DialogHeader title="Edit Property" {onClose} />
 
     <form onsubmit={handleSubmit} class="space-y-5 p-5">
       <!-- Property Name -->
@@ -150,9 +140,9 @@
           class="bg-accent-500 hover:bg-accent-600 rounded-md px-4 py-2 text-sm font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
           {#if isSubmitting}
-            Creating...
+            Saving...
           {:else}
-            Create Property
+            Save Changes
           {/if}
         </button>
       </div>
