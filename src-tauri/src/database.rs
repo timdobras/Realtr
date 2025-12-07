@@ -2206,24 +2206,43 @@ pub async fn get_gallery_thumbnail_as_base64(
     let thumbnails_dir = thumbnails_base.join(&safe_folder_name).join(&safe_subfolder);
     let thumbnail_path = thumbnails_dir.join(&filename).with_extension("jpg");
 
-    // If thumbnail doesn't exist, generate it on-demand
-    if !thumbnail_path.exists() {
+    // Get the original image path
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
+    let source_dir = if subfolder.is_empty() {
+        property_path
+    } else {
+        property_path.join(&subfolder)
+    };
+    let source_path = source_dir.join(&filename);
+
+    if !source_path.exists() {
+        return Err(format!("Source image not found: {}", source_path.display()));
+    }
+
+    // Check if we need to regenerate the thumbnail:
+    // 1. Thumbnail doesn't exist, OR
+    // 2. Source image is newer than thumbnail (was modified)
+    let needs_regeneration = if !thumbnail_path.exists() {
+        true
+    } else {
+        // Compare modification times
+        let source_modified = fs::metadata(&source_path)
+            .and_then(|m| m.modified())
+            .ok();
+        let thumb_modified = fs::metadata(&thumbnail_path)
+            .and_then(|m| m.modified())
+            .ok();
+
+        match (source_modified, thumb_modified) {
+            (Some(src_time), Some(thumb_time)) => src_time > thumb_time,
+            _ => true, // If we can't get times, regenerate to be safe
+        }
+    };
+
+    if needs_regeneration {
         // Create thumbnails directory if it doesn't exist
         fs::create_dir_all(&thumbnails_dir)
             .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
-
-        // Get the original image path
-        let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-        let source_dir = if subfolder.is_empty() {
-            property_path
-        } else {
-            property_path.join(&subfolder)
-        };
-        let source_path = source_dir.join(&filename);
-
-        if !source_path.exists() {
-            return Err(format!("Source image not found: {}", source_path.display()));
-        }
 
         // Generate thumbnail
         generate_thumbnail(&source_path, &thumbnail_path, max_size)
@@ -2311,19 +2330,40 @@ pub async fn pregenerate_gallery_thumbnails(
     fs::create_dir_all(&thumbnails_dir)
         .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
 
-    // Filter to only files that need generation
+    // Filter to only files that need generation (new or modified)
     let mut to_generate: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mut cached_count = 0;
 
     for filename in &filenames {
         let thumbnail_path = thumbnails_dir.join(filename).with_extension("jpg");
-        if thumbnail_path.exists() {
-            cached_count += 1;
+        let source_path = source_dir.join(filename);
+
+        if !source_path.exists() {
+            continue;
+        }
+
+        // Check if thumbnail exists and is up-to-date
+        let needs_generation = if !thumbnail_path.exists() {
+            true
         } else {
-            let source_path = source_dir.join(filename);
-            if source_path.exists() {
-                to_generate.push((source_path, thumbnail_path));
+            // Compare modification times
+            let source_modified = fs::metadata(&source_path)
+                .and_then(|m| m.modified())
+                .ok();
+            let thumb_modified = fs::metadata(&thumbnail_path)
+                .and_then(|m| m.modified())
+                .ok();
+
+            match (source_modified, thumb_modified) {
+                (Some(src_time), Some(thumb_time)) => src_time > thumb_time,
+                _ => true,
             }
+        };
+
+        if needs_generation {
+            to_generate.push((source_path, thumbnail_path));
+        } else {
+            cached_count += 1;
         }
     }
 
