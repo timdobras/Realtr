@@ -261,10 +261,15 @@
     // Set status to DONE only if property is NEW
     if (property && property.status === 'NEW') {
       try {
-        await DatabaseService.updatePropertyStatus(property.id!, 'DONE');
+        const result = await DatabaseService.updatePropertyStatus(property.id!, 'DONE');
+        if (!result.success) {
+          showError(`Failed to update status: ${result.error}`);
+          return; // Don't navigate if status update failed
+        }
         showSuccess('Property marked as Done');
       } catch (e) {
         showError(`Failed to update status: ${e}`);
+        return; // Don't navigate on error
       }
     }
     goto('/properties');

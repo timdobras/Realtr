@@ -43,7 +43,9 @@
       "Bash(git reset:*)",
       "Bash(npm run release:*)",
       "Bash(cat:*)",
-      "Bash(tasklist:*)"
+      "Bash(tasklist:*)",
+      "Bash(dir \"C:\\Users\\gumek\\Desktop\\FotoGiannhsStratos\\Fotografies - New\")",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []

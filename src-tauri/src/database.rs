@@ -163,6 +163,17 @@ fn get_relative_folder_path(city: &str, name: &str) -> String {
     format!("{}/{}", city, name)
 }
 
+// Helper function to convert folder_path (stored with /) to a proper PathBuf
+// This is needed because on Windows, PathBuf::join doesn't convert / to \
+fn folder_path_to_pathbuf(folder_path: &str) -> PathBuf {
+    let parts: Vec<&str> = folder_path.split('/').collect();
+    let mut path = PathBuf::new();
+    for part in parts {
+        path.push(part);
+    }
+    path
+}
+
 // Helper function to construct full property base path from config, folder_path and status
 async fn get_property_base_path(
     app: &tauri::AppHandle,
@@ -175,7 +186,7 @@ async fn get_property_base_path(
     let config = config.ok_or("App configuration not found")?;
 
     let base_path = get_base_path_for_status(&config, status)?;
-    Ok(base_path.join(folder_path))
+    Ok(base_path.join(folder_path_to_pathbuf(folder_path)))
 }
 
 // Helper to find where a property folder actually exists across all status folders
@@ -191,11 +202,12 @@ fn find_actual_folder_location(
         (&config.archive_folder_path, "ARCHIVE"),
     ];
 
+    let folder_path_buf = folder_path_to_pathbuf(folder_path);
     for (base_path_str, status) in status_paths {
         if base_path_str.is_empty() {
             continue;
         }
-        let full_path = PathBuf::from(base_path_str).join(folder_path);
+        let full_path = PathBuf::from(base_path_str).join(&folder_path_buf);
         if full_path.exists() && full_path.is_dir() {
             return Some((full_path, status.to_string()));
         }
@@ -635,8 +647,8 @@ pub async fn update_property_status(
         .map_err(|e| format!("Property not found: {}", e))?;
 
     let current_status: String = property_row.get("status");
-    let city: String = property_row.get("city");
-    let name: String = property_row.get("name");
+    let _city: String = property_row.get("city");
+    let _name: String = property_row.get("name");
     // Get the actual folder_path from database - this is the real folder name on disk
     // which may include a code suffix like "PROPERTY NAME (CODE)"
     let db_folder_path: String = property_row.get("folder_path");
@@ -644,6 +656,83 @@ pub async fn update_property_status(
     // Use the database folder_path for operations, don't reconstruct it
     let folder_path = db_folder_path;
 
+    // IMPORTANT: Move folder FIRST before updating database
+    // This ensures we don't update the database if the folder move fails
+    if current_status != new_status {
+        let config_result = crate::config::load_config(app.clone()).await;
+        if let Ok(Some(config)) = config_result {
+            // Get base paths using actual folder_path from database
+            let new_base = get_base_path_for_status(&config, &new_status);
+            let old_base = get_base_path_for_status(&config, &current_status);
+
+            match new_base {
+                Ok(new_base_path) => {
+                    let folder_path_buf = folder_path_to_pathbuf(&folder_path);
+                    let new_path = new_base_path.join(&folder_path_buf);
+
+                    // First try the expected location based on current_status
+                    let expected_old_path = old_base.ok().map(|b| b.join(&folder_path_buf));
+
+                    // Find actual folder location - check expected location first, then search all
+                    let actual_old_path = match expected_old_path {
+                        Some(ref path) if path.exists() => Some(path.clone()),
+                        _ => {
+                            // Folder not at expected location, search all status folders
+                            find_actual_folder_location(&config, &folder_path)
+                                .map(|(path, _)| path)
+                        }
+                    };
+
+                    if let Some(old_path) = actual_old_path {
+                        if old_path != new_path {
+                            // Create parent directory for new path
+                            if let Some(parent) = new_path.parent() {
+                                if let Err(e) = fs::create_dir_all(parent) {
+                                    return Ok(CommandResult {
+                                        success: false,
+                                        error: Some(format!(
+                                            "Failed to create parent directory: {}. \
+                                            Hint: Make sure no files are open in the folder and try again.",
+                                            e
+                                        )),
+                                        data: None,
+                                    });
+                                }
+                            }
+                            // Move the folder - try with retry for Windows lock issues
+                            if let Err(e) = fs::rename(&old_path, &new_path) {
+                                // On Windows, "Access is denied" often means a file is locked
+                                // Try a small delay and retry once
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                                if let Err(e2) = fs::rename(&old_path, &new_path) {
+                                    return Ok(CommandResult {
+                                        success: false,
+                                        error: Some(format!(
+                                            "Failed to move folder: {}. \
+                                            Hint: Close any open files/folders and File Explorer windows for this property, then try again.",
+                                            e2
+                                        )),
+                                        data: None,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    // If folder not found anywhere, just update status without moving
+                    // (folder might have been manually deleted)
+                }
+                Err(e) => {
+                    return Ok(CommandResult {
+                        success: false,
+                        error: Some(format!("Failed to get property path: {}", e)),
+                        data: None,
+                    });
+                }
+            }
+        }
+    }
+
+    // Only update database AFTER folder move succeeded
     let result = sqlx::query(
         "UPDATE properties SET status = ?, folder_path = ?, updated_at = ? WHERE id = ?",
     )
@@ -655,65 +744,11 @@ pub async fn update_property_status(
     .await;
 
     match result {
-        Ok(_) => {
-            // Move folder if status changed
-            if current_status != new_status {
-                let config_result = crate::config::load_config(app.clone()).await;
-                if let Ok(Some(config)) = config_result {
-                    // Get base paths using actual folder_path from database
-                    let new_base = get_base_path_for_status(&config, &new_status);
-                    let old_base = get_base_path_for_status(&config, &current_status);
-
-                    match new_base {
-                        Ok(new_base_path) => {
-                            let new_path = new_base_path.join(&folder_path);
-
-                            // First try the expected location based on current_status
-                            let expected_old_path = old_base.ok().map(|b| b.join(&folder_path));
-
-                            // Find actual folder location - check expected location first, then search all
-                            let actual_old_path = match expected_old_path {
-                                Some(ref path) if path.exists() => Some(path.clone()),
-                                _ => {
-                                    // Folder not at expected location, search all status folders
-                                    find_actual_folder_location(&config, &folder_path)
-                                        .map(|(path, _)| path)
-                                }
-                            };
-
-                            if let Some(old_path) = actual_old_path {
-                                if old_path != new_path {
-                                    // Create parent directory for new path
-                                    if let Some(parent) = new_path.parent() {
-                                        std::fs::create_dir_all(parent).map_err(|e| {
-                                            format!("Failed to create parent directory: {}", e)
-                                        })?;
-                                    }
-                                    // Move the folder
-                                    std::fs::rename(&old_path, &new_path)
-                                        .map_err(|e| format!("Failed to move folder: {}", e))?;
-                                }
-                            }
-                            // If folder not found anywhere, just update status without moving
-                            // (folder might have been manually deleted)
-                        }
-                        Err(e) => {
-                            return Ok(CommandResult {
-                                success: false,
-                                error: Some(format!("Failed to get property path: {}", e)),
-                                data: None,
-                            });
-                        }
-                    }
-                }
-            }
-
-            Ok(CommandResult {
-                success: true,
-                error: None,
-                data: None,
-            })
-        }
+        Ok(_) => Ok(CommandResult {
+            success: true,
+            error: None,
+            data: None,
+        }),
         Err(e) => Ok(CommandResult {
             success: false,
             error: Some(format!("Failed to update property: {}", e)),
@@ -1215,8 +1250,32 @@ pub struct RepairResult {
     pub errors: Vec<String>,
 }
 
+/// Helper function to find a folder by prefix match within a city directory
+/// This handles cases where folder has a code suffix like "PROPERTY NAME (12345)"
+fn find_folder_by_prefix(city_path: &PathBuf, property_name: &str) -> Option<String> {
+    if !city_path.exists() || !city_path.is_dir() {
+        return None;
+    }
+
+    if let Ok(entries) = fs::read_dir(city_path) {
+        for entry in entries.flatten() {
+            if let Some(folder_name) = entry.file_name().to_str() {
+                // Check if folder starts with property name
+                // Match "PROPERTY NAME" or "PROPERTY NAME (code)" or "PROPERTY NAME (code-code)"
+                if folder_name == property_name
+                    || folder_name.starts_with(&format!("{} (", property_name))
+                {
+                    return Some(folder_name.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Repair property statuses by checking actual folder locations
 /// This fixes properties where the database status doesn't match where the folder actually exists
+/// Also handles folder name mismatches (e.g., when folder has code suffix but DB doesn't)
 #[tauri::command]
 pub async fn repair_property_statuses(app: tauri::AppHandle) -> Result<CommandResult, String> {
     let pool = get_database_pool(&app)?;
@@ -1241,7 +1300,7 @@ pub async fn repair_property_statuses(app: tauri::AppHandle) -> Result<CommandRe
     .map_err(|e| format!("Failed to fetch properties: {}", e))?;
 
     // Get base paths for all statuses
-    let status_paths = [
+    let status_paths: Vec<(&str, Option<PathBuf>)> = vec![
         ("NEW", get_base_path_for_status(&config, "NEW").ok()),
         ("DONE", get_base_path_for_status(&config, "DONE").ok()),
         ("NOT_FOUND", get_base_path_for_status(&config, "NOT_FOUND").ok()),
@@ -1251,24 +1310,67 @@ pub async fn repair_property_statuses(app: tauri::AppHandle) -> Result<CommandRe
     for (id, folder_path, db_status, name) in properties {
         result.properties_checked += 1;
 
-        // Find where the folder actually exists
-        let mut actual_status: Option<&str> = None;
+        // Parse folder_path into city and property folder name
+        let parts: Vec<&str> = folder_path.split('/').collect();
+        if parts.len() != 2 {
+            result.errors.push(format!(
+                "Property '{}' has invalid folder_path format: '{}'",
+                name, folder_path
+            ));
+            continue;
+        }
+        let city = parts[0];
+        let property_folder_name = parts[1];
+
+        // Convert folder_path to proper PathBuf (handles / -> \ on Windows)
+        let folder_path_buf = folder_path_to_pathbuf(&folder_path);
+
+        // First try exact match
+        let mut found_info: Option<(&str, Option<String>)> = None; // (status, new_folder_name if different)
+
         for (status, base_path_opt) in &status_paths {
             if let Some(base_path) = base_path_opt {
-                let full_path = base_path.join(&folder_path);
+                let full_path = base_path.join(&folder_path_buf);
                 if full_path.exists() {
-                    actual_status = Some(status);
+                    found_info = Some((status, None)); // Exact match
                     break;
                 }
             }
         }
 
-        // If folder found in different location than database says, update database
-        if let Some(found_status) = actual_status {
-            if found_status != db_status {
+        // If not found with exact match, try prefix matching (for code suffixes)
+        if found_info.is_none() {
+            for (status, base_path_opt) in &status_paths {
+                if let Some(base_path) = base_path_opt {
+                    let city_path = base_path.join(city);
+                    if let Some(actual_folder_name) = find_folder_by_prefix(&city_path, property_folder_name) {
+                        if actual_folder_name != property_folder_name {
+                            found_info = Some((status, Some(actual_folder_name)));
+                        } else {
+                            found_info = Some((status, None));
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // If folder found, update database if needed
+        if let Some((found_status, new_folder_name_opt)) = found_info {
+            let status_changed = found_status != db_status;
+            let folder_path_changed = new_folder_name_opt.is_some();
+
+            if status_changed || folder_path_changed {
                 let now_ts = chrono::Utc::now().timestamp_millis();
-                match sqlx::query("UPDATE properties SET status = ?, updated_at = ? WHERE id = ?")
+                let new_folder_path = if let Some(ref new_name) = new_folder_name_opt {
+                    format!("{}/{}", city, new_name)
+                } else {
+                    folder_path.clone()
+                };
+
+                match sqlx::query("UPDATE properties SET status = ?, folder_path = ?, updated_at = ? WHERE id = ?")
                     .bind(found_status)
+                    .bind(&new_folder_path)
                     .bind(now_ts)
                     .bind(id)
                     .execute(pool)
@@ -1276,6 +1378,14 @@ pub async fn repair_property_statuses(app: tauri::AppHandle) -> Result<CommandRe
                 {
                     Ok(_) => {
                         result.properties_fixed += 1;
+                        if folder_path_changed {
+                            if let Some(new_name) = new_folder_name_opt {
+                                result.errors.push(format!(
+                                    "Fixed '{}': folder_path updated from '{}' to '{}/{}'",
+                                    name, folder_path, city, new_name
+                                ));
+                            }
+                        }
                     }
                     Err(e) => {
                         result.errors.push(format!(
@@ -1288,9 +1398,18 @@ pub async fn repair_property_statuses(app: tauri::AppHandle) -> Result<CommandRe
         } else {
             // Folder not found in any location - this is a warning but not necessarily an error
             // The property might have been manually deleted from the filesystem
+            // Include the folder_path and checked paths for debugging
+            let checked_paths: Vec<String> = status_paths
+                .iter()
+                .filter_map(|(status, base_path_opt)| {
+                    base_path_opt.as_ref().map(|bp| {
+                        format!("{}: {}", status, bp.join(&folder_path_buf).display())
+                    })
+                })
+                .collect();
             result.errors.push(format!(
-                "Property '{}' folder not found in any configured location",
-                name
+                "Property '{}' folder not found. DB folder_path='{}'. Checked: [{}]",
+                name, folder_path, checked_paths.join(", ")
             ));
         }
     }
@@ -1663,7 +1782,8 @@ pub async fn list_original_images(
 
     // Get base path for the property's status
     let base_path = get_base_path_for_status(&config, &status)?;
-    let full_path = base_path.join(&folder_path);
+    let folder_path_buf = folder_path_to_pathbuf(&folder_path);
+    let full_path = base_path.join(&folder_path_buf);
 
     // If not found at expected location, try to find it in other status folders
     let full_path = if full_path.exists() && full_path.is_dir() {
@@ -3818,7 +3938,7 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
     let done_base_path = get_base_path_for_status(&config, "DONE")?;
     for property in &with_code {
         // Use folder_path which contains the actual folder name (including code suffix)
-        let property_path = done_base_path.join(&property.folder_path);
+        let property_path = done_base_path.join(folder_path_to_pathbuf(&property.folder_path));
 
         if property_path.exists() {
             // The ZIP will have structure: City/PropertyName/...
@@ -3886,8 +4006,9 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
                 .map_err(|e| format!("Failed to update property status: {}", e))?;
 
             // Move folder - use folder_path which has the actual folder name
-            let old_path = done_base_path.join(&property.folder_path);
-            let new_path = archive_base_path.join(&property.folder_path);
+            let folder_path_buf = folder_path_to_pathbuf(&property.folder_path);
+            let old_path = done_base_path.join(&folder_path_buf);
+            let new_path = archive_base_path.join(&folder_path_buf);
 
             if old_path.exists() && old_path != new_path {
                 if let Some(parent) = new_path.parent() {
@@ -3915,8 +4036,9 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
                 .map_err(|e| format!("Failed to update property status: {}", e))?;
 
             // Move folder - use folder_path which has the actual folder name
-            let old_path = done_base_path.join(&property.folder_path);
-            let new_path = not_found_base_path.join(&property.folder_path);
+            let folder_path_buf = folder_path_to_pathbuf(&property.folder_path);
+            let old_path = done_base_path.join(&folder_path_buf);
+            let new_path = not_found_base_path.join(&folder_path_buf);
 
             if old_path.exists() && old_path != new_path {
                 if let Some(parent) = new_path.parent() {
