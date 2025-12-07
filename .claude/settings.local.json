@@ -40,7 +40,10 @@
       "Bash(git rev-list:*)",
       "Bash(npx husky init)",
       "Bash(node scripts/version.js:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(npm run release:*)",
+      "Bash(cat:*)",
+      "Bash(tasklist:*)"
     ],
     "deny": [],
     "ask": []
