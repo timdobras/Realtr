@@ -11,11 +11,16 @@
   let error = $state<String>('');
   let loading = $state<Boolean>(true);
   let isUpdatingStatus = $state(false);
+  let statusError = $state<string | null>(null);
+  let selectKey = $state(0); // Used to force dropdown reset on error
 
   const propertyId = $derived(Number($page.params.id));
 
   async function handleStatusChange(newStatus: PropertyStatus) {
     if (!property || isUpdatingStatus) return;
+
+    // Clear any previous error
+    statusError = null;
 
     try {
       isUpdatingStatus = true;
@@ -25,10 +30,20 @@
         // Reload property to get updated data
         property = await DatabaseService.getPropertyById(propertyId);
       } else {
-        console.error('Failed to update status:', result.error);
+        // Show error to user and reset dropdown
+        statusError = result.error || 'Failed to update status';
+        selectKey++; // Force dropdown to re-render with original value
+        // Auto-hide error after 5 seconds
+        setTimeout(() => {
+          statusError = null;
+        }, 5000);
       }
-    } catch (error) {
-      console.error('Failed to update property status:', error);
+    } catch (err) {
+      statusError = `Failed to update status: ${err}`;
+      selectKey++; // Force dropdown to re-render with original value
+      setTimeout(() => {
+        statusError = null;
+      }, 5000);
     } finally {
       isUpdatingStatus = false;
     }
@@ -144,23 +159,30 @@
           </div>
 
           <!-- Property Status Dropdown -->
-          <div class="flex items-center gap-3">
-            <label class="text-foreground-700 text-sm font-medium">Status:</label>
-            <select
-              value={property.status}
-              onchange={(e) => handleStatusChange(e.currentTarget.value as PropertyStatus)}
-              disabled={isUpdatingStatus}
-              class="border-background-300 bg-background-100 text-foreground-900 focus:ring-accent-500 focus:border-accent-500 border px-3 py-1.5 text-sm transition-colors focus:ring-1 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <option value="NEW">New</option>
-              <option value="DONE">Done</option>
-              <option value="NOT_FOUND">Not Found</option>
-              <option value="ARCHIVE">Archive</option>
-            </select>
-            {#if isUpdatingStatus}
-              <div
-                class="border-foreground-300 h-4 w-4 animate-spin border-2 border-t-transparent"
-              ></div>
+          <div class="flex flex-col gap-1">
+            <div class="flex items-center gap-3">
+              <label class="text-foreground-700 text-sm font-medium">Status:</label>
+              {#key selectKey}
+                <select
+                  value={property.status}
+                  onchange={(e) => handleStatusChange(e.currentTarget.value as PropertyStatus)}
+                  disabled={isUpdatingStatus}
+                  class="border-background-300 bg-background-100 text-foreground-900 focus:ring-accent-500 focus:border-accent-500 border px-3 py-1.5 text-sm transition-colors focus:ring-1 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <option value="NEW">New</option>
+                  <option value="DONE">Done</option>
+                  <option value="NOT_FOUND">Not Found</option>
+                  <option value="ARCHIVE">Archive</option>
+                </select>
+              {/key}
+              {#if isUpdatingStatus}
+                <div
+                  class="border-foreground-300 h-4 w-4 animate-spin border-2 border-t-transparent"
+                ></div>
+              {/if}
+            </div>
+            {#if statusError}
+              <p class="text-xs text-red-600">{statusError}</p>
             {/if}
           </div>
         </div>
