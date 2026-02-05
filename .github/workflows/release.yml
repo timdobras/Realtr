@@ -48,6 +48,43 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      - name: Install LLVM and Clang
+        if: steps.check_tag.outputs.TAG_EXISTS == 'false'
+        run: |
+          choco install llvm -y
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      - name: Cache vcpkg packages
+        if: steps.check_tag.outputs.TAG_EXISTS == 'false'
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\packages
+          key: vcpkg-opencv4-x64-windows-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: |
+            vcpkg-opencv4-x64-windows-
+
+      - name: Install OpenCV via vcpkg
+        if: steps.check_tag.outputs.TAG_EXISTS == 'false'
+        run: |
+          $env:VCPKG_ROOT = "C:\vcpkg"
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+
+          cd C:\vcpkg
+
+          # Check if OpenCV is already installed (from cache)
+          if (Test-Path "C:\vcpkg\installed\x64-windows\lib\opencv_world4.lib") {
+            echo "OpenCV found in cache, skipping installation"
+          } else {
+            echo "Installing OpenCV via vcpkg (this may take 15-30 minutes on first run)..."
+            git pull
+            .\bootstrap-vcpkg.bat
+            .\vcpkg install opencv4[core,imgproc,imgcodecs]:x64-windows
+          }
+
+          .\vcpkg integrate install
+
       - name: Sync node version and setup cache
         if: steps.check_tag.outputs.TAG_EXISTS == 'false'
         uses: actions/setup-node@v4
@@ -66,6 +103,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VCPKG_ROOT: C:\vcpkg
+          LIBCLANG_PATH: C:\Program Files\LLVM\bin
+          OPENCV_LINK_LIBS: opencv_world4
+          OPENCV_LINK_PATHS: C:\vcpkg\installed\x64-windows\lib
+          OPENCV_INCLUDE_PATHS: C:\vcpkg\installed\x64-windows\include
         with:
           tagName: ${{ steps.version.outputs.TAG_NAME }}
           releaseName: 'Realtr v${{ steps.version.outputs.VERSION }}'
