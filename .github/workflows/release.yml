@@ -38,6 +38,10 @@ jobs:
         run: |
           echo "Release v${{ steps.version.outputs.VERSION }} already exists, skipping..."
 
+      - name: Setup MSVC Developer Command Prompt
+        if: steps.check_tag.outputs.TAG_EXISTS == 'false'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Rust setup
         if: steps.check_tag.outputs.TAG_EXISTS == 'false'
         uses: dtolnay/rust-toolchain@stable
@@ -56,12 +60,11 @@ jobs:
 
       - name: Cache vcpkg packages
         if: steps.check_tag.outputs.TAG_EXISTS == 'false'
+        id: vcpkg-cache
         uses: actions/cache@v4
         with:
-          path: |
-            C:\vcpkg\installed
-            C:\vcpkg\packages
-          key: vcpkg-opencv4-x64-windows-${{ hashFiles('.github/workflows/release.yml') }}
+          path: C:\vcpkg\installed
+          key: vcpkg-opencv4-x64-windows-v2
           restore-keys: |
             vcpkg-opencv4-x64-windows-
 
@@ -69,27 +72,45 @@ jobs:
         if: steps.check_tag.outputs.TAG_EXISTS == 'false'
         run: |
           $env:VCPKG_ROOT = "C:\vcpkg"
-          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
-
-          # Use x64-windows triplet (dynamic linking)
-          echo "VCPKGRS_TRIPLET=x64-windows" >> $env:GITHUB_ENV
 
           cd C:\vcpkg
 
-          # Check if OpenCV is already installed (from cache)
-          if (Test-Path "C:\vcpkg\installed\x64-windows\share\opencv4\OpenCVConfig.cmake") {
-            echo "OpenCV found in cache, skipping installation"
+          # Always bootstrap vcpkg
+          git pull
+          .\bootstrap-vcpkg.bat
+
+          # Install OpenCV if not cached
+          if (-not (Test-Path "C:\vcpkg\installed\x64-windows\lib\opencv_world4.lib")) {
+            echo "Installing OpenCV via vcpkg..."
+            .\vcpkg install opencv4[core,imgproc,imgcodecs]:x64-windows --recurse
           } else {
-            echo "Installing OpenCV via vcpkg (this may take 15-30 minutes on first run)..."
-            git pull
-            .\bootstrap-vcpkg.bat
-            .\vcpkg install opencv4[core,imgproc,imgcodecs]:x64-windows
+            echo "OpenCV found in cache"
           }
 
-          .\vcpkg integrate install
+          # Verify installation
+          echo "=== Verifying OpenCV installation ==="
+          if (Test-Path "C:\vcpkg\installed\x64-windows\lib\opencv_world4.lib") {
+            echo "opencv_world4.lib found"
+          } else {
+            echo "ERROR: opencv_world4.lib NOT found"
+            exit 1
+          }
 
-          # Set OpenCV_DIR for cmake to find the config
-          echo "OpenCV_DIR=C:\vcpkg\installed\x64-windows\share\opencv4" >> $env:GITHUB_ENV
+          if (Test-Path "C:\vcpkg\installed\x64-windows\share\opencv4\OpenCVConfig.cmake") {
+            echo "OpenCVConfig.cmake found"
+          } else {
+            echo "ERROR: OpenCVConfig.cmake NOT found"
+            exit 1
+          }
+
+          # List installed files for debugging
+          echo "=== OpenCV lib directory ==="
+          Get-ChildItem "C:\vcpkg\installed\x64-windows\lib" -Filter "opencv*"
+
+          echo "=== OpenCV include directory ==="
+          Get-ChildItem "C:\vcpkg\installed\x64-windows\include"
+
+          .\vcpkg integrate install
 
       - name: Sync node version and setup cache
         if: steps.check_tag.outputs.TAG_EXISTS == 'false'
@@ -109,10 +130,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # vcpkg settings
           VCPKG_ROOT: C:\vcpkg
           VCPKGRS_TRIPLET: x64-windows
+          VCPKGRS_DYNAMIC: 1
+          # LLVM/Clang for opencv-rust bindings
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
+          # OpenCV paths - explicit configuration
           OpenCV_DIR: C:\vcpkg\installed\x64-windows\share\opencv4
+          CMAKE_PREFIX_PATH: C:\vcpkg\installed\x64-windows
           OPENCV_LINK_LIBS: opencv_world4
           OPENCV_LINK_PATHS: C:\vcpkg\installed\x64-windows\lib
           OPENCV_INCLUDE_PATHS: C:\vcpkg\installed\x64-windows\include\opencv4
