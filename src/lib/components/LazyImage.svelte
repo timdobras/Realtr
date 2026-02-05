@@ -116,41 +116,43 @@
 
 <div
   bind:this={containerRef}
-  class="relative overflow-hidden bg-muted {className}"
+  class="bg-muted relative overflow-hidden {className}"
   role={onclick ? 'button' : 'img'}
   tabindex={onclick ? 0 : -1}
-  onclick={onclick}
+  {onclick}
   onkeydown={(e) => e.key === 'Enter' && onclick?.()}
 >
   {#if loading}
     <!-- Loading skeleton -->
     <div class="absolute inset-0 flex items-center justify-center">
-      <div class="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground/20 border-t-muted-foreground"></div>
+      <div
+        class="border-muted-foreground/20 border-t-muted-foreground h-6 w-6 animate-spin rounded-full border-2"
+      ></div>
     </div>
   {:else if error}
     <!-- Error state with retry button -->
-    <div class="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">
-      <svg class="h-6 w-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+    <div class="text-muted-foreground absolute inset-0 flex flex-col items-center justify-center">
+      <svg class="mb-1 h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="1.5"
+          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+        />
       </svg>
-      <span class="text-xs mb-1">Failed to load</span>
+      <span class="mb-1 text-xs">Failed to load</span>
       <button
         onclick={retryLoad}
-        class="text-xs px-2 py-0.5 bg-background-200 hover:bg-background-300 rounded transition-colors"
+        class="bg-background-200 hover:bg-background-300 rounded px-2 py-0.5 text-xs transition-colors"
       >
         Retry
       </button>
     </div>
   {:else if dataUrl}
     <!-- Loaded image -->
-    <img
-      src={dataUrl}
-      {alt}
-      class="h-full w-full object-cover"
-      draggable="false"
-    />
+    <img src={dataUrl} {alt} class="h-full w-full object-cover" draggable="false" />
   {:else}
     <!-- Placeholder before observer triggers -->
-    <div class="absolute inset-0 bg-muted"></div>
+    <div class="bg-muted absolute inset-0"></div>
   {/if}
 </div>

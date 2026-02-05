@@ -10,7 +10,7 @@
 </script>
 
 <BitsDialog.Content
-  class="bg-background-50 border-background-200 fixed top-1/2 left-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 border shadow-xl {className}"
+  class="bg-background-50 border-background-200 fixed top-1/2 left-1/2 z-50 -translate-x-1/2 -translate-y-1/2 border shadow-xl {className}"
 >
   {@render children()}
 </BitsDialog.Content>

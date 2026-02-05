@@ -82,7 +82,11 @@
     if (!property) return;
     // Pre-generate both INTERNET and AGGELIA folder thumbnails
     DatabaseService.pregenerateGalleryThumbnails(property.folder_path, property.status, 'INTERNET');
-    DatabaseService.pregenerateGalleryThumbnails(property.folder_path, property.status, 'INTERNET/AGGELIA');
+    DatabaseService.pregenerateGalleryThumbnails(
+      property.folder_path,
+      property.status,
+      'INTERNET/AGGELIA'
+    );
   }
 
   // Helper function for numeric filename sorting

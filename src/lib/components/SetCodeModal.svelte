@@ -59,7 +59,7 @@
 </script>
 
 <Dialog bind:open onOpenChange={handleOpenChange}>
-  <DialogContent class="max-w-sm">
+  <DialogContent class="w-full max-w-sm rounded-xl">
     <DialogHeader title={currentCode ? 'Edit Code' : 'Add Code'} {onClose} />
 
     <form onsubmit={handleSubmit} class="p-4">

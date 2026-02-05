@@ -2,6 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::Manager;
 
+/// Helper function for serde default value
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct WatermarkConfig {
@@ -56,6 +61,8 @@ pub struct AppConfig {
     pub is_valid_path: bool,
     #[serde(rename = "lastUpdated")]
     pub last_updated: Option<String>,
+    #[serde(default = "default_true")]
+    pub use_builtin_editor: bool,
     pub fast_editor_path: Option<String>,
     pub fast_editor_name: Option<String>,
     pub complex_editor_path: Option<String>,
@@ -78,6 +85,7 @@ impl Default for AppConfig {
             archive_folder_path: String::new(),
             sets_folder_path: String::new(),
             is_valid_path: false,
+            use_builtin_editor: true,
             fast_editor_path: None,
             fast_editor_name: None,
             complex_editor_path: None,

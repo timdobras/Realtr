@@ -17,6 +17,7 @@
     setsFolderPath: string;
     isValidPath: boolean;
     lastUpdated: string | null;
+    use_builtin_editor?: boolean;
     fast_editor_path?: string;
     fast_editor_name?: string;
     complex_editor_path?: string;
@@ -40,6 +41,7 @@
     setsFolderPath: '',
     isValidPath: false,
     lastUpdated: null,
+    use_builtin_editor: true,
     fast_editor_path: undefined,
     fast_editor_name: undefined,
     complex_editor_path: undefined,
@@ -71,7 +73,11 @@
 
   // Repair status state
   let isRepairing = $state(false);
-  let repairResult = $state<{ propertiesChecked: number; propertiesFixed: number; errors: string[] } | null>(null);
+  let repairResult = $state<{
+    propertiesChecked: number;
+    propertiesFixed: number;
+    errors: string[];
+  } | null>(null);
   let showRepairResult = $state(false);
 
   // Load config on mount
@@ -238,6 +244,7 @@
           setsFolderPath: config.setsFolderPath,
           isValidPath: config.isValidPath,
           lastUpdated: new Date().toISOString(),
+          use_builtin_editor: config.use_builtin_editor,
           fast_editor_path: config.fast_editor_path,
           fast_editor_name: config.fast_editor_name,
           complex_editor_path: config.complex_editor_path,
@@ -281,6 +288,12 @@
         setsFolderPath: '',
         isValidPath: false,
         lastUpdated: null,
+        use_builtin_editor: true,
+        fast_editor_path: undefined,
+        fast_editor_name: undefined,
+        complex_editor_path: undefined,
+        complex_editor_name: undefined,
+        watermark_image_path: '',
         watermarkConfig: {
           sizeMode: 'proportional',
           sizePercentage: 0.35,
@@ -847,38 +860,81 @@
               >(for quick edits, brightness, contrast)</span
             >
           </label>
-          <div class="flex items-center space-x-4">
-            <div class="min-w-0 flex-1">
+
+          <!-- Editor Type Selection -->
+          <div class="mb-4 space-y-3">
+            <label class="flex cursor-pointer items-center space-x-3">
               <input
-                type="text"
-                readonly
-                value={config.fast_editor_name || 'System default (Windows Photos, etc.)'}
-                class="text-foreground-900 border-background-300 bg-background-100 w-full rounded-lg border px-4 py-3 focus:outline-none"
-                placeholder="No custom editor selected"
+                type="radio"
+                name="editorType"
+                checked={config.use_builtin_editor === true}
+                onchange={() => (config.use_builtin_editor = true)}
+                class="text-accent-600 focus:ring-accent-500 h-4 w-4"
               />
-              {#if config.fast_editor_path}
-                <p class="text-foreground-500 mt-1 font-mono text-xs">{config.fast_editor_path}</p>
-              {/if}
-            </div>
-            <button
-              onclick={selectFastEditor}
-              disabled={isLoading}
-              class="bg-background-200 text-foreground-700 hover:bg-background-300 flex items-center space-x-2 rounded-lg px-4 py-3 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                />
-              </svg>
-              <span>Browse</span>
-            </button>
+              <div>
+                <span class="text-foreground-900 font-medium">Use built-in editor</span>
+                <span class="text-foreground-500 ml-1 text-sm">(recommended)</span>
+                <p class="text-foreground-500 text-xs">
+                  Crop, rotate, and adjust brightness/contrast without leaving the app
+                </p>
+              </div>
+            </label>
+            <label class="flex cursor-pointer items-center space-x-3">
+              <input
+                type="radio"
+                name="editorType"
+                checked={config.use_builtin_editor === false}
+                onchange={() => (config.use_builtin_editor = false)}
+                class="text-accent-600 focus:ring-accent-500 h-4 w-4"
+              />
+              <div>
+                <span class="text-foreground-900 font-medium">Use external application</span>
+                <p class="text-foreground-500 text-xs">
+                  Open images in a separate application like IrfanView or FastStone
+                </p>
+              </div>
+            </label>
           </div>
-          <p class="text-foreground-500 mt-2 text-sm">
-            Recommended: Windows Photos, IrfanView, FastStone Image Viewer
-          </p>
+
+          <!-- External Editor Selection (only shown when external is selected) -->
+          {#if config.use_builtin_editor === false}
+            <div class="border-background-200 ml-7 border-l-2 pl-4">
+              <div class="flex items-center space-x-4">
+                <div class="min-w-0 flex-1">
+                  <input
+                    type="text"
+                    readonly
+                    value={config.fast_editor_name || 'System default (Windows Photos, etc.)'}
+                    class="text-foreground-900 border-background-300 bg-background-100 w-full rounded-lg border px-4 py-3 focus:outline-none"
+                    placeholder="No custom editor selected"
+                  />
+                  {#if config.fast_editor_path}
+                    <p class="text-foreground-500 mt-1 font-mono text-xs">
+                      {config.fast_editor_path}
+                    </p>
+                  {/if}
+                </div>
+                <button
+                  onclick={selectFastEditor}
+                  disabled={isLoading}
+                  class="bg-background-200 text-foreground-700 hover:bg-background-300 flex items-center space-x-2 rounded-lg px-4 py-3 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                    />
+                  </svg>
+                  <span>Browse</span>
+                </button>
+              </div>
+              <p class="text-foreground-500 mt-2 text-sm">
+                Recommended: IrfanView, FastStone Image Viewer, Windows Photos
+              </p>
+            </div>
+          {/if}
         </div>
 
         <!-- Complex Editor Selection -->
@@ -1278,7 +1334,12 @@
       <div class="border-background-200 bg-background-50 rounded-xl border p-6">
         <div class="mb-4 flex items-center space-x-3">
           <div class="bg-accent-100 flex h-10 w-10 items-center justify-center rounded-lg">
-            <svg class="text-accent-600 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg
+              class="text-accent-600 h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
               <path
                 stroke-linecap="round"
                 stroke-linejoin="round"
@@ -1289,14 +1350,16 @@
           </div>
           <div>
             <h2 class="text-foreground-900 text-xl font-semibold">Repair Database</h2>
-            <p class="text-foreground-600 text-sm">Sync property statuses with actual folder locations</p>
+            <p class="text-foreground-600 text-sm">
+              Sync property statuses with actual folder locations
+            </p>
           </div>
         </div>
 
         <p class="text-foreground-600 mb-4 text-sm">
-          If properties aren't showing correctly, this will check each property's actual folder location
-          and update the database status to match. Use this if properties were moved manually or after
-          a failed operation.
+          If properties aren't showing correctly, this will check each property's actual folder
+          location and update the database status to match. Use this if properties were moved
+          manually or after a failed operation.
         </p>
 
         <div class="flex items-center space-x-4">
@@ -1306,7 +1369,9 @@
             class="bg-accent-500 hover:bg-accent-600 flex items-center space-x-2 rounded-lg px-4 py-2 font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
             {#if isRepairing}
-              <div class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+              <div
+                class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
+              ></div>
               <span>Repairing...</span>
             {:else}
               <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1611,21 +1676,32 @@
           class="text-foreground-400 hover:text-foreground-600 p-1"
         >
           <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M6 18L18 6M6 6l12 12"
+            />
           </svg>
         </button>
       </div>
 
       <div class="space-y-4">
         <!-- Stats -->
-        <div class="bg-background-50 border-background-200 grid grid-cols-2 gap-4 rounded-lg border p-4">
+        <div
+          class="bg-background-50 border-background-200 grid grid-cols-2 gap-4 rounded-lg border p-4"
+        >
           <div class="text-center">
             <p class="text-foreground-500 text-xs">Checked</p>
             <p class="text-foreground-900 text-2xl font-bold">{repairResult.propertiesChecked}</p>
           </div>
           <div class="text-center">
             <p class="text-foreground-500 text-xs">Fixed</p>
-            <p class="text-2xl font-bold {repairResult.propertiesFixed > 0 ? 'text-green-600' : 'text-foreground-900'}">
+            <p
+              class="text-2xl font-bold {repairResult.propertiesFixed > 0
+                ? 'text-green-600'
+                : 'text-foreground-900'}"
+            >
               {repairResult.propertiesFixed}
             </p>
           </div>
@@ -1634,18 +1710,41 @@
         <!-- Status Message -->
         {#if repairResult.propertiesFixed > 0}
           <div class="flex items-start gap-2 rounded-lg border border-green-200 bg-green-50 p-3">
-            <svg class="mt-0.5 h-4 w-4 flex-shrink-0 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            <svg
+              class="mt-0.5 h-4 w-4 flex-shrink-0 text-green-600"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M5 13l4 4L19 7"
+              />
             </svg>
             <p class="text-sm text-green-700">
-              Successfully repaired {repairResult.propertiesFixed} {repairResult.propertiesFixed === 1 ? 'property' : 'properties'}.
-              The database is now synced with the actual folder locations.
+              Successfully repaired {repairResult.propertiesFixed}
+              {repairResult.propertiesFixed === 1 ? 'property' : 'properties'}. The database is now
+              synced with the actual folder locations.
             </p>
           </div>
         {:else}
-          <div class="bg-background-50 border-background-200 flex items-start gap-2 rounded-lg border p-3">
-            <svg class="text-foreground-400 mt-0.5 h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+          <div
+            class="bg-background-50 border-background-200 flex items-start gap-2 rounded-lg border p-3"
+          >
+            <svg
+              class="text-foreground-400 mt-0.5 h-4 w-4 flex-shrink-0"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M5 13l4 4L19 7"
+              />
             </svg>
             <p class="text-foreground-600 text-sm">
               All properties are correctly synced. No repairs needed.
@@ -1656,7 +1755,9 @@
         <!-- Errors (if any) -->
         {#if repairResult.errors.length > 0}
           <div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
-            <p class="mb-2 text-sm font-medium text-amber-800">Warnings ({repairResult.errors.length})</p>
+            <p class="mb-2 text-sm font-medium text-amber-800">
+              Warnings ({repairResult.errors.length})
+            </p>
             <div class="max-h-32 overflow-y-auto">
               {#each repairResult.errors as error}
                 <p class="text-xs text-amber-700">{error}</p>

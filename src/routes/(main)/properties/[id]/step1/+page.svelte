@@ -3,10 +3,11 @@
   import { page } from '$app/stores';
   import { invoke } from '@tauri-apps/api/core';
   import { DatabaseService } from '$lib/services/databaseService';
-  import type { Property } from '$lib/types/database';
+  import type { Property, AppConfig } from '$lib/types/database';
   import { showSuccess, showError } from '$lib/stores/notification';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import LazyImage from '$lib/components/LazyImage.svelte';
+  import { openEditorWindow } from '$lib/utils/editorWindow';
   export const prerender = false;
 
   let property: Property | null = $state(null);
@@ -19,6 +20,7 @@
   let copyProgress = $state({ current: 0, total: 0 });
   let showClearConfirm = $state(false);
   let imageRefreshKey = $state(0); // Increment to force image refresh
+  let useBuiltinEditor = $state(true);
 
   // Get the id from the URL params
   let propertyId = $derived(Number($page.params.id));
@@ -39,6 +41,13 @@
 
     try {
       loading = true;
+
+      // Load config to check editor preference
+      const config = await invoke<AppConfig | null>('load_config');
+      if (config) {
+        useBuiltinEditor = config.use_builtin_editor ?? true;
+      }
+
       property = await DatabaseService.getPropertyById(propertyId);
       if (!property) {
         error = 'Property not found';
@@ -141,6 +150,20 @@
   async function openImageInEditor(filename: string, isFromInternet: boolean = false) {
     if (!property) return;
 
+    const subfolder = isFromInternet ? 'INTERNET' : '';
+
+    // Check if we should use the built-in editor
+    if (useBuiltinEditor) {
+      await openEditorWindow({
+        folderPath: property.folder_path,
+        status: property.status,
+        subfolder,
+        filename
+      });
+      return;
+    }
+
+    // Otherwise, use external editor
     try {
       const result: any = await invoke('open_image_in_editor', {
         folderPath: property.folder_path,
@@ -286,14 +309,18 @@
         <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">
           Original Images
         </p>
-        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{originalImageFilenames.length}</p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">
+          {originalImageFilenames.length}
+        </p>
       </div>
 
       <div class="bg-background-50 border-background-200 border p-4">
         <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">
           INTERNET Folder
         </p>
-        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{internetImageFilenames.length}</p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">
+          {internetImageFilenames.length}
+        </p>
       </div>
     </div>
 
@@ -405,7 +432,7 @@
               subfolder="INTERNET"
               {filename}
               alt={filename}
-              class="aspect-square cursor-pointer border border-background-200 hover:border-background-300 transition-colors"
+              class="border-background-200 hover:border-background-300 aspect-square cursor-pointer border transition-colors"
               onclick={() => openImageInEditor(filename, true)}
               refreshKey={imageRefreshKey}
             />

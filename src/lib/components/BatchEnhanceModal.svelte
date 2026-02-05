@@ -2,7 +2,7 @@
   import { DatabaseService } from '$lib/services/databaseService';
   import { Dialog, DialogContent, DialogFooter } from '$lib/components/ui';
   import { Dialog as BitsDialog } from 'bits-ui';
-  import type { AcceptedCorrection, CorrectionResult } from '$lib/types/database';
+  import type { EnhanceAnalysisResult, EnhanceRequest } from '$lib/types/database';
   import { onMount } from 'svelte';
   import BeforeAfterSlider from './BeforeAfterSlider.svelte';
   import { showSuccess, showError } from '$lib/stores/notification';
@@ -11,7 +11,6 @@
     open?: boolean;
     folderPath: string;
     status: string;
-    propertyId: number;
     onClose: () => void;
     onComplete: () => void;
   }
@@ -20,56 +19,43 @@
     open = $bindable(true),
     folderPath,
     status,
-    propertyId,
     onClose,
     onComplete
   }: Props = $props();
 
   // Processing state
-  let isProcessing = $state(false);
+  let isAnalyzing = $state(false);
   let processingMessage = $state('');
-  let results = $state<CorrectionResult[]>([]);
+  let results = $state<EnhanceAnalysisResult[]>([]);
   let selectedIndices = $state<Set<number>>(new Set());
-  let originalPreviews = $state<Map<number, string>>(new Map());
   let error = $state('');
   let isApplying = $state(false);
 
   onMount(async () => {
-    await startProcessing();
+    await analyzeImages();
   });
 
-  async function startProcessing() {
+  async function analyzeImages() {
     try {
-      isProcessing = true;
-      processingMessage = 'Detecting vertical lines and calculating corrections...';
-      results = await DatabaseService.processImagesForPerspective(folderPath, status, propertyId);
+      isAnalyzing = true;
+      processingMessage = 'Analyzing images for straightening and adjustments...';
 
-      const needsCorrectionIndices = new Set<number>();
+      results = await DatabaseService.batchAnalyzeForEnhance(folderPath, status);
+
+      // Pre-select images that need enhancement
+      const needsEnhancementIndices = new Set<number>();
       results.forEach((result, index) => {
-        if (result.needs_correction) {
-          needsCorrectionIndices.add(index);
+        if (result.needs_enhancement) {
+          needsEnhancementIndices.add(index);
         }
       });
-      selectedIndices = needsCorrectionIndices;
+      selectedIndices = needsEnhancementIndices;
 
-      processingMessage = 'Loading previews...';
-      for (let i = 0; i < results.length; i++) {
-        try {
-          const originalBase64 = await DatabaseService.getOriginalImageForComparison(
-            results[i].original_path
-          );
-          originalPreviews.set(i, originalBase64);
-          originalPreviews = new Map(originalPreviews);
-        } catch (err) {
-          console.error('Failed to load original preview:', err);
-        }
-      }
-
-      isProcessing = false;
+      isAnalyzing = false;
     } catch (err) {
-      console.error('Failed to process images:', err);
+      console.error('Failed to analyze images:', err);
       error = err instanceof Error ? err.message : String(err);
-      isProcessing = false;
+      isAnalyzing = false;
     }
   }
 
@@ -93,19 +79,19 @@
     selectedIndices = new Set();
   }
 
-  function selectNeedingCorrection() {
-    const needsCorrectionIndices = new Set<number>();
+  function selectRecommended() {
+    const needsEnhancementIndices = new Set<number>();
     results.forEach((result, index) => {
-      if (result.needs_correction) {
-        needsCorrectionIndices.add(index);
+      if (result.needs_enhancement) {
+        needsEnhancementIndices.add(index);
       }
     });
-    selectedIndices = needsCorrectionIndices;
+    selectedIndices = needsEnhancementIndices;
   }
 
-  async function handleAccept() {
+  async function handleApply() {
     if (selectedIndices.size === 0) {
-      error = 'Please select at least one image to apply corrections';
+      error = 'Please select at least one image to enhance';
       return;
     }
 
@@ -113,60 +99,67 @@
       isApplying = true;
       error = '';
 
-      const corrections: AcceptedCorrection[] = Array.from(selectedIndices).map((index) => ({
+      const enhancements: EnhanceRequest[] = Array.from(selectedIndices).map((index) => ({
+        filename: results[index].filename,
         original_path: results[index].original_path,
-        corrected_temp_path: results[index].corrected_temp_path
+        rotation: results[index].straighten.rotation,
+        brightness: results[index].adjustments.brightness,
+        exposure: results[index].adjustments.exposure,
+        contrast: results[index].adjustments.contrast
       }));
 
-      const result = await DatabaseService.acceptPerspectiveCorrections(corrections);
+      const applyResults = await DatabaseService.batchApplyEnhancements(enhancements);
 
-      if (result.success) {
-        showSuccess(`Applied perspective corrections to ${corrections.length} images`);
+      const successCount = applyResults.filter((r) => r.success).length;
+      const failCount = applyResults.filter((r) => !r.success).length;
+
+      if (failCount === 0) {
+        showSuccess(`Enhanced ${successCount} images successfully`);
         onComplete();
+        onClose();
+      } else if (successCount > 0) {
+        showSuccess(`Enhanced ${successCount} images, ${failCount} failed`);
+        onComplete();
+        onClose();
       } else {
-        showError(result.error || 'Failed to apply corrections');
+        const firstError = applyResults.find((r) => r.error)?.error;
+        showError(firstError || 'Failed to apply enhancements');
       }
     } catch (err) {
-      console.error('Failed to apply corrections:', err);
-      showError(err instanceof Error ? err.message : 'Failed to apply corrections');
+      console.error('Failed to apply enhancements:', err);
+      showError(err instanceof Error ? err.message : 'Failed to apply enhancements');
     } finally {
       isApplying = false;
     }
   }
 
-  async function handleCancel() {
-    try {
-      await DatabaseService.cleanupPerspectiveTemp();
-    } catch (err) {
-      console.error('Failed to cleanup temp files:', err);
-    }
+  function handleCancel() {
     onClose();
   }
 
   function handleOpenChange(newOpen: boolean) {
-    if (!newOpen && !isProcessing && !isApplying) {
+    if (!newOpen && !isAnalyzing && !isApplying) {
       handleCancel();
     }
   }
 
-  let needsCorrectionCount = $derived(results.filter((r) => r.needs_correction).length);
-
+  let recommendedCount = $derived(results.filter((r) => r.needs_enhancement).length);
   let selectedCount = $derived(selectedIndices.size);
 </script>
 
 <Dialog bind:open onOpenChange={handleOpenChange}>
-  <DialogContent class="flex w-[95vw] max-w-5xl max-h-[90vh] flex-col overflow-hidden rounded-xl">
+  <DialogContent class="flex max-h-[95vh] w-[95vw] max-w-[1600px] flex-col overflow-hidden rounded-xl">
     <!-- Modal Header -->
     <div class="border-background-200 flex items-center justify-between border-b px-5 py-4">
       <div>
         <BitsDialog.Title class="text-foreground-900 text-lg font-semibold">
-          Auto-Straighten Images
+          Auto-Enhance Images
         </BitsDialog.Title>
         <p class="text-foreground-500 mt-0.5 text-sm">
-          {#if isProcessing}
+          {#if isAnalyzing}
             {processingMessage}
           {:else if results.length > 0}
-            {needsCorrectionCount} of {results.length} images need correction
+            {recommendedCount} of {results.length} images recommended for enhancement
           {:else}
             Analyzing images...
           {/if}
@@ -174,7 +167,7 @@
       </div>
       <BitsDialog.Close
         onclick={handleCancel}
-        disabled={isProcessing || isApplying}
+        disabled={isAnalyzing || isApplying}
         class="text-foreground-500 hover:text-foreground-700 transition-colors disabled:opacity-50"
       >
         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -190,7 +183,7 @@
 
     <!-- Modal Content -->
     <div class="flex-1 overflow-y-auto p-5">
-      {#if isProcessing}
+      {#if isAnalyzing}
         <div class="flex flex-col items-center justify-center py-16">
           <div
             class="border-accent-500 h-10 w-10 animate-spin rounded-full border-4 border-t-transparent"
@@ -225,10 +218,10 @@
             Select All ({results.length})
           </button>
           <button
-            onclick={selectNeedingCorrection}
+            onclick={selectRecommended}
             class="border-background-300 bg-background-100 text-foreground-700 hover:bg-background-200 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors"
           >
-            Select Needing Correction ({needsCorrectionCount})
+            Select Recommended ({recommendedCount})
           </button>
           <button
             onclick={deselectAll}
@@ -242,34 +235,27 @@
         </div>
 
         <!-- Image grid -->
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           {#each results as result, index}
             <div class="relative">
               <p
                 class="text-foreground-700 mb-1.5 truncate text-xs font-medium"
-                title={result.original_filename}
+                title={result.filename}
               >
-                {result.original_filename}
+                {result.filename}
               </p>
-              {#if originalPreviews.has(index) && result.corrected_preview_base64}
-                <BeforeAfterSlider
-                  beforeUrl={originalPreviews.get(index) || ''}
-                  afterUrl={result.corrected_preview_base64}
-                  selected={selectedIndices.has(index)}
-                  onToggleSelect={() => toggleSelection(index)}
-                  confidence={result.confidence}
-                  rotationApplied={result.rotation_applied}
-                  needsCorrection={result.needs_correction}
-                />
-              {:else}
-                <div
-                  class="bg-background-200 flex aspect-[4/3] items-center justify-center rounded-lg"
-                >
-                  <div
-                    class="border-accent-500 h-6 w-6 animate-spin rounded-full border-2 border-t-transparent"
-                  ></div>
-                </div>
-              {/if}
+              <BeforeAfterSlider
+                beforeUrl={result.original_preview_base64}
+                afterUrl={result.preview_base64}
+                selected={selectedIndices.has(index)}
+                onToggleSelect={() => toggleSelection(index)}
+                confidence={result.combined_confidence}
+                rotationApplied={result.straighten.rotation}
+                needsCorrection={result.needs_enhancement}
+                brightness={result.adjustments.brightness}
+                exposure={result.adjustments.exposure}
+                contrast={result.adjustments.contrast}
+              />
             </div>
           {/each}
         </div>
@@ -286,20 +272,20 @@
     <DialogFooter>
       <button
         onclick={handleCancel}
-        disabled={isProcessing || isApplying}
+        disabled={isAnalyzing || isApplying}
         class="border-background-300 bg-background-100 text-foreground-700 hover:bg-background-200 rounded-md border px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50"
       >
         Cancel
       </button>
       <button
-        onclick={handleAccept}
-        disabled={isProcessing || isApplying || selectedIndices.size === 0}
+        onclick={handleApply}
+        disabled={isAnalyzing || isApplying || selectedIndices.size === 0}
         class="bg-accent-500 hover:bg-accent-600 rounded-md px-4 py-2 text-sm font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       >
         {#if isApplying}
           Applying...
         {:else}
-          Accept Selected ({selectedCount})
+          Apply to {selectedCount} Images
         {/if}
       </button>
     </DialogFooter>

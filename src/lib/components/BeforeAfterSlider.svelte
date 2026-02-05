@@ -7,6 +7,10 @@
     confidence?: number;
     rotationApplied?: number;
     needsCorrection?: boolean;
+    // Adjustment values (for batch enhance)
+    brightness?: number;
+    exposure?: number;
+    contrast?: number;
   }
 
   let {
@@ -16,8 +20,23 @@
     onToggleSelect,
     confidence = 0,
     rotationApplied = 0,
-    needsCorrection = true
+    needsCorrection = true,
+    brightness = 0,
+    exposure = 0,
+    contrast = 0
   }: Props = $props();
+
+  // Check if any adjustments will be applied
+  let hasAdjustments = $derived(
+    Math.abs(brightness) > 0 || Math.abs(exposure) > 0 || Math.abs(contrast) > 0
+  );
+
+  // Format adjustment value with sign
+  function formatAdj(value: number, label: string): string {
+    if (Math.abs(value) < 1) return '';
+    const sign = value > 0 ? '+' : '';
+    return `${label}${sign}${value}`;
+  }
 
   let sliderPosition = $state(50);
   let containerRef: HTMLDivElement | null = $state(null);
@@ -105,17 +124,38 @@
 
   <!-- Rotation info -->
   {#if needsCorrection && Math.abs(rotationApplied) > 0.1}
-    <div class="absolute right-2 bottom-2 z-20 rounded-full bg-black/60 px-2 py-1">
+    <div class="absolute right-2 bottom-8 z-20 rounded-full bg-black/60 px-2 py-1">
       <span class="text-xs text-white"
         >{rotationApplied > 0 ? '+' : ''}{rotationApplied.toFixed(1)}&deg;</span
       >
     </div>
   {/if}
 
+  <!-- Adjustments info -->
+  {#if hasAdjustments}
+    <div class="absolute right-2 bottom-2 z-20 flex gap-1">
+      {#if Math.abs(brightness) >= 1}
+        <div class="rounded bg-amber-500/80 px-1.5 py-0.5">
+          <span class="text-[10px] font-medium text-white">B{brightness > 0 ? '+' : ''}{brightness}</span>
+        </div>
+      {/if}
+      {#if Math.abs(exposure) >= 1}
+        <div class="rounded bg-blue-500/80 px-1.5 py-0.5">
+          <span class="text-[10px] font-medium text-white">E{exposure > 0 ? '+' : ''}{exposure}</span>
+        </div>
+      {/if}
+      {#if Math.abs(contrast) >= 1}
+        <div class="rounded bg-purple-500/80 px-1.5 py-0.5">
+          <span class="text-[10px] font-medium text-white">C{contrast > 0 ? '+' : ''}{contrast}</span>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   <!-- No correction needed badge -->
   {#if !needsCorrection}
     <div class="absolute bottom-2 left-2 z-20 rounded-full bg-green-500/80 px-2 py-1">
-      <span class="text-xs font-medium text-white">Already straight</span>
+      <span class="text-xs font-medium text-white">No changes needed</span>
     </div>
   {/if}
 

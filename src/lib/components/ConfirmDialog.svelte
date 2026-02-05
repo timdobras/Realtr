@@ -32,7 +32,7 @@
 </script>
 
 <Dialog bind:open onOpenChange={handleOpenChange}>
-  <DialogContent>
+  <DialogContent class="w-full max-w-md rounded-xl">
     <div class="p-5">
       <BitsDialog.Title class="text-foreground-900 text-base font-semibold">
         {title}

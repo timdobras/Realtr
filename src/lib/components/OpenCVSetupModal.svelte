@@ -69,7 +69,7 @@
 </script>
 
 <Dialog bind:open>
-  <DialogContent class="max-w-lg overflow-hidden rounded-xl">
+  <DialogContent class="w-full max-w-lg overflow-hidden rounded-xl">
     <!-- Header -->
     <div class="border-background-200 border-b px-6 py-4">
       <div class="flex items-center gap-3">

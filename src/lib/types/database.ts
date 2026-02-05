@@ -63,6 +63,8 @@ export interface AppConfig {
   setsFolderPath: string;
   isValidPath: boolean;
   lastUpdated: string | null;
+  // Image editor settings
+  use_builtin_editor?: boolean;
   fast_editor_path?: string;
   fast_editor_name?: string;
   complex_editor_path?: string;
@@ -141,4 +143,45 @@ export interface RepairResult {
   propertiesChecked: number;
   propertiesFixed: number;
   errors: string[];
+}
+
+// Batch Auto-Enhance Types
+export interface StraightenAnalysis {
+  rotation: number; // degrees
+  confidence: number; // 0.0-1.0
+  lines_used: number;
+  vh_agreement: boolean;
+}
+
+export interface AdjustmentAnalysis {
+  brightness: number; // -100 to 100
+  exposure: number; // -100 to 100
+  contrast: number; // -100 to 100
+  magnitude: number; // 0.0-1.0
+}
+
+export interface EnhanceAnalysisResult {
+  filename: string;
+  original_path: string;
+  straighten: StraightenAnalysis;
+  adjustments: AdjustmentAnalysis;
+  combined_confidence: number; // 0.0-1.0
+  needs_enhancement: boolean;
+  preview_base64: string;
+  original_preview_base64: string;
+}
+
+export interface EnhanceRequest {
+  filename: string;
+  original_path: string;
+  rotation: number;
+  brightness: number;
+  exposure: number;
+  contrast: number;
+}
+
+export interface EnhanceApplyResult {
+  filename: string;
+  success: boolean;
+  error?: string;
 }

@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.1.49-beta"
+version = "0.1.50-beta"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -16,7 +16,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = []
-opencv = ["dep:opencv", "dep:rand", "dep:nalgebra", "dep:imageproc"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -36,17 +35,20 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4"] }
 image = { version = "0.25", features = ["png", "jpeg", "gif", "webp", "bmp"] }
 rayon = "1.10"
+nalgebra = "0.33"
+imageproc = "0.25"
 opener = "0.7"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 walkdir = "2"
 tauri-plugin-updater = "^2.0.0"
 tauri-plugin-process = "^2.0.0"
 
-# Perspective correction dependencies (optional - requires OpenCV installed)
-opencv = { version = "0.92", default-features = false, features = ["imgproc", "imgcodecs"], optional = true }
-rand = { version = "0.8", optional = true }
-nalgebra = { version = "0.33", optional = true }
-imageproc = { version = "0.25", optional = true }
+# Perspective correction and auto-straighten (requires OpenCV installed)
+opencv = { version = "0.92", default-features = false, features = ["imgproc", "imgcodecs"] }
+rand = "0.8"
+
+# EXIF metadata reading for lens distortion correction
+kamadak-exif = "0.5"
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -6,7 +6,10 @@
 pub mod commands;
 pub mod detection;
 pub mod model;
+pub mod preprocessing;
 pub mod rectification;
+pub mod straighten;
+pub mod vanishing;
 
 use serde::{Deserialize, Serialize};
 
@@ -101,6 +104,85 @@ impl PerspectiveCommandResult {
             message: None,
         }
     }
+}
+
+// ============================================================================
+// Batch Auto-Enhance Types
+// ============================================================================
+
+/// Result of batch enhancement analysis for a single image
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnhanceAnalysisResult {
+    /// Original filename
+    pub filename: String,
+    /// Full path to original image
+    pub original_path: String,
+    /// Straightening analysis
+    pub straighten: StraightenAnalysis,
+    /// Auto-adjustment suggestions
+    pub adjustments: AdjustmentAnalysis,
+    /// Combined confidence (weighted average)
+    pub combined_confidence: f32,
+    /// Whether any enhancement is recommended
+    pub needs_enhancement: bool,
+    /// Base64 preview of the enhanced image
+    pub preview_base64: String,
+    /// Base64 of original (for before/after)
+    pub original_preview_base64: String,
+}
+
+/// Straightening analysis result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StraightenAnalysis {
+    /// Suggested rotation in degrees
+    pub rotation: f64,
+    /// Confidence score 0.0-1.0
+    pub confidence: f32,
+    /// Number of lines used in analysis
+    pub lines_used: usize,
+    /// Whether vertical and horizontal lines agreed
+    pub vh_agreement: bool,
+}
+
+/// Auto-adjustment analysis result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdjustmentAnalysis {
+    /// Brightness adjustment (-100 to 100)
+    pub brightness: i32,
+    /// Exposure adjustment (-100 to 100)
+    pub exposure: i32,
+    /// Contrast adjustment (-100 to 100)
+    pub contrast: i32,
+    /// Combined magnitude of adjustments (0.0-1.0)
+    pub magnitude: f32,
+}
+
+/// Request to apply enhancements to a single image
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnhanceRequest {
+    /// Original filename
+    pub filename: String,
+    /// Full path to original image
+    pub original_path: String,
+    /// Rotation to apply in degrees
+    pub rotation: f64,
+    /// Brightness adjustment
+    pub brightness: i32,
+    /// Exposure adjustment
+    pub exposure: i32,
+    /// Contrast adjustment
+    pub contrast: i32,
+}
+
+/// Result of applying enhancement to a single image
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnhanceApplyResult {
+    /// Filename that was processed
+    pub filename: String,
+    /// Whether the enhancement was successful
+    pub success: bool,
+    /// Error message if failed
+    pub error: Option<String>,
 }
 
 // ============================================================================

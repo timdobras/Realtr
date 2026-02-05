@@ -86,7 +86,7 @@
 </script>
 
 <Dialog bind:open onOpenChange={handleOpenChange}>
-  <DialogContent class="max-h-[90vh] overflow-y-auto rounded-xl">
+  <DialogContent class="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-xl">
     <DialogHeader title="Add New Property" {onClose} />
 
     <form onsubmit={handleSubmit} class="space-y-5 p-5">

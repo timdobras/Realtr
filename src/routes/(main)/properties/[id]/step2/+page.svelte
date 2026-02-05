@@ -6,11 +6,12 @@
   import { dndzone } from 'svelte-dnd-action';
   import { flip } from 'svelte/animate';
   import { DatabaseService } from '$lib/services/databaseService';
-  import type { Property } from '$lib/types/database';
-  import PerspectiveCorrectionModal from '$lib/components/PerspectiveCorrectionModal.svelte';
+  import type { Property, AppConfig } from '$lib/types/database';
+  import BatchEnhanceModal from '$lib/components/BatchEnhanceModal.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import LazyImage from '$lib/components/LazyImage.svelte';
   import { showSuccess, showError } from '$lib/stores/notification';
+  import { openEditorWindow } from '$lib/utils/editorWindow';
   export const prerender = false;
 
   interface ImageItem {
@@ -27,8 +28,11 @@
   let baseFileName = $state('');
   let dragDisabled = $state(false);
   let isDragging = $state(false); // Track drag state
-  let showPerspectiveModal = $state(false);
+  let showEnhanceModal = $state(false);
   let imageRefreshKey = $state(0); // Increment to force image refresh
+
+  // Image editor setting
+  let useBuiltinEditor = $state(true); // Default to built-in editor
 
   // Track unsaved reorder changes
   let originalOrder: string[] = $state([]);
@@ -76,6 +80,13 @@
 
     try {
       loading = true;
+
+      // Load config to check editor preference
+      const config = await invoke<AppConfig | null>('load_config');
+      if (config) {
+        useBuiltinEditor = config.use_builtin_editor ?? true;
+      }
+
       property = await DatabaseService.getPropertyById(propertyId);
       if (!property) {
         error = 'Property not found';
@@ -147,7 +158,11 @@
         hasUnsavedChanges = false;
 
         // Pre-generate thumbnails in parallel for faster display
-        DatabaseService.pregenerateGalleryThumbnails(property.folder_path, property.status, 'INTERNET');
+        DatabaseService.pregenerateGalleryThumbnails(
+          property.folder_path,
+          property.status,
+          'INTERNET'
+        );
       }
     } catch (e) {
       error = `Failed to load images: ${e}`;
@@ -231,6 +246,18 @@
 
     if (!property) return;
 
+    // Check if we should use the built-in editor (opens in new window)
+    if (useBuiltinEditor) {
+      await openEditorWindow({
+        folderPath: property.folder_path,
+        status: property.status,
+        subfolder: 'INTERNET',
+        filename
+      });
+      return;
+    }
+
+    // Otherwise, use external editor
     try {
       const result: any = await invoke('open_image_in_editor', {
         folderPath: property.folder_path,
@@ -247,18 +274,19 @@
     }
   }
 
-  function openPerspectiveModal() {
-    showPerspectiveModal = true;
+  function openEnhanceModal() {
+    showEnhanceModal = true;
   }
 
-  function closePerspectiveModal() {
-    showPerspectiveModal = false;
+  function closeEnhanceModal() {
+    showEnhanceModal = false;
   }
 
-  async function handlePerspectiveComplete() {
-    showPerspectiveModal = false;
-    // Reload images after perspective corrections
+  async function handleEnhanceComplete() {
+    showEnhanceModal = false;
+    // Reload images after enhancements applied
     await loadInternetImages();
+    imageRefreshKey++; // Force thumbnail refresh
   }
 </script>
 
@@ -399,22 +427,22 @@
           </div>
 
           <div class="flex items-center space-x-3">
-            <!-- Auto-Straighten Button -->
+            <!-- Auto-Enhance Button -->
             <button
-              onclick={openPerspectiveModal}
+              onclick={openEnhanceModal}
               disabled={renamingImages || internetImages.length === 0 || isDragging}
               class="border-background-300 bg-background-100 text-foreground-700 hover:bg-background-200 flex items-center space-x-2 border px-4 py-3 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-              title="Auto-straighten images using perspective correction"
+              title="Auto-enhance images (straighten + brightness/exposure/contrast)"
             >
               <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
                   stroke-linecap="round"
                   stroke-linejoin="round"
                   stroke-width="2"
-                  d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
+                  d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"
                 />
               </svg>
-              <span>Auto-Straighten</span>
+              <span>Auto-Enhance</span>
             </button>
 
             <button
@@ -519,7 +547,9 @@
                     filename={image.filename}
                     alt={image.filename}
                     class="aspect-square w-full cursor-pointer"
-                    onclick={() => !isDragging && openImageInEditor(image.filename, { preventDefault: () => {} })}
+                    onclick={() =>
+                      !isDragging &&
+                      openImageInEditor(image.filename, { preventDefault: () => {} })}
                     refreshKey={imageRefreshKey}
                   />
 
@@ -569,14 +599,13 @@
     </div>
   </div>
 
-  <!-- Perspective Correction Modal -->
-  {#if showPerspectiveModal && property}
-    <PerspectiveCorrectionModal
+  <!-- Batch Enhance Modal -->
+  {#if showEnhanceModal && property}
+    <BatchEnhanceModal
       folderPath={property.folder_path}
       status={property.status}
-      propertyId={property.id ?? 0}
-      onClose={closePerspectiveModal}
-      onComplete={handlePerspectiveComplete}
+      onClose={closeEnhanceModal}
+      onComplete={handleEnhanceComplete}
     />
   {/if}
 

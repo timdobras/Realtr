@@ -6,6 +6,9 @@ import type {
   CommandResult,
   CompleteSetResult,
   CorrectionResult,
+  EnhanceAnalysisResult,
+  EnhanceApplyResult,
+  EnhanceRequest,
   OpenCVStatus,
   PerspectiveCommandResult,
   Property,
@@ -297,5 +300,24 @@ export class DatabaseService {
       return result.data as RepairResult;
     }
     return null;
+  }
+
+  // Batch Auto-Enhance Operations
+  static async batchAnalyzeForEnhance(
+    folderPath: string,
+    status: string
+  ): Promise<EnhanceAnalysisResult[]> {
+    return await invoke<EnhanceAnalysisResult[]>('batch_analyze_for_enhance', {
+      folderPath,
+      status
+    });
+  }
+
+  static async batchApplyEnhancements(
+    enhancements: EnhanceRequest[]
+  ): Promise<EnhanceApplyResult[]> {
+    return await invoke<EnhanceApplyResult[]>('batch_apply_enhancements', {
+      enhancements
+    });
   }
 }

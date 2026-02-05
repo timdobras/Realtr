@@ -140,8 +140,16 @@
   function pregenerateThumbnails() {
     if (!property) return;
     // Pre-generate WATERMARK folder thumbnails
-    DatabaseService.pregenerateGalleryThumbnails(property.folder_path, property.status, 'WATERMARK');
-    DatabaseService.pregenerateGalleryThumbnails(property.folder_path, property.status, 'WATERMARK/AGGELIA');
+    DatabaseService.pregenerateGalleryThumbnails(
+      property.folder_path,
+      property.status,
+      'WATERMARK'
+    );
+    DatabaseService.pregenerateGalleryThumbnails(
+      property.folder_path,
+      property.status,
+      'WATERMARK/AGGELIA'
+    );
   }
 
   function applyWatermarksToAllImages() {
@@ -268,7 +276,9 @@
   }
 
   // Reactive values for UI
-  let totalWatermarkedImages = $derived(watermarkFilenames.length + watermarkAggeliaFilenames.length);
+  let totalWatermarkedImages = $derived(
+    watermarkFilenames.length + watermarkAggeliaFilenames.length
+  );
 
   async function completeAndNavigate() {
     // Set status to DONE only if property is NEW
