@@ -12,6 +12,19 @@
     rotation?: number;
     quarterTurns?: number;
     showRotatedBackground?: boolean; // Show extended image beyond crop boundary (when rotating)
+    // Crop parameters (normalized 0-1, only applied when cropEnabled is true)
+    cropEnabled?: boolean;
+    cropX?: number;
+    cropY?: number;
+    cropWidth?: number;
+    cropHeight?: number;
+    // Bindable outputs for crop overlay positioning
+    zoom?: number;
+    panX?: number;
+    panY?: number;
+    fitScalePercent?: number;
+    canvasImageWidth?: number;
+    canvasImageHeight?: number;
   }
 
   let {
@@ -23,7 +36,18 @@
     shadows = 0,
     rotation = 0,
     quarterTurns = 0,
-    showRotatedBackground = false
+    showRotatedBackground = false,
+    cropEnabled = false,
+    cropX = 0,
+    cropY = 0,
+    cropWidth = 1,
+    cropHeight = 1,
+    zoom = $bindable(1),
+    panX = $bindable(0),
+    panY = $bindable(0),
+    fitScalePercent = $bindable(100),
+    canvasImageWidth = $bindable(0),
+    canvasImageHeight = $bindable(0)
   }: Props = $props();
 
   let canvas: HTMLCanvasElement;
@@ -31,22 +55,11 @@
   let program: WebGLProgram | null = null;
   let texture: WebGLTexture | null = null;
   let imageLoaded = $state(false);
-  let imageWidth = $state(0);
-  let imageHeight = $state(0);
 
-  // Zoom and pan state
-  // zoom is internal multiplier (1 = fit to view)
-  // actualZoomPercent is what we display (100 = 1:1 pixels)
-  let zoom = $state(1);
-  let panX = $state(0);
-  let panY = $state(0);
+  // Internal tracking for panning
   let isPanning = $state(false);
   let lastMouseX = 0;
   let lastMouseY = 0;
-
-  // fitScalePercent: the zoom percentage when image fits in view
-  // e.g., if image is 4000px and canvas is 800px, fitScalePercent ≈ 20
-  let fitScalePercent = $state(100);
 
   // Derived: actual zoom percentage for display
   let actualZoomPercent = $derived(Math.round(zoom * fitScalePercent));
@@ -66,6 +79,11 @@
   let u_panY: WebGLUniformLocation | null = null;
   let u_canvasHeight: WebGLUniformLocation | null = null;
   let u_showBackground: WebGLUniformLocation | null = null;
+  let u_cropEnabled: WebGLUniformLocation | null = null;
+  let u_cropX: WebGLUniformLocation | null = null;
+  let u_cropY: WebGLUniformLocation | null = null;
+  let u_cropWidth: WebGLUniformLocation | null = null;
+  let u_cropHeight: WebGLUniformLocation | null = null;
 
   // Track canvas aspect ratio for shader
   let canvasAspectRatio = $state(1);
@@ -102,6 +120,11 @@
     uniform float u_panY;          // pan offset Y (normalized)
     uniform float u_canvasHeight;  // canvas height in pixels (for border thickness)
     uniform float u_showBackground;  // 1.0 = show background/dimmed areas, 0.0 = only show crop area
+    uniform float u_cropEnabled;   // 1.0 = show only cropped region, 0.0 = show full image
+    uniform float u_cropX;         // crop start X (0-1)
+    uniform float u_cropY;         // crop start Y (0-1)
+    uniform float u_cropWidth;     // crop width (0-1)
+    uniform float u_cropHeight;    // crop height (0-1)
 
     varying vec2 v_texCoord;
 
@@ -124,14 +147,28 @@
         effectiveAspect = 1.0 / u_imageAspect;
       }
 
+      // When crop is enabled, use the cropped region's aspect ratio instead
+      float displayAspect = effectiveAspect;
+      if (u_cropEnabled > 0.5) {
+        // The crop region's aspect ratio in image space
+        float cropAspect = (u_cropWidth * u_imageAspect) / u_cropHeight;
+        // Account for quarter turns
+        if (u_quarterTurns > 0.5 && u_quarterTurns < 1.5) {
+          cropAspect = u_cropHeight / (u_cropWidth * u_imageAspect);
+        } else if (u_quarterTurns > 2.5) {
+          cropAspect = u_cropHeight / (u_cropWidth * u_imageAspect);
+        }
+        displayAspect = cropAspect;
+      }
+
       // Calculate the bounding box of the rotated image
       float absAngle = abs(u_rotation);
       float cosA = cos(absAngle);
       float sinA = sin(absAngle);
 
       // Rotated bounding box dimensions (normalized, height = 1)
-      float boundingWidth = effectiveAspect * cosA + sinA;
-      float boundingHeight = effectiveAspect * sinA + cosA;
+      float boundingWidth = displayAspect * cosA + sinA;
+      float boundingHeight = displayAspect * sinA + cosA;
       float rotatedAspect = boundingWidth / boundingHeight;
 
       // Scale to fit the rotated image within the canvas (with some padding)
@@ -156,7 +193,15 @@
       float y_rot = -x_scaled * s + y_scaled * c;
 
       // Convert to texture coordinates
-      vec2 texCoord = vec2(x_rot / effectiveAspect + 0.5, y_rot + 0.5);
+      vec2 texCoord = vec2(x_rot / displayAspect + 0.5, y_rot + 0.5);
+
+      // When crop is enabled, map the 0-1 texture coords to the crop region
+      if (u_cropEnabled > 0.5) {
+        texCoord = vec2(
+          u_cropX + texCoord.x * u_cropWidth,
+          u_cropY + texCoord.y * u_cropHeight
+        );
+      }
 
       // Apply quarter turn rotation to texture coordinates
       if (u_quarterTurns > 0.5 && u_quarterTurns < 1.5) {
@@ -176,13 +221,13 @@
 
       // Auto-crop scale factor - largest rectangle that fits inside rotated image
       // When rotation is 0, cropScale = 1.0 (no cropping needed)
-      float scaleFromWidth = 1.0 / (cosA + sinA / effectiveAspect);
-      float scaleFromHeight = 1.0 / (cosA + sinA * effectiveAspect);
+      float scaleFromWidth = 1.0 / (cosA + sinA / displayAspect);
+      float scaleFromHeight = 1.0 / (cosA + sinA * displayAspect);
       float cropScale = min(scaleFromWidth, scaleFromHeight);
 
       // Crop boundary dimensions in VISUAL space (before rotation is applied)
       // This makes the border fixed on screen while the image rotates
-      float cropHalfWidth = effectiveAspect * cropScale * 0.5;
+      float cropHalfWidth = displayAspect * cropScale * 0.5;
       float cropHalfHeight = cropScale * 0.5;
 
       // Check if point is inside crop area using x_scaled, y_scaled (BEFORE inverse rotation)
@@ -391,6 +436,11 @@
     u_panY = gl.getUniformLocation(program, 'u_panY');
     u_canvasHeight = gl.getUniformLocation(program, 'u_canvasHeight');
     u_showBackground = gl.getUniformLocation(program, 'u_showBackground');
+    u_cropEnabled = gl.getUniformLocation(program, 'u_cropEnabled');
+    u_cropX = gl.getUniformLocation(program, 'u_cropX');
+    u_cropY = gl.getUniformLocation(program, 'u_cropY');
+    u_cropWidth = gl.getUniformLocation(program, 'u_cropWidth');
+    u_cropHeight = gl.getUniformLocation(program, 'u_cropHeight');
 
     // Create texture
     texture = gl.createTexture();
@@ -426,8 +476,8 @@
 
     // Calculate fitScalePercent: what percentage is the image at when it fits in view
     // This accounts for the 0.95 padding in the shader
-    if (imageWidth > 0 && imageHeight > 0) {
-      const imageAspect = imageWidth / imageHeight;
+    if (canvasImageWidth > 0 && canvasImageHeight > 0) {
+      const imageAspect = canvasImageWidth / canvasImageHeight;
       const padding = 0.95;
       let displayedWidth: number;
       let displayedHeight: number;
@@ -443,7 +493,7 @@
       }
 
       // fitScalePercent = (displayed pixels / actual image pixels) * 100
-      fitScalePercent = (displayedWidth / imageWidth) * 100;
+      fitScalePercent = (displayedWidth / canvasImageWidth) * 100;
     }
   }
 
@@ -459,8 +509,8 @@
         }
 
         // Store dimensions
-        imageWidth = img.width;
-        imageHeight = img.height;
+        canvasImageWidth = img.width;
+        canvasImageHeight = img.height;
 
         // Resize canvas to match rotated image aspect ratio
         resizeCanvas();
@@ -487,7 +537,7 @@
     gl.useProgram(program);
 
     // Original image aspect ratio (shader handles quarter turns internally)
-    const imageAspect = imageWidth / imageHeight;
+    const imageAspect = canvasImageWidth / canvasImageHeight;
 
     // Update uniforms - convert from -100..100 to shader ranges
     // Ranges calibrated to match Windows 11 Photo Editor behavior
@@ -505,6 +555,11 @@
     gl.uniform1f(u_panY, panY); // pan offset Y
     gl.uniform1f(u_canvasHeight, canvas.height || 600); // canvas height for border thickness
     gl.uniform1f(u_showBackground, showRotatedBackground ? 1.0 : 0.0); // show rotated background
+    gl.uniform1f(u_cropEnabled, cropEnabled ? 1.0 : 0.0); // enable crop preview
+    gl.uniform1f(u_cropX, cropX); // crop start X
+    gl.uniform1f(u_cropY, cropY); // crop start Y
+    gl.uniform1f(u_cropWidth, cropWidth); // crop width
+    gl.uniform1f(u_cropHeight, cropHeight); // crop height
 
     // Clear and draw
     gl.clearColor(0.1, 0.1, 0.1, 1.0);
@@ -525,7 +580,7 @@
   // Reactive effect: re-render whenever adjustment props change (no resize needed)
   $effect(() => {
     // Access adjustment props to create dependency
-    const _ = [brightness, exposure, contrast, highlights, shadows, showRotatedBackground];
+    const _ = [brightness, exposure, contrast, highlights, shadows, showRotatedBackground, cropEnabled, cropX, cropY, cropWidth, cropHeight];
     render();
   });
 

@@ -101,8 +101,16 @@ export function cloneState(state: EditorState): EditorState {
 
 // Check if state has any modifications
 export function hasModifications(state: EditorState): boolean {
-  return (
+  // Check if crop has been applied (coordinates differ from default full-frame)
+  const hasCropModification =
     state.crop.enabled ||
+    state.crop.x !== 0 ||
+    state.crop.y !== 0 ||
+    state.crop.width !== 1 ||
+    state.crop.height !== 1;
+
+  return (
+    hasCropModification ||
     state.rotation.fine !== 0 ||
     state.rotation.quarterTurns !== 0 ||
     state.adjustments.brightness !== 0 ||

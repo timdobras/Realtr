@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -14,6 +14,7 @@
     hasModifications
   } from '$lib/types/imageEditor';
   import WebGLCanvas from '$lib/components/WebGLCanvas.svelte';
+  import CropOverlay from '$lib/components/CropOverlay.svelte';
   import EditorTitleBar from '$lib/components/EditorTitleBar.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
@@ -43,6 +44,22 @@
   let isRotating = $state(false);
   let rotationTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
+  // Track when crop overlay is shown (separate from crop.enabled which controls if crop is applied on save)
+  let isEditingCrop = $state(false);
+
+  // WebGLCanvas state for crop overlay positioning
+  let canvasZoom = $state(1);
+  let canvasPanX = $state(0);
+  let canvasPanY = $state(0);
+  let canvasFitScale = $state(100);
+  let canvasImageWidth = $state(0);
+  let canvasImageHeight = $state(0);
+
+  // Container dimensions for crop overlay
+  let canvasContainer = $state<HTMLDivElement | null>(null);
+  let containerWidth = $state(0);
+  let containerHeight = $state(0);
+
   // Unsaved changes dialog
   let showUnsavedDialog = $state(false);
 
@@ -67,9 +84,30 @@
   // Note: With WebGL, we no longer need debouncing or request tracking
   // All preview updates happen instantly on the GPU
 
+  let resizeObserver: ResizeObserver | null = null;
+
   onMount(async () => {
     if (folderPath && filename) {
       await initEditor();
+    }
+  });
+
+  // Track container size for crop overlay - use $effect since container is conditionally rendered
+  $effect(() => {
+    if (canvasContainer && !resizeObserver) {
+      resizeObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          containerWidth = entry.contentRect.width;
+          containerHeight = entry.contentRect.height;
+        }
+      });
+      resizeObserver.observe(canvasContainer);
+    }
+  });
+
+  onDestroy(() => {
+    if (resizeObserver) {
+      resizeObserver.disconnect();
     }
   });
 
@@ -210,11 +248,15 @@
         brightness: number;
         exposure: number;
         contrast: number;
+        highlights: number;
+        shadows: number;
       }>('editor_analyze_image');
 
       editorState.adjustments.brightness = adjustments.brightness;
       editorState.adjustments.exposure = adjustments.exposure;
       editorState.adjustments.contrast = adjustments.contrast;
+      editorState.adjustments.highlights = adjustments.highlights;
+      editorState.adjustments.shadows = adjustments.shadows;
       pushHistory('Auto adjust');
       // WebGL canvas updates instantly via reactive props!
     } catch (err) {
@@ -266,15 +308,48 @@
   }
 
   function toggleCrop() {
-    editorState.crop.enabled = !editorState.crop.enabled;
-    if (editorState.crop.enabled) {
-      editorState.crop.x = 0;
-      editorState.crop.y = 0;
-      editorState.crop.width = 1;
-      editorState.crop.height = 1;
+    isEditingCrop = !isEditingCrop;
+    if (isEditingCrop) {
+      // Starting crop mode - initialize to full frame if no crop was previously applied
+      editorState.crop.enabled = true;
+      if (editorState.crop.width === 1 && editorState.crop.height === 1) {
+        editorState.crop.x = 0;
+        editorState.crop.y = 0;
+      }
+      pushHistory('Edit crop');
+    } else {
+      // Just closing crop mode without applying
+      pushHistory('Close crop editor');
     }
-    pushHistory(editorState.crop.enabled ? 'Enable crop' : 'Disable crop');
-    // Crop preview is handled by UI overlay - actual crop applied on save
+  }
+
+  function handleCropChange(x: number, y: number, width: number, height: number) {
+    editorState.crop.x = x;
+    editorState.crop.y = y;
+    editorState.crop.width = width;
+    editorState.crop.height = height;
+    // No history push during drag - only on commit
+  }
+
+  function handleCropCommit() {
+    pushHistory('Crop adjusted');
+  }
+
+  function applyCrop() {
+    // Exit crop editing mode - crop.enabled stays true so crop is applied on save
+    isEditingCrop = false;
+    pushHistory('Apply crop');
+  }
+
+  function cancelCrop() {
+    // Exit crop editing mode and reset crop settings
+    isEditingCrop = false;
+    editorState.crop.enabled = false;
+    editorState.crop.x = 0;
+    editorState.crop.y = 0;
+    editorState.crop.width = 1;
+    editorState.crop.height = 1;
+    pushHistory('Cancel crop');
   }
 
   async function handleSave() {
@@ -396,6 +471,7 @@
 
       // Reset editor state
       editorState = createDefaultState();
+      isEditingCrop = false;
       history = [{ state: cloneState(editorState), label: 'Initial' }];
       historyIndex = 0;
 
@@ -435,6 +511,12 @@
       } else if (e.key === 's') {
         e.preventDefault();
         handleSave();
+      } else if (e.key === 'a') {
+        e.preventDefault();
+        applyAutoStraighten();
+      } else if (e.key === 'd') {
+        e.preventDefault();
+        applyAutoAdjustments();
       } else if (e.key === 'ArrowLeft') {
         e.preventDefault();
         goToPrevious();
@@ -442,8 +524,36 @@
         e.preventDefault();
         goToNext();
       }
+    } else if (e.altKey) {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        editorState.rotation.fine = Math.max(-10, editorState.rotation.fine - 0.1);
+        showRotationBackground();
+        pushHistory(`Rotate ${editorState.rotation.fine.toFixed(1)}°`);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        editorState.rotation.fine = Math.min(10, editorState.rotation.fine + 0.1);
+        showRotationBackground();
+        pushHistory(`Rotate ${editorState.rotation.fine.toFixed(1)}°`);
+      }
     } else if (e.key === 'Escape') {
-      handleClose();
+      // Cancel crop if in crop editing mode, otherwise close editor
+      if (isEditingCrop) {
+        e.preventDefault();
+        cancelCrop();
+      } else {
+        handleClose();
+      }
+    } else if (e.key === 'Enter') {
+      // Apply crop when in crop editing mode
+      if (isEditingCrop) {
+        e.preventDefault();
+        applyCrop();
+      }
+    } else if (e.key === 'c' || e.key === 'C') {
+      // Toggle crop mode
+      e.preventDefault();
+      toggleCrop();
     }
   }
 
@@ -515,7 +625,7 @@
     <!-- Main content -->
     <div class="flex flex-1 overflow-hidden">
       <!-- Preview area - WebGL canvas fills the space -->
-      <div class="relative flex-1 overflow-hidden">
+      <div bind:this={canvasContainer} class="relative flex-1 overflow-hidden">
         {#if previewBase64}
           <WebGLCanvas
             imageBase64={previewBase64}
@@ -527,7 +637,37 @@
             rotation={editorState.rotation.fine}
             quarterTurns={editorState.rotation.quarterTurns}
             showRotatedBackground={isRotating}
+            cropEnabled={editorState.crop.enabled && !isEditingCrop}
+            cropX={editorState.crop.x}
+            cropY={editorState.crop.y}
+            cropWidth={editorState.crop.width}
+            cropHeight={editorState.crop.height}
+            bind:zoom={canvasZoom}
+            bind:panX={canvasPanX}
+            bind:panY={canvasPanY}
+            bind:fitScalePercent={canvasFitScale}
+            bind:canvasImageWidth={canvasImageWidth}
+            bind:canvasImageHeight={canvasImageHeight}
           />
+          {#if isEditingCrop}
+            <CropOverlay
+              cropX={editorState.crop.x}
+              cropY={editorState.crop.y}
+              cropWidth={editorState.crop.width}
+              cropHeight={editorState.crop.height}
+              zoom={canvasZoom}
+              panX={canvasPanX}
+              panY={canvasPanY}
+              fitScalePercent={canvasFitScale}
+              imageWidth={canvasImageWidth}
+              imageHeight={canvasImageHeight}
+              {containerWidth}
+              {containerHeight}
+              rotation={editorState.rotation.fine}
+              onCropChange={handleCropChange}
+              onCropCommit={handleCropCommit}
+            />
+          {/if}
           <!-- Navigation arrows -->
           {#if folderImages.length > 1}
             <button
@@ -557,8 +697,47 @@
               {currentImageIndex + 1} / {folderImages.length}
             </div>
           {/if}
-          <!-- Rotation controls overlay -->
+          <!-- Bottom controls overlay -->
           <div class="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-sm bg-black/70 p-1.5">
+            <!-- Crop controls -->
+            {#if isEditingCrop}
+              <!-- Apply crop button -->
+              <button
+                onclick={applyCrop}
+                class="flex items-center gap-1 rounded-sm bg-green-600 px-3 py-1.5 text-white hover:bg-green-700"
+                title="Apply crop (Enter)"
+              >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                </svg>
+                <span class="text-xs font-medium">Apply</span>
+              </button>
+              <!-- Cancel crop button -->
+              <button
+                onclick={cancelCrop}
+                class="flex items-center gap-1 rounded-sm px-3 py-1.5 text-white hover:bg-white/20"
+                title="Cancel crop (Esc)"
+              >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                <span class="text-xs font-medium">Cancel</span>
+              </button>
+            {:else}
+              <!-- Crop button -->
+              <button
+                onclick={toggleCrop}
+                class="flex items-center gap-1 rounded-sm px-2 py-1.5 text-white hover:bg-white/20"
+                title="Enable crop"
+              >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v16h16M4 8h12v12" />
+                </svg>
+                <span class="text-xs font-medium">Crop</span>
+              </button>
+            {/if}
+            <!-- Separator -->
+            <div class="mx-1 h-5 w-px bg-white/30"></div>
             <!-- Rotate CCW button -->
             <button
               onclick={() => rotate90(-1)}
@@ -605,7 +784,7 @@
               onclick={applyAutoStraighten}
               disabled={isAutoStraightening}
               class="flex items-center gap-1 rounded-sm px-2 py-1.5 text-white hover:bg-white/20 disabled:opacity-50"
-              title="Auto straighten"
+              title="Auto straighten (Ctrl+A)"
             >
               {#if isAutoStraightening}
                 <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -670,26 +849,38 @@
         <div class="flex-1 overflow-y-auto p-4">
           {#if activeTool === 'crop'}
             <div class="space-y-4">
-              <button
-                onclick={toggleCrop}
-                class="w-full rounded px-4 py-2 text-sm font-medium transition-colors {editorState
-                  .crop.enabled
-                  ? 'bg-accent-500 text-white'
-                  : 'bg-background-100 text-foreground-700 hover:bg-background-200'}"
-              >
-                {editorState.crop.enabled ? 'Disable Crop' : 'Enable Crop'}
-              </button>
+              {#if isEditingCrop}
+                <div class="rounded bg-green-600/10 p-3">
+                  <p class="text-sm font-medium text-green-700">Editing Crop</p>
+                  <p class="text-foreground-500 mt-1 text-xs">
+                    Drag corners or edges to adjust. Press Apply to keep, Cancel to discard.
+                  </p>
+                </div>
 
-              {#if editorState.crop.enabled}
-                <p class="text-foreground-500 text-xs">
-                  Crop region will be applied when you save.
-                </p>
                 <div class="text-foreground-600 space-y-1 text-xs">
                   <p>X: {(editorState.crop.x * 100).toFixed(1)}%</p>
                   <p>Y: {(editorState.crop.y * 100).toFixed(1)}%</p>
                   <p>Width: {(editorState.crop.width * 100).toFixed(1)}%</p>
                   <p>Height: {(editorState.crop.height * 100).toFixed(1)}%</p>
                 </div>
+              {:else if editorState.crop.enabled}
+                <div class="rounded bg-blue-600/10 p-3">
+                  <p class="text-sm font-medium text-blue-700">Crop Applied</p>
+                  <p class="text-foreground-500 mt-1 text-xs">
+                    Crop will be saved when you click Save. Click Crop button to edit again.
+                  </p>
+                </div>
+
+                <div class="text-foreground-600 space-y-1 text-xs">
+                  <p>X: {(editorState.crop.x * 100).toFixed(1)}%</p>
+                  <p>Y: {(editorState.crop.y * 100).toFixed(1)}%</p>
+                  <p>Width: {(editorState.crop.width * 100).toFixed(1)}%</p>
+                  <p>Height: {(editorState.crop.height * 100).toFixed(1)}%</p>
+                </div>
+              {:else}
+                <p class="text-foreground-500 text-sm">
+                  Click the Crop button in the bottom bar to start cropping.
+                </p>
               {/if}
             </div>
           {:else if activeTool === 'adjust'}
@@ -698,6 +889,7 @@
               <button
                 onclick={applyAutoAdjustments}
                 class="bg-accent-500 hover:bg-accent-600 w-full rounded px-4 py-2 text-sm font-medium text-white transition-colors"
+                title="Auto adjust (Ctrl+D)"
               >
                 Auto
               </button>
