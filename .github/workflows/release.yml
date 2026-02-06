@@ -100,6 +100,26 @@ jobs:
 
           .\vcpkg integrate install
 
+          # Fix: vcpkg puts OpenCV 4 headers at include/opencv4/opencv2/ but
+          # vcpkg-rs reports include/ as the include path, so opencv-rust
+          # can't find opencv2/core/version.hpp for version detection.
+          # Create a directory junction to bridge the gap.
+          $includeDir = "C:\vcpkg\installed\$triplet\include"
+          if ((Test-Path "$includeDir\opencv4\opencv2") -and -not (Test-Path "$includeDir\opencv2")) {
+            cmd /c mklink /J "$includeDir\opencv2" "$includeDir\opencv4\opencv2"
+            echo "Created junction: include\opencv2 -> include\opencv4\opencv2"
+          } else {
+            echo "Junction already exists or opencv4 headers not found"
+          }
+
+          echo "=== Version header check ==="
+          if (Test-Path "$includeDir\opencv2\core\version.hpp") {
+            echo "OK: opencv2\core\version.hpp found"
+          } else {
+            echo "ERROR: opencv2\core\version.hpp NOT found"
+            Get-ChildItem "$includeDir" -Recurse -Filter "version.hpp" -ErrorAction SilentlyContinue
+          }
+
       - name: Sync node version and setup cache
         if: steps.check_tag.outputs.TAG_EXISTS == 'false'
         uses: actions/setup-node@v4
@@ -123,10 +143,8 @@ jobs:
           VCPKGRS_TRIPLET: x64-windows-static-md
           # LLVM/Clang for opencv-rust binding generation
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
-          # Append opencv4 subdirectory so version.hpp is found by the vcpkg probe.
-          # The + prefix appends without triggering the "environment" probe,
-          # so vcpkg still auto-discovers all link libraries + transitive deps.
-          OPENCV_INCLUDE_PATHS: +C:\vcpkg\installed\x64-windows-static-md\include\opencv4
+          # No manual OPENCV_* vars needed - the junction created in the install
+          # step fixes the include path so vcpkg probe auto-discovers everything.
         with:
           tagName: ${{ steps.version.outputs.TAG_NAME }}
           releaseName: 'Realtr v${{ steps.version.outputs.VERSION }}'
