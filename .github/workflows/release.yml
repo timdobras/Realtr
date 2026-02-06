@@ -64,7 +64,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\vcpkg\installed
-          key: vcpkg-opencv4-world-x64-windows-v1
+          key: vcpkg-opencv4-world-opencl-x64-windows-v1
           restore-keys: |
             vcpkg-opencv4-x64-windows-
 
@@ -79,10 +79,10 @@ jobs:
           git pull
           .\bootstrap-vcpkg.bat
 
-          # Install OpenCV with 'world' feature for combined opencv_world4.lib
+          # Install OpenCV with 'world' and 'opencl' features
           if (-not (Test-Path "C:\vcpkg\installed\x64-windows\lib\opencv_world4.lib")) {
-            echo "Installing OpenCV via vcpkg with world feature..."
-            .\vcpkg install opencv4[world]:x64-windows --recurse
+            echo "Installing OpenCV via vcpkg with world and opencl features..."
+            .\vcpkg install "opencv4[world,opencl]:x64-windows" --recurse
           } else {
             echo "OpenCV found in cache"
           }
