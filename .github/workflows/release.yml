@@ -64,7 +64,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\vcpkg\installed
-          key: vcpkg-opencv4-world-x64-windows-static-md-v1
+          key: vcpkg-opencv4-x64-windows-static-md-v2
           restore-keys: |
             vcpkg-opencv4-x64-windows-static-md-
 
@@ -75,32 +75,28 @@ jobs:
 
           cd C:\vcpkg
 
-          # Always bootstrap vcpkg
           git pull
           .\bootstrap-vcpkg.bat
 
           # x64-windows-static-md = static libs + dynamic CRT (/MD) matching Rust
+          # No [world] feature - separate per-module libs work better with vcpkg-rs auto-discovery
           $triplet = "x64-windows-static-md"
           $libDir = "C:\vcpkg\installed\$triplet\lib"
 
-          if (-not (Test-Path "$libDir\opencv_world4.lib")) {
+          if (-not (Test-Path "$libDir\opencv_imgproc4.lib") -and -not (Test-Path "$libDir\opencv_world4.lib")) {
             echo "Installing OpenCV via vcpkg ($triplet)..."
-            .\vcpkg install "opencv4[world]:$triplet" --recurse
+            .\vcpkg install "opencv4:$triplet" --recurse
           } else {
             echo "OpenCV found in cache"
           }
 
           # Verify installation
           echo "=== Verifying OpenCV installation ==="
-          if (Test-Path "$libDir\opencv_world4.lib") {
-            echo "opencv_world4.lib found (static-md)"
-            Get-ChildItem "$libDir" -Filter "opencv*"
-          } else {
-            echo "ERROR: opencv_world4.lib NOT found"
-            echo "=== Available libs ==="
-            Get-ChildItem "$libDir" -ErrorAction SilentlyContinue
-            exit 1
-          }
+          echo "=== OpenCV libs ==="
+          Get-ChildItem "$libDir" -Filter "opencv*" -ErrorAction SilentlyContinue
+
+          echo "=== pkgconfig files ==="
+          Get-ChildItem "C:\vcpkg\installed\$triplet\lib\pkgconfig" -Filter "opencv*" -ErrorAction SilentlyContinue
 
           .\vcpkg integrate install
 
@@ -122,18 +118,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # vcpkg settings - static libs with dynamic CRT (/MD)
+          # vcpkg auto-discovery handles all transitive dependencies
           VCPKG_ROOT: C:\vcpkg
           VCPKGRS_TRIPLET: x64-windows-static-md
-          # LLVM/Clang for opencv-rust bindings
+          # LLVM/Clang for opencv-rust binding generation
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
-          # OpenCV paths - static-md configuration
-          OpenCV_DIR: C:\vcpkg\installed\x64-windows-static-md\share\opencv4
-          CMAKE_PREFIX_PATH: C:\vcpkg\installed\x64-windows-static-md
-          OPENCV_LINK_LIBS: opencv_world4
-          OPENCV_LINK_PATHS: C:\vcpkg\installed\x64-windows-static-md\lib
-          OPENCV_INCLUDE_PATHS: C:\vcpkg\installed\x64-windows-static-md\include\opencv4
-          OPENCV_STATIC: 1
+          # Do NOT set OPENCV_LINK_LIBS/PATHS/INCLUDE_PATHS - those force the
+          # "environment" probe which bypasses automatic dependency resolution.
+          # Let the vcpkg probe auto-discover opencv + all transitive deps.
         with:
           tagName: ${{ steps.version.outputs.TAG_NAME }}
           releaseName: 'Realtr v${{ steps.version.outputs.VERSION }}'
