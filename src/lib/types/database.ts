@@ -157,6 +157,8 @@ export interface AdjustmentAnalysis {
   brightness: number; // -100 to 100
   exposure: number; // -100 to 100
   contrast: number; // -100 to 100
+  highlights: number; // -100 to 100
+  shadows: number; // -100 to 100
   magnitude: number; // 0.0-1.0
 }
 
@@ -178,6 +180,8 @@ export interface EnhanceRequest {
   brightness: number;
   exposure: number;
   contrast: number;
+  highlights: number;
+  shadows: number;
 }
 
 export interface EnhanceApplyResult {

@@ -153,6 +153,10 @@ pub struct AdjustmentAnalysis {
     pub exposure: i32,
     /// Contrast adjustment (-100 to 100)
     pub contrast: i32,
+    /// Highlights adjustment (-100 to 100)
+    pub highlights: i32,
+    /// Shadows adjustment (-100 to 100)
+    pub shadows: i32,
     /// Combined magnitude of adjustments (0.0-1.0)
     pub magnitude: f32,
 }
@@ -172,6 +176,10 @@ pub struct EnhanceRequest {
     pub exposure: i32,
     /// Contrast adjustment
     pub contrast: i32,
+    /// Highlights adjustment
+    pub highlights: i32,
+    /// Shadows adjustment
+    pub shadows: i32,
 }
 
 /// Result of applying enhancement to a single image

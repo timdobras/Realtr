@@ -105,7 +105,9 @@
         rotation: results[index].straighten.rotation,
         brightness: results[index].adjustments.brightness,
         exposure: results[index].adjustments.exposure,
-        contrast: results[index].adjustments.contrast
+        contrast: results[index].adjustments.contrast,
+        highlights: results[index].adjustments.highlights,
+        shadows: results[index].adjustments.shadows
       }));
 
       const applyResults = await DatabaseService.batchApplyEnhancements(enhancements);
@@ -255,6 +257,8 @@
                 brightness={result.adjustments.brightness}
                 exposure={result.adjustments.exposure}
                 contrast={result.adjustments.contrast}
+                highlights={result.adjustments.highlights}
+                shadows={result.adjustments.shadows}
               />
             </div>
           {/each}

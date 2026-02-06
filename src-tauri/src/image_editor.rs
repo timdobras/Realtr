@@ -91,6 +91,8 @@ pub struct AutoAdjustments {
     pub brightness: i32,
     pub exposure: i32,
     pub contrast: i32,
+    pub highlights: i32,
+    pub shadows: i32,
 }
 
 /// Auto-straighten result
@@ -252,6 +254,8 @@ pub fn analyze_image_histogram(img: &DynamicImage) -> AutoAdjustments {
             brightness: 0,
             exposure: 0,
             contrast: 0,
+            highlights: 0,
+            shadows: 0,
         };
     }
 
@@ -272,45 +276,65 @@ pub fn analyze_image_histogram(img: &DynamicImage) -> AutoAdjustments {
     let dynamic_range = p95 - p5;
 
     // Target values for web-optimized real estate photos
-    // Bias towards brighter, lower contrast images that look good on websites
-    let target_mean: f32 = 140.0; // Slightly brighter than neutral (128)
+    // Slight brightness boost without washing out
+    let target_mean: f32 = 135.0; // Moderately above neutral (128)
 
-    // Brightness adjustment: bias towards brighter images
-    // Add a base boost of +10, then adjust based on current brightness
-    let base_brightness_boost: f32 = 10.0;
+    // Brightness adjustment: gentle correction with small base boost
+    let base_brightness_boost: f32 = 5.0;
     let brightness_adj =
-        (base_brightness_boost + (target_mean - mean) * 0.4).clamp(-30.0, 40.0) as i32;
+        (base_brightness_boost + (target_mean - mean) * 0.2).clamp(-20.0, 30.0) as i32;
 
-    // Exposure adjustment: lift shadows for a more open, airy look
-    let exposure_adj = if mean < 120.0 {
-        // Darker image - increase exposure to brighten
-        ((120.0 - mean) * 0.25).clamp(0.0, 30.0) as i32
-    } else if p5 > 50.0 {
-        // Already very bright/washed out - slight decrease
-        ((50.0 - p5) * 0.3).clamp(-20.0, 0.0) as i32
+    // Exposure adjustment: only for notably dark images
+    let exposure_adj = if mean < 100.0 {
+        // Notably dark image - increase exposure
+        ((100.0 - mean) * 0.2).clamp(0.0, 20.0) as i32
+    } else if p5 > 60.0 {
+        // Already very bright/washed out - decrease
+        ((60.0 - p5) * 0.25).clamp(-15.0, 0.0) as i32
     } else {
-        // Add small exposure boost for web
-        5
+        0
     };
 
-    // Contrast adjustment: bias towards LOWER contrast for softer web look
-    // Real estate photos look better with less harsh contrast
-    let base_contrast_reduction: f32 = -10.0;
-    let contrast_adj = if dynamic_range > 180.0 {
-        // High contrast - reduce more
-        (base_contrast_reduction + (180.0 - dynamic_range) * 0.15).clamp(-35.0, 0.0) as i32
-    } else if dynamic_range < 100.0 {
-        // Very flat image - still reduce but less
-        (base_contrast_reduction * 0.5).clamp(-15.0, 0.0) as i32
+    // Contrast adjustment: slight reduction for softer web look
+    let contrast_adj = if dynamic_range > 200.0 {
+        // High contrast - reduce
+        ((200.0 - dynamic_range) * 0.12).clamp(-25.0, 0.0) as i32
+    } else if dynamic_range < 80.0 {
+        // Very flat image - slight boost
+        ((80.0 - dynamic_range) * 0.1).clamp(0.0, 10.0) as i32
     } else {
-        // Normal range - apply base reduction
-        base_contrast_reduction as i32
+        // Normal range - minimal adjustment
+        -5
+    };
+
+    // Highlights adjustment: recover blown highlights
+    let highlights_adj = if p95 > 245.0 {
+        // Highlights are blown - reduce them
+        ((240.0 - p95) * 0.6).clamp(-25.0, 0.0) as i32
+    } else if p95 < 180.0 {
+        // Image is quite dark - slight highlight boost
+        ((180.0 - p95) * 0.15).clamp(0.0, 10.0) as i32
+    } else {
+        0
+    };
+
+    // Shadows adjustment: lift only crushed shadows
+    let shadows_adj = if p5 < 10.0 {
+        // Shadows are crushed - lift them
+        ((20.0 - p5) * 0.5).clamp(0.0, 25.0) as i32
+    } else if p5 > 60.0 {
+        // Image is washed out - add shadow depth
+        ((60.0 - p5) * 0.3).clamp(-20.0, 0.0) as i32
+    } else {
+        0
     };
 
     AutoAdjustments {
         brightness: brightness_adj,
         exposure: exposure_adj,
         contrast: contrast_adj,
+        highlights: highlights_adj,
+        shadows: shadows_adj,
     }
 }
 
@@ -426,16 +450,20 @@ pub async fn batch_analyze_for_enhance(
             // Calculate adjustment magnitude (normalized 0-1)
             let adj_magnitude = ((adjustments.brightness.abs() as f32 / 100.0).powi(2)
                 + (adjustments.exposure.abs() as f32 / 100.0).powi(2)
-                + (adjustments.contrast.abs() as f32 / 100.0).powi(2))
+                + (adjustments.contrast.abs() as f32 / 100.0).powi(2)
+                + (adjustments.highlights.abs() as f32 / 100.0).powi(2)
+                + (adjustments.shadows.abs() as f32 / 100.0).powi(2))
             .sqrt()
-                / 1.73; // normalize by sqrt(3) for max possible value
+                / 2.24; // normalize by sqrt(5) for max possible value
 
             // Determine if enhancement is needed
             let needs_straighten =
                 straighten_result.suggested_rotation.abs() > 0.3 && straighten_result.confidence > 0.4;
             let needs_adjustment = adjustments.brightness.abs() > 10
                 || adjustments.exposure.abs() > 10
-                || adjustments.contrast.abs() > 10;
+                || adjustments.contrast.abs() > 10
+                || adjustments.highlights.abs() > 10
+                || adjustments.shadows.abs() > 10;
             let needs_enhancement = needs_straighten || needs_adjustment;
 
             // Calculate combined confidence
@@ -457,6 +485,8 @@ pub async fn batch_analyze_for_enhance(
                 brightness: adjustments.brightness,
                 exposure: adjustments.exposure,
                 contrast: adjustments.contrast,
+                highlights: adjustments.highlights,
+                shadows: adjustments.shadows,
                 ..EditParams::default()
             };
 
@@ -487,6 +517,8 @@ pub async fn batch_analyze_for_enhance(
                     brightness: adjustments.brightness,
                     exposure: adjustments.exposure,
                     contrast: adjustments.contrast,
+                    highlights: adjustments.highlights,
+                    shadows: adjustments.shadows,
                     magnitude: adj_magnitude,
                 },
                 combined_confidence,
@@ -528,6 +560,8 @@ pub async fn batch_apply_enhancements(
                     brightness: request.brightness,
                     exposure: request.exposure,
                     contrast: request.contrast,
+                    highlights: request.highlights,
+                    shadows: request.shadows,
                     ..EditParams::default()
                 };
 
