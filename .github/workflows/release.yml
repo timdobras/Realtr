@@ -123,9 +123,10 @@ jobs:
           VCPKGRS_TRIPLET: x64-windows-static-md
           # LLVM/Clang for opencv-rust binding generation
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
-          # Do NOT set OPENCV_LINK_LIBS/PATHS/INCLUDE_PATHS - those force the
-          # "environment" probe which bypasses automatic dependency resolution.
-          # Let the vcpkg probe auto-discover opencv + all transitive deps.
+          # Append opencv4 subdirectory so version.hpp is found by the vcpkg probe.
+          # The + prefix appends without triggering the "environment" probe,
+          # so vcpkg still auto-discovers all link libraries + transitive deps.
+          OPENCV_INCLUDE_PATHS: +C:\vcpkg\installed\x64-windows-static-md\include\opencv4
         with:
           tagName: ${{ steps.version.outputs.TAG_NAME }}
           releaseName: 'Realtr v${{ steps.version.outputs.VERSION }}'
