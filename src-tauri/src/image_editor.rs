@@ -97,9 +97,12 @@ pub struct AutoAdjustments {
 
 /// Auto-straighten result
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AutoStraightenResult {
     pub angle: f32,      // Suggested rotation angle in degrees
     pub confidence: f32, // Confidence level 0-1
+    pub lines_used: usize,
+    pub vh_agreement: bool,
 }
 
 // ============================================================================
@@ -355,11 +358,21 @@ pub async fn editor_auto_straighten(app: AppHandle) -> Result<AutoStraightenResu
     // Use the new LSD + RANSAC + VP straightening algorithm
     // Pass the original path for EXIF focal length extraction
     let image_path = Path::new(&cached.path);
+    let (pw, ph) = cached.preview_image.dimensions();
+    eprintln!("[auto-straighten] preview_image: {pw}x{ph}, path: {}", cached.path);
+
     let result = analyze_straighten(&cached.preview_image, Some(image_path));
+
+    eprintln!(
+        "[auto-straighten] result: rotation={:.3}°, confidence={:.3}, lines={}, vh={}",
+        result.suggested_rotation, result.confidence, result.lines_used, result.vh_agreement
+    );
 
     Ok(AutoStraightenResult {
         angle: result.suggested_rotation as f32,
         confidence: result.confidence,
+        lines_used: result.lines_used,
+        vh_agreement: result.vh_agreement,
     })
 }
 

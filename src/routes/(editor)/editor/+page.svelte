@@ -274,7 +274,11 @@
       const result = await invoke<{
         angle: number;
         confidence: number;
+        linesUsed: number;
+        vhAgreement: boolean;
       }>('editor_auto_straighten');
+
+      console.log('[auto-straighten] result:', result);
 
       if (Math.abs(result.angle) > 0.05) {
         editorState.rotation.fine = result.angle;
@@ -297,7 +301,7 @@
           );
         }
       } else {
-        showSuccess('Image appears level');
+        showSuccess(`Image appears level (${result.linesUsed} lines, ${Math.round(result.confidence * 100)}% conf)`);
       }
     } catch (err) {
       console.error('Auto straighten failed:', err);

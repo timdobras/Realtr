@@ -184,22 +184,43 @@ pub fn analyze_straighten_no_exif(img: &DynamicImage) -> StraightenResult {
 /// Core analysis on preprocessed grayscale image.
 fn analyze_straighten_from_gray(gray: &GrayImage, original_dims: (u32, u32)) -> StraightenResult {
     let (width, height) = gray.dimensions();
+    // Verify preprocessing produced a valid image (not uniform)
+    let (min_val, max_val) = gray.pixels().fold((255u8, 0u8), |(min, max), p| {
+        (min.min(p[0]), max.max(p[0]))
+    });
+    eprintln!(
+        "[straighten] gray image: {width}x{height}, original: {}x{}, pixel range: {min_val}..{max_val}",
+        original_dims.0, original_dims.1
+    );
+
+    if max_val - min_val < 10 {
+        eprintln!("[straighten] WARNING: near-uniform image (range={}), LSD will find no lines", max_val - min_val);
+    }
 
     // 2. Detect line segments using LSD
     let all_lines = match detect_line_segments_lsd(gray) {
-        Ok(lines) => lines,
+        Ok(lines) => {
+            eprintln!("[straighten] LSD detected {} lines (after length filter)", lines.len());
+            lines
+        }
         Err(e) => {
-            eprintln!("LSD detection failed: {e}");
+            eprintln!("[straighten] LSD detection FAILED: {e}");
             return no_correction();
         }
     };
 
     if all_lines.len() < MIN_LINES_REQUIRED {
+        eprintln!("[straighten] too few lines ({} < {}), returning no correction", all_lines.len(), MIN_LINES_REQUIRED);
         return no_correction();
     }
 
     // 3. Classify lines
     let classified = classify_lines(all_lines, (width, height));
+    eprintln!("[straighten] classified: {} lines (V={}, H={}, dropped diagonal)",
+        classified.len(),
+        classified.iter().filter(|l| l.line_type == LineType::Vertical).count(),
+        classified.iter().filter(|l| l.line_type == LineType::Horizontal).count(),
+    );
 
     // 4. Separate into vertical and horizontal lines
     let vertical_lines: Vec<_> = classified
@@ -302,6 +323,7 @@ fn detect_line_segments_lsd(gray: &GrayImage) -> Result<Vec<LineSegment>, String
     // Convert to LineSegment structs
     let mut segments = Vec::new();
     let num_lines = lines.rows();
+    eprintln!("[straighten/lsd] raw output: {num_lines} lines, mat: {}x{} type={}", lines.rows(), lines.cols(), lines.typ());
 
     for i in 0..num_lines {
         let line: &opencv::core::Vec4f = lines
@@ -327,24 +349,26 @@ fn detect_line_segments_lsd(gray: &GrayImage) -> Result<Vec<LineSegment>, String
 /// Convert GrayImage to OpenCV Mat
 fn gray_image_to_mat(gray: &GrayImage) -> Result<Mat, String> {
     let (width, height) = gray.dimensions();
-
-    let mut mat = Mat::new_rows_cols_with_default(
-        height as i32,
-        width as i32,
-        CV_8UC1,
-        Scalar::all(0.0),
-    )
-    .map_err(|e| format!("Failed to create Mat: {e}"))?;
-
     let raw_data = gray.as_raw();
-    for y in 0..height as i32 {
-        let row_start = (y as usize) * (width as usize);
-        for x in 0..width as i32 {
-            *mat.at_2d_mut::<u8>(y, x)
-                .map_err(|e| format!("Failed to set pixel: {e}"))? =
-                raw_data[row_start + x as usize];
-        }
-    }
+
+    // Build row slices and use from_slice_2d for robust bulk copy
+    let rows: Vec<&[u8]> = (0..height as usize)
+        .map(|y| {
+            let start = y * width as usize;
+            &raw_data[start..start + width as usize]
+        })
+        .collect();
+
+    let mat = Mat::from_slice_2d(&rows)
+        .map_err(|e| format!("Failed to create Mat from image data: {e}"))?;
+
+    eprintln!(
+        "[straighten/mat] created: {}x{}, type={}, continuous={}",
+        mat.cols(),
+        mat.rows(),
+        mat.typ(),
+        mat.is_continuous()
+    );
 
     Ok(mat)
 }
