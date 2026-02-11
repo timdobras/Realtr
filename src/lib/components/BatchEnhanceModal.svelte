@@ -3,9 +3,17 @@
   import { Dialog, DialogContent, DialogFooter } from '$lib/components/ui';
   import { Dialog as BitsDialog } from 'bits-ui';
   import type { EnhanceAnalysisResult, EnhanceRequest } from '$lib/types/database';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import BeforeAfterSlider from './BeforeAfterSlider.svelte';
   import { showSuccess, showError } from '$lib/stores/notification';
+
+  interface EnhanceProgressPayload {
+    phase: string;
+    current: number;
+    total: number;
+    filename: string;
+  }
 
   interface Props {
     open?: boolean;
@@ -31,13 +39,48 @@
   let error = $state('');
   let isApplying = $state(false);
 
+  // Progress tracking
+  let progressCurrent = $state(0);
+  let progressTotal = $state(0);
+  let progressPercent = $derived(progressTotal > 0 ? Math.round((progressCurrent / progressTotal) * 100) : 0);
+
+  // Event listener cleanup
+  let unlistenProgress: UnlistenFn | null = null;
+
+  async function setupProgressListener() {
+    unlistenProgress = await listen<EnhanceProgressPayload>('enhance-progress', (event) => {
+      progressCurrent = event.payload.current;
+      progressTotal = event.payload.total;
+
+      if (event.payload.phase === 'analyze') {
+        processingMessage = `Analyzing ${event.payload.current} of ${event.payload.total}...`;
+      } else if (event.payload.phase === 'apply') {
+        processingMessage = `Applying enhancements: ${event.payload.current} of ${event.payload.total}...`;
+      }
+    });
+  }
+
+  function cleanupProgressListener() {
+    if (unlistenProgress) {
+      unlistenProgress();
+      unlistenProgress = null;
+    }
+  }
+
   onMount(async () => {
+    await setupProgressListener();
     await analyzeImages();
+  });
+
+  onDestroy(() => {
+    cleanupProgressListener();
   });
 
   async function analyzeImages() {
     try {
       isAnalyzing = true;
+      progressCurrent = 0;
+      progressTotal = 0;
       processingMessage = 'Analyzing images for straightening and adjustments...';
 
       results = await DatabaseService.batchAnalyzeForEnhance(folderPath, status);
@@ -98,6 +141,9 @@
     try {
       isApplying = true;
       error = '';
+      progressCurrent = 0;
+      progressTotal = selectedIndices.size;
+      processingMessage = `Applying enhancements: 0 of ${selectedIndices.size}...`;
 
       const enhancements: EnhanceRequest[] = Array.from(selectedIndices).map((index) => ({
         filename: results[index].filename,
@@ -191,6 +237,17 @@
             class="border-accent-500 h-10 w-10 animate-spin rounded-full border-4 border-t-transparent"
           ></div>
           <p class="text-foreground-600 mt-4 text-sm">{processingMessage}</p>
+          {#if progressTotal > 0}
+            <div class="bg-background-200 mt-3 h-1.5 w-64 overflow-hidden rounded-full">
+              <div
+                class="bg-accent-500 h-full rounded-full transition-all duration-300 ease-out"
+                style="width: {progressPercent}%"
+              ></div>
+            </div>
+            <p class="text-foreground-400 mt-1.5 text-xs">
+              {progressCurrent} / {progressTotal}
+            </p>
+          {/if}
         </div>
       {:else if error && results.length === 0}
         <div class="flex flex-col items-center justify-center py-16">
@@ -287,7 +344,7 @@
         class="bg-accent-500 hover:bg-accent-600 rounded-md px-4 py-2 text-sm font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       >
         {#if isApplying}
-          Applying...
+          Applying {progressCurrent}/{progressTotal}...
         {:else}
           Apply to {selectedCount} Images
         {/if}

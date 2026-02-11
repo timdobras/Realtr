@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { invoke } from '@tauri-apps/api/core';
+  import { convertFileSrc } from '@tauri-apps/api/core';
   import { browser } from '$app/environment';
   import { Select } from 'bits-ui';
   import { DatabaseService } from '$lib/services/databaseService';
@@ -115,59 +115,44 @@
   }
 
   async function loadThumbnails() {
-    // Load thumbnails progressively in parallel for better performance
-    const thumbnailPromises = properties.map(async (property) => {
-      if (!property.id) return;
+    // Single batch IPC call replaces N×(1 + up to 6) individual calls.
+    // Rust generates any missing thumbnails and returns filesystem paths;
+    // convertFileSrc() serves them directly via the asset protocol — zero base64.
+    const validProperties = properties.filter((p) => p.id);
+    if (validProperties.length === 0) return;
 
-      try {
-        // Get list of thumbnail filenames
-        const response = await invoke('list_thumbnails', {
-          folderPath: property.folder_path,
-          status: property.status
-        });
+    try {
+      const batchResults = await DatabaseService.getThumbnailPathsBatch(
+        validProperties.map((p) => ({
+          folderPath: p.folder_path,
+          status: p.status,
+          limit: 6
+        }))
+      );
 
-        if (Array.isArray(response) && response.length > 0) {
-          const totalCount = response.length;
-          const limit = Math.min(6, totalCount);
-          const filenames = response.slice(0, limit);
+      // Build lookup by folder_path for matching results back to properties
+      const resultsByFolder = new Map(batchResults.map((r) => [r.folderPath, r]));
 
-          // Store the total image count
-          propertyImageCounts.set(property.id, totalCount);
-          propertyImageCounts = new Map(propertyImageCounts);
+      const newCounts = new Map(propertyImageCounts);
+      const newThumbnails = new Map(propertyThumbnails);
 
-          // Load all thumbnails for this property in parallel
-          const thumbnailPromises = filenames.map(async (filename) => {
-            try {
-              const base64Data = await invoke('get_thumbnail_as_base64', {
-                folderPath: property.folder_path,
-                status: property.status,
-                filename: filename
-              });
-              return `data:image/jpeg;base64,${base64Data}`;
-            } catch (e) {
-              console.error(`Failed to load thumbnail for ${property.name}:`, e);
-              return null;
-            }
-          });
+      for (const property of validProperties) {
+        const result = resultsByFolder.get(property.folder_path);
+        if (!result) continue;
 
-          const thumbnails = (await Promise.all(thumbnailPromises)).filter(
-            (t): t is string => t !== null
-          );
+        newCounts.set(property.id!, result.totalCount);
 
-          if (thumbnails.length > 0) {
-            // Update the map reactively
-            propertyThumbnails.set(property.id, thumbnails);
-            propertyThumbnails = new Map(propertyThumbnails);
-          }
+        if (result.paths.length > 0) {
+          const urls = result.paths.map((p) => convertFileSrc(p));
+          newThumbnails.set(property.id!, urls);
         }
-      } catch (e) {
-        // Silently fail for individual properties
-        console.error(`Failed to load thumbnails for ${property.name}:`, e);
       }
-    });
 
-    // Wait for all property thumbnails to load in parallel
-    await Promise.all(thumbnailPromises);
+      propertyImageCounts = newCounts;
+      propertyThumbnails = newThumbnails;
+    } catch (e) {
+      console.error('Failed to batch-load thumbnails:', e);
+    }
   }
 
   function applyFilters() {

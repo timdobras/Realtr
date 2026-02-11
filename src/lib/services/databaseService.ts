@@ -9,7 +9,6 @@ import type {
   EnhanceAnalysisResult,
   EnhanceApplyResult,
   EnhanceRequest,
-  OpenCVStatus,
   PerspectiveCommandResult,
   Property,
   PropertyStatus,
@@ -17,7 +16,8 @@ import type {
   ScanResult,
   Set,
   SetProperty,
-  SetupProgress
+  ThumbnailBatchRequest,
+  ThumbnailBatchResult
 } from '../types/database';
 
 export class DatabaseService {
@@ -203,26 +203,7 @@ export class DatabaseService {
     });
   }
 
-  // OpenCV Setup Operations
-  static async checkOpenCVStatus(): Promise<OpenCVStatus> {
-    return await invoke<OpenCVStatus>('check_opencv_status');
-  }
-
-  static async runOpenCVSetup(): Promise<SetupProgress> {
-    return await invoke<SetupProgress>('run_opencv_setup');
-  }
-
-  static async skipOpenCVSetup(): Promise<void> {
-    return await invoke<void>('skip_opencv_setup');
-  }
-
-  static async wasOpenCVSetupSkipped(): Promise<boolean> {
-    return await invoke<boolean>('was_opencv_setup_skipped');
-  }
-
-  static async resetOpenCVSetupSkip(): Promise<void> {
-    return await invoke<void>('reset_opencv_setup_skip');
-  }
+  // OpenCV Setup Operations (removed - no longer needed, GPU gradient histogram replaces OpenCV)
 
   // Fill AGGELIA folders to 25 images
   static async fillAggeliaTo25(folderPath: string, status: string): Promise<CommandResult> {
@@ -246,6 +227,32 @@ export class DatabaseService {
       subfolder,
       filename,
       maxDimension
+    });
+  }
+
+  // Gallery thumbnail path for asset protocol serving (no base64 overhead)
+  static async getGalleryThumbnailPath(
+    folderPath: string,
+    status: string,
+    subfolder: string,
+    filename: string,
+    maxDimension?: number
+  ): Promise<string> {
+    return await invoke<string>('get_gallery_thumbnail_path', {
+      folderPath,
+      status,
+      subfolder,
+      filename,
+      maxDimension
+    });
+  }
+
+  // Batch-resolve thumbnail paths for the properties list
+  static async getThumbnailPathsBatch(
+    properties: ThumbnailBatchRequest[]
+  ): Promise<ThumbnailBatchResult[]> {
+    return await invoke<ThumbnailBatchResult[]>('get_thumbnail_paths_batch', {
+      properties
     });
   }
 

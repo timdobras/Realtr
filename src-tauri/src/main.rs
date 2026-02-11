@@ -2,9 +2,11 @@
 
 mod config;
 mod database;
+mod fast_resize;
+mod gpu;
 mod image_editor;
-mod opencv_setup;
 mod perspective;
+mod turbo;
 
 use config::{
     copy_watermark_to_app_data, get_watermark_from_app_data, load_config, reset_config,
@@ -15,9 +17,10 @@ use database::{
     copy_and_watermark_images, copy_images_to_aggelia, copy_images_to_internet, create_property,
     debug_database_dates, delete_property, delete_set, fill_aggelia_to_25,
     generate_watermark_preview, get_aggelia_image_as_base64, get_cities, get_full_property_path,
-    get_gallery_thumbnail_as_base64, get_image_as_base64, get_internet_image_as_base64,
-    get_properties, get_properties_by_status, get_property_by_id, get_set_properties, get_sets,
-    get_thumbnail_as_base64, get_watermark_image_as_base64, init_database, list_aggelia_images,
+    get_gallery_thumbnail_as_base64, get_gallery_thumbnail_path, get_image_as_base64,
+    get_internet_image_as_base64, get_properties, get_properties_by_status, get_property_by_id,
+    get_set_properties, get_sets, get_thumbnail_as_base64, get_thumbnail_paths_batch,
+    get_watermark_image_as_base64, init_database, list_aggelia_images,
     list_internet_images, list_original_images, list_thumbnails, list_watermark_aggelia_images,
     list_watermark_images, open_image_in_advanced_editor, open_image_in_editor,
     open_images_in_folder, open_property_folder, open_sets_folder, pregenerate_gallery_thumbnails,
@@ -31,10 +34,6 @@ use image_editor::{
     editor_save_image, ImageCacheState,
 };
 
-use opencv_setup::{
-    check_opencv_status, reset_opencv_setup_skip, run_opencv_setup, skip_opencv_setup,
-    was_opencv_setup_skipped,
-};
 use perspective::commands::{
     accept_perspective_corrections, cleanup_perspective_temp,
     get_original_image_for_comparison, process_images_for_perspective,
@@ -67,9 +66,17 @@ pub fn run() {
                 }
             }
 
+            // Initialize config cache (avoids re-reading config.json on every command)
+            app_handle.manage(config::ConfigCache::default());
+
             // Initialize image editor cache state
             app_handle.manage(std::sync::Mutex::new(None::<image_editor::ImageCache>)
                 as ImageCacheState);
+
+            // Initialize GPU image processor (falls back to CPU if no GPU available)
+            let processor = std::sync::Arc::new(gpu::ImageProcessor::new());
+            eprintln!("Image processor: {}", processor.description());
+            app_handle.manage(processor);
 
             Ok(())
         })
@@ -99,6 +106,8 @@ pub fn run() {
             list_thumbnails,
             get_thumbnail_as_base64,
             get_gallery_thumbnail_as_base64,
+            get_gallery_thumbnail_path,
+            get_thumbnail_paths_batch,
             pregenerate_gallery_thumbnails,
             list_internet_images,
             get_internet_image_as_base64,
@@ -125,12 +134,6 @@ pub fn run() {
             accept_perspective_corrections,
             cleanup_perspective_temp,
             get_original_image_for_comparison,
-            // OpenCV setup commands
-            check_opencv_status,
-            run_opencv_setup,
-            skip_opencv_setup,
-            was_opencv_setup_skipped,
-            reset_opencv_setup_skip,
             // Sets commands
             complete_set,
             get_sets,

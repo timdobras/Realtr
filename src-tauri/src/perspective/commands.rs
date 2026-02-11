@@ -1,16 +1,18 @@
 //! Tauri commands for perspective correction feature.
 //!
-//! Uses LSD (Line Segment Detection) + RANSAC for automatic image straightening.
+//! Uses GPU gradient histogram + RANSAC for automatic image straightening.
 
+use crate::gpu::ImageProcessor;
 use crate::perspective::detection::analyze_perspective;
 use crate::perspective::model::{cleanup_temp_files, ensure_temp_dir_for_property};
 use crate::perspective::rectification::{apply_correction, generate_correction_preview};
 use crate::perspective::{AcceptedCorrection, CorrectionResult, PerspectiveCommandResult};
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use image::{DynamicImage, GenericImageView};
+use rayon::prelude::*;
 use std::fs;
-use std::io::Cursor;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tauri::Manager;
 
 /// Supported image extensions
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "gif", "webp"];
@@ -24,7 +26,7 @@ async fn get_property_base_path(
     folder_path: &str,
     status: &str,
 ) -> Result<PathBuf, String> {
-    let config = crate::config::load_config(app.clone())
+    let config = crate::config::get_cached_config(&app)
         .await
         .map_err(|e| e.to_string())?;
     let config = config.ok_or("App configuration not found")?;
@@ -98,45 +100,60 @@ pub async fn process_images_for_perspective(
 
     images.sort();
 
-    // Process each image
-    let mut results = Vec::new();
+    // Process images in parallel with limited concurrency
+    // to prevent RAM spikes (each image loads ~50-100MB at full resolution)
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .map_err(|e| format!("Failed to create thread pool: {e}"))?;
 
-    println!("Processing {} images from: {}", images.len(), internet_path.display());
+    println!("Processing {} images from: {} (parallel, 4 threads)", images.len(), internet_path.display());
 
-    for (idx, image_path) in images.iter().enumerate() {
-        let filename = image_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown")
-            .to_string();
+    // Get GPU image processor from Tauri state
+    let processor = app.state::<Arc<ImageProcessor>>();
+    let processor_ref = processor.inner().clone();
 
-        println!("Processing image {}/{}: {}", idx + 1, images.len(), filename);
+    let results: Vec<CorrectionResult> = pool.install(|| {
+        images
+            .par_iter()
+            .enumerate()
+            .map(|(idx, image_path)| {
+                let filename = image_path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
 
-        match process_single_image(image_path, &temp_dir) {
-            Ok(result) => {
-                println!("  -> Success: rotation={:.2}°, needs_correction={}",
-                    result.rotation_applied, result.needs_correction);
-                results.push(CorrectionResult {
-                    original_filename: filename,
-                    original_path: image_path.to_string_lossy().to_string(),
-                    ..result
-                });
-            },
-            Err(e) => {
-                // Log error but continue with other images
-                eprintln!("  -> Failed to process {filename}: {e}");
-                results.push(CorrectionResult {
-                    original_filename: filename,
-                    original_path: image_path.to_string_lossy().to_string(),
-                    corrected_temp_path: String::new(),
-                    confidence: 0.0,
-                    rotation_applied: 0.0,
-                    needs_correction: false,
-                    corrected_preview_base64: None,
-                });
-            }
-        }
-    }
+                println!("Processing image {}/{}: {}", idx + 1, images.len(), filename);
+
+                match process_single_image(image_path, &temp_dir, &processor_ref) {
+                    Ok(result) => {
+                        println!(
+                            "  -> Success: rotation={:.2}, needs_correction={}",
+                            result.rotation_applied, result.needs_correction
+                        );
+                        CorrectionResult {
+                            original_filename: filename,
+                            original_path: image_path.to_string_lossy().to_string(),
+                            ..result
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("  -> Failed to process {filename}: {e}");
+                        CorrectionResult {
+                            original_filename: filename,
+                            original_path: image_path.to_string_lossy().to_string(),
+                            corrected_temp_path: String::new(),
+                            confidence: 0.0,
+                            rotation_applied: 0.0,
+                            needs_correction: false,
+                            corrected_preview_base64: None,
+                        }
+                    }
+                }
+            })
+            .collect()
+    });
 
     println!("Finished processing. {} results.", results.len());
     Ok(results)
@@ -146,13 +163,14 @@ pub async fn process_images_for_perspective(
 fn process_single_image(
     image_path: &PathBuf,
     temp_dir: &PathBuf,
+    processor: &ImageProcessor,
 ) -> Result<CorrectionResult, String> {
-    // Load the image
-    let img = image::open(image_path)
+    // Load the image using turbojpeg for JPEG files
+    let img = crate::turbo::load_image(image_path)
         .map_err(|e| format!("Failed to open image: {e}"))?;
 
-    // Analyze for perspective distortion using LSD + RANSAC
-    let analysis = analyze_perspective(&img)?;
+    // Analyze for perspective distortion using gradient histogram + RANSAC
+    let analysis = analyze_perspective(&img, processor)?;
 
     // Generate corrected image (or use original if no correction needed)
     let corrected = if analysis.needs_correction {
@@ -187,15 +205,9 @@ fn process_single_image(
     })
 }
 
-/// Encode an image to base64 JPEG
+/// Encode an image to base64 JPEG using turbojpeg
 fn encode_image_to_base64(img: &DynamicImage) -> Result<String, String> {
-    let mut buffer = Vec::new();
-    let mut cursor = Cursor::new(&mut buffer);
-
-    img.write_to(&mut cursor, image::ImageFormat::Jpeg)
-        .map_err(|e| format!("Failed to encode image: {e}"))?;
-
-    Ok(BASE64_STANDARD.encode(&buffer))
+    crate::turbo::encode_jpeg_base64(&img.to_rgb8(), 85)
 }
 
 /// Accept selected corrections - overwrite originals with corrected versions
@@ -271,7 +283,7 @@ pub async fn get_original_image_for_comparison(
         return Err(format!("Image not found: {image_path}"));
     }
 
-    let img = image::open(&path)
+    let img = crate::turbo::load_image(&path)
         .map_err(|e| format!("Failed to open image: {e}"))?;
 
     // Resize for preview
@@ -279,13 +291,7 @@ pub async fn get_original_image_for_comparison(
     let scale = f64::from(PREVIEW_MAX_SIZE) / f64::from(width.max(height));
 
     let preview = if scale < 1.0 {
-        let new_width = (f64::from(width) * scale) as u32;
-        let new_height = (f64::from(height) * scale) as u32;
-        img.resize_exact(
-            new_width.max(1),
-            new_height.max(1),
-            image::imageops::FilterType::Triangle,
-        )
+        crate::fast_resize::resize_to_fit(&img, PREVIEW_MAX_SIZE)
     } else {
         img
     };

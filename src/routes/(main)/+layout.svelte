@@ -7,16 +7,12 @@
     updateAvailable,
     promptInstallUpdate
   } from '$lib/utils/updater';
-  import { DatabaseService } from '$lib/services/databaseService';
   import { getVersion } from '@tauri-apps/api/app';
-  import OpenCVSetupModal from '$lib/components/OpenCVSetupModal.svelte';
   import CustomTitleBar from '$lib/components/CustomTitleBar.svelte';
 
   let { children } = $props();
   let isDarkMode = $state(false);
   let currentPath = $derived($page.url.pathname);
-  let showOpenCVSetup = $state(false);
-  let checkingOpenCV = $state(true);
   let appVersion = $state('');
 
   // Navigation with SVG icons
@@ -82,29 +78,7 @@
     }
     setTimeout(() => checkForUpdatesSilently(), 5000);
 
-    // Check OpenCV status on startup
-    try {
-      const wasSkipped = await DatabaseService.wasOpenCVSetupSkipped();
-      if (!wasSkipped) {
-        const status = await DatabaseService.checkOpenCVStatus();
-        if (!status.installed) {
-          showOpenCVSetup = true;
-        }
-      }
-    } catch (err) {
-      console.error('Failed to check OpenCV status:', err);
-    } finally {
-      checkingOpenCV = false;
-    }
   });
-
-  function handleOpenCVComplete() {
-    showOpenCVSetup = false;
-  }
-
-  function handleOpenCVSkip() {
-    showOpenCVSetup = false;
-  }
 </script>
 
 <div class="bg-background-0 text-foreground-950 flex h-screen flex-col">
@@ -201,7 +175,4 @@
   </div>
 </div>
 
-<!-- OpenCV Setup Modal -->
-{#if showOpenCVSetup}
-  <OpenCVSetupModal onComplete={handleOpenCVComplete} onSkip={handleOpenCVSkip} />
-{/if}
+

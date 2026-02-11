@@ -25,13 +25,20 @@
   // Get the id from the URL params
   let propertyId = $derived(Number($page.params.id));
 
-  // Refresh images when window regains focus (user returns from external editor)
+  // Only refresh images on focus if the window was blurred for >2s
+  // (implies user went to an external editor, not just a quick alt-tab)
+  let lastBlurTime = 0;
+  function handleWindowBlur() {
+    lastBlurTime = Date.now();
+  }
   function handleWindowFocus() {
-    imageRefreshKey++;
+    if (lastBlurTime > 0 && Date.now() - lastBlurTime > 2000) {
+      imageRefreshKey++;
+    }
   }
 
   onMount(async () => {
-    // Listen for window focus to refresh images
+    window.addEventListener('blur', handleWindowBlur);
     window.addEventListener('focus', handleWindowFocus);
     if (isNaN(propertyId) || propertyId < 1) {
       error = 'Invalid property ID';
@@ -64,6 +71,7 @@
   });
 
   onDestroy(() => {
+    window.removeEventListener('blur', handleWindowBlur);
     window.removeEventListener('focus', handleWindowFocus);
   });
 

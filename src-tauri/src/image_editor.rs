@@ -3,23 +3,26 @@
 //! Provides Tauri commands for non-destructive image editing with real-time preview.
 //! Uses image caching and resize-first pipeline for <30ms preview response times.
 
-use base64::{engine::general_purpose::STANDARD, Engine};
 use image::{DynamicImage, GenericImageView, ImageFormat, Rgba, RgbaImage};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::io::Cursor;
 use std::path::Path;
-use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use tauri::{AppHandle, Emitter, Manager};
+
+use crate::gpu::ImageProcessor;
 
 // ============================================================================
 // Image Cache for Real-Time Preview
 // ============================================================================
 
 /// Cached image data for fast preview generation.
-/// Stores both the full image (for saving) and a pre-resized preview (for fast edits).
+/// Stores both the full-resolution image (for saving without re-decode)
+/// and a pre-resized preview (for fast edits).
 pub struct ImageCache {
     pub path: String,
+    pub full_image: DynamicImage,    // Full-resolution cached image (~50-100MB, saves disk I/O on save)
     pub preview_image: DynamicImage, // Pre-resized to ~800px for fast processing
     pub preview_size: u32,
 }
@@ -112,7 +115,7 @@ pub struct AutoStraightenResult {
 /// Get the dimensions of an image
 #[tauri::command]
 pub async fn editor_get_dimensions(image_path: String) -> Result<(u32, u32), String> {
-    let img = image::open(&image_path).map_err(|e| format!("Failed to open image: {e}"))?;
+    let img = crate::turbo::load_image(&image_path).map_err(|e| format!("Failed to open image: {e}"))?;
     Ok(img.dimensions())
 }
 
@@ -125,21 +128,34 @@ pub async fn editor_load_image(
     image_path: String,
     preview_size: u32,
 ) -> Result<EditorLoadResult, String> {
-    // Load the original image from disk
-    let img = image::open(&image_path).map_err(|e| format!("Failed to open image: {e}"))?;
+    let path_clone = image_path.clone();
+
+    // Heavy I/O + decode + resize runs on a blocking thread so we don't
+    // stall the Tauri async runtime (which would freeze the UI).
+    let (img, preview_img, preview_base64) = tokio::task::spawn_blocking(move || {
+        // Load the original image from disk (turbojpeg for JPEG files)
+        let img = crate::turbo::load_image(&path_clone)
+            .map_err(|e| format!("Failed to open image: {e}"))?;
+
+        // Create pre-resized preview version for fast processing
+        let preview_img = resize_for_preview(&img, preview_size);
+
+        // Generate initial preview (no edits applied)
+        let preview_base64 = encode_to_base64_jpeg(&preview_img)?;
+
+        Ok::<_, String>((img, preview_img, preview_base64))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))??;
+
     let (width, height) = img.dimensions();
 
-    // Create pre-resized preview version for fast processing
-    let preview_img = resize_for_preview(&img, preview_size);
-
-    // Generate initial preview (no edits applied)
-    let preview_base64 = encode_to_base64_jpeg(&preview_img)?;
-
-    // Store in cache
+    // Store in cache (including full-resolution image to avoid re-decode on save)
     let cache = app.state::<ImageCacheState>();
     let mut guard = cache.lock().map_err(|e| format!("Failed to lock cache: {e}"))?;
     *guard = Some(ImageCache {
         path: image_path,
+        full_image: img,
         preview_image: preview_img,
         preview_size,
     });
@@ -158,13 +174,20 @@ pub async fn editor_generate_preview(
     app: AppHandle,
     params: EditParams,
 ) -> Result<String, String> {
-    // Get the cached preview image
-    let cache = app.state::<ImageCacheState>();
-    let guard = cache.lock().map_err(|e| format!("Failed to lock cache: {e}"))?;
-    let cached = guard.as_ref().ok_or("No image loaded. Call editor_load_image first.")?;
+    // Clone the preview image out of the lock quickly so we don't hold
+    // the mutex during GPU work (which would block load/save).
+    let preview_img = {
+        let cache = app.state::<ImageCacheState>();
+        let guard = cache.lock().map_err(|e| format!("Failed to lock cache: {e}"))?;
+        let cached = guard.as_ref().ok_or("No image loaded. Call editor_load_image first.")?;
+        cached.preview_image.clone()
+    };
+
+    // Get GPU processor
+    let processor = app.state::<Arc<ImageProcessor>>();
 
     // Apply edits to the pre-resized preview image (fast!)
-    let edited = apply_all_edits_fast(&cached.preview_image, &params)?;
+    let edited = apply_all_edits_gpu(&preview_img, &params, &processor)?;
 
     // Encode to base64 JPEG
     encode_to_base64_jpeg(&edited)
@@ -178,7 +201,7 @@ pub async fn editor_generate_preview_legacy(
     preview_size: u32,
 ) -> Result<String, String> {
     // Load the original image
-    let img = image::open(&image_path).map_err(|e| format!("Failed to open image: {e}"))?;
+    let img = crate::turbo::load_image(&image_path).map_err(|e| format!("Failed to open image: {e}"))?;
 
     // Apply all edits
     let edited = apply_all_edits(&img, &params)?;
@@ -190,24 +213,65 @@ pub async fn editor_generate_preview_legacy(
     encode_to_base64_jpeg(&preview)
 }
 
-/// Save the edited image (replaces original)
+/// Save the edited image (replaces original).
+/// Uses the cached full-resolution image when available to avoid expensive re-decode.
 #[tauri::command]
 pub async fn editor_save_image(
+    app: AppHandle,
     image_path: String,
     params: EditParams,
 ) -> Result<EditorCommandResult, String> {
-    // Load the original image
-    let img = image::open(&image_path).map_err(|e| format!("Failed to open image: {e}"))?;
+    // Take the full-res image from cache (avoids clone of ~80MB) or load from disk.
+    // We take ownership so we don't hold the lock during the expensive GPU + save work.
+    let img = {
+        let cache = app.state::<ImageCacheState>();
+        let mut guard = cache.lock().map_err(|e| format!("Failed to lock cache: {e}"))?;
+        if let Some(cached) = guard.as_mut() {
+            if cached.path == image_path {
+                // Take the full image out of the cache (replace with a 1x1 placeholder).
+                // This avoids cloning ~80MB. The cache will be repopulated on next load.
+                std::mem::replace(
+                    &mut cached.full_image,
+                    DynamicImage::new_rgba8(1, 1),
+                )
+            } else {
+                crate::turbo::load_image(&image_path)
+                    .map_err(|e| format!("Failed to open image: {e}"))?
+            }
+        } else {
+            crate::turbo::load_image(&image_path)
+                .map_err(|e| format!("Failed to open image: {e}"))?
+        }
+    };
 
-    // Apply all edits at full resolution
-    let edited = apply_all_edits(&img, &params)?;
+    // Get GPU processor
+    let processor = app.state::<Arc<ImageProcessor>>();
+    let processor_ref = processor.inner().clone();
 
-    // Determine output format from original file extension
-    let path = Path::new(&image_path);
-    let format = get_image_format(path)?;
+    let path_clone = image_path.clone();
 
-    // Save the edited image, replacing the original
-    save_image(&edited, path, format)?;
+    // Run GPU processing + save on a blocking thread
+    tokio::task::spawn_blocking(move || {
+        // Apply all edits at full resolution using GPU acceleration
+        let edited = apply_all_edits_gpu(&img, &params, &processor_ref)?;
+        drop(img); // Free source image (~80MB) before encoding
+
+        // Determine output format from original file extension
+        let path = Path::new(&path_clone);
+        let format = get_image_format(path)?;
+
+        // Save the edited image, replacing the original
+        save_image(&edited, path, format)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))??;
+
+    // Invalidate the cache since the image on disk has changed
+    {
+        let cache = app.state::<ImageCacheState>();
+        let mut guard = cache.lock().map_err(|e| format!("Failed to lock cache: {e}"))?;
+        *guard = None;
+    }
 
     Ok(EditorCommandResult {
         success: true,
@@ -355,13 +419,16 @@ pub async fn editor_auto_straighten(app: AppHandle) -> Result<AutoStraightenResu
         .as_ref()
         .ok_or("No image loaded. Call editor_load_image first.")?;
 
-    // Use the new LSD + RANSAC + VP straightening algorithm
+    // Get GPU processor for gradient histogram computation
+    let processor = app.state::<Arc<ImageProcessor>>();
+
+    // Use GPU gradient histogram + RANSAC + VP straightening algorithm
     // Pass the original path for EXIF focal length extraction
     let image_path = Path::new(&cached.path);
     let (pw, ph) = cached.preview_image.dimensions();
     eprintln!("[auto-straighten] preview_image: {pw}x{ph}, path: {}", cached.path);
 
-    let result = analyze_straighten(&cached.preview_image, Some(image_path));
+    let result = analyze_straighten(&cached.preview_image, Some(image_path), &processor);
 
     eprintln!(
         "[auto-straighten] result: rotation={:.3}°, confidence={:.3}, lines={}, vh={}",
@@ -385,6 +452,85 @@ use crate::perspective::{
     StraightenAnalysis,
 };
 
+/// Progress event payload emitted during batch analysis and apply.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EnhanceProgressEvent {
+    phase: String,      // "analyze" or "apply"
+    current: usize,     // 1-based index of current image
+    total: usize,       // total images to process
+    filename: String,   // name of the image just completed
+}
+
+/// Simple counting semaphore to limit concurrent operations.
+/// Uses `Mutex<usize>` + `Condvar` to block threads when the limit is reached.
+struct CountingSemaphore {
+    state: Mutex<usize>,
+    condvar: Condvar,
+    max_permits: usize,
+}
+
+impl CountingSemaphore {
+    fn new(max_permits: usize) -> Self {
+        Self {
+            state: Mutex::new(0),
+            condvar: Condvar::new(),
+            max_permits,
+        }
+    }
+
+    /// Acquire a permit, blocking until one is available.
+    fn acquire(&self) -> SemaphoreGuard<'_> {
+        let mut active = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        while *active >= self.max_permits {
+            active = self.condvar.wait(active).unwrap_or_else(|e| e.into_inner());
+        }
+        *active += 1;
+        SemaphoreGuard { semaphore: self }
+    }
+}
+
+struct SemaphoreGuard<'a> {
+    semaphore: &'a CountingSemaphore,
+}
+
+impl Drop for SemaphoreGuard<'_> {
+    fn drop(&mut self) {
+        let mut active = self
+            .semaphore
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *active -= 1;
+        self.semaphore.condvar.notify_one();
+    }
+}
+
+/// Build a rayon thread pool optimized for background batch processing.
+/// Uses half the available CPU cores to keep the system responsive.
+///
+/// Note: We'd ideally set thread priority to below-normal via Windows API,
+/// but `unsafe_code = "forbid"` in Cargo.toml prevents this. The reduced
+/// thread count (cores/2) and the load semaphore are sufficient to keep
+/// the system responsive during batch processing.
+fn build_background_pool() -> Result<rayon::ThreadPool, String> {
+    let available = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(4);
+    // Use half the cores, minimum 2, to leave headroom for UI + OS
+    let num_threads = (available / 2).max(2);
+
+    eprintln!(
+        "[batch-enhance] Building thread pool: {num_threads} threads (of {available} available)"
+    );
+
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .thread_name(|idx| format!("enhance-worker-{idx}"))
+        .build()
+        .map_err(|e| format!("Failed to create thread pool: {e}"))
+}
+
 /// Analyze all images in a property's INTERNET folder for batch enhancement.
 /// Returns analysis results with before/after previews for each image.
 #[tauri::command]
@@ -396,7 +542,7 @@ pub async fn batch_analyze_for_enhance(
     use crate::perspective::straighten::analyze_straighten;
 
     // Build the INTERNET folder path - load config async
-    let config = crate::config::load_config(app.clone())
+    let config = crate::config::get_cached_config(&app)
         .await?
         .ok_or("App configuration not found. Please configure in Settings.")?;
 
@@ -447,109 +593,190 @@ pub async fn batch_analyze_for_enhance(
             .cmp(b.file_name().unwrap_or_default())
     });
 
-    // Process images in parallel using rayon
-    let results: Vec<Result<EnhanceAnalysisResult, String>> = image_paths
-        .par_iter()
-        .map(|path| {
-            // Load the image
-            let img = image::open(path).map_err(|e| format!("Failed to open {}: {e}", path.display()))?;
+    // Get GPU processor for accelerated image editing
+    let processor = app.state::<Arc<ImageProcessor>>();
+    let processor_ref = processor.inner().clone();
 
-            // Analyze for straightening
-            let straighten_result = analyze_straighten(&img, Some(path));
+    // ========================================================================
+    // Throttled parallel analysis pipeline:
+    //
+    // Uses a custom rayon thread pool with half the CPU cores to keep the
+    // system responsive. A counting semaphore limits concurrent full-res
+    // image decodes to 2, capping peak RAM usage at ~200MB regardless of
+    // thread count. Images are processed in chunks of 6 with brief yields
+    // between chunks to let the GPU queue drain and the OS breathe.
+    //
+    // Progress events are emitted to the frontend after each image completes,
+    // enabling a real progress bar instead of an indeterminate spinner.
+    // ========================================================================
 
-            // Analyze for auto-adjustments
-            let adjustments = analyze_image_histogram(&img);
+    let total_count = image_paths.len();
+    eprintln!(
+        "[batch-analyze] Starting throttled analysis of {total_count} images"
+    );
+    let total_start = std::time::Instant::now();
 
-            // Calculate adjustment magnitude (normalized 0-1)
-            let adj_magnitude = ((adjustments.brightness.abs() as f32 / 100.0).powi(2)
-                + (adjustments.exposure.abs() as f32 / 100.0).powi(2)
-                + (adjustments.contrast.abs() as f32 / 100.0).powi(2)
-                + (adjustments.highlights.abs() as f32 / 100.0).powi(2)
-                + (adjustments.shadows.abs() as f32 / 100.0).powi(2))
-            .sqrt()
-                / 2.24; // normalize by sqrt(5) for max possible value
+    // Build a dedicated thread pool with reduced core count
+    let pool = build_background_pool()?;
 
-            // Determine if enhancement is needed
-            let needs_straighten =
-                straighten_result.suggested_rotation.abs() > 0.3 && straighten_result.confidence > 0.4;
-            let needs_adjustment = adjustments.brightness.abs() > 10
-                || adjustments.exposure.abs() > 10
-                || adjustments.contrast.abs() > 10
-                || adjustments.highlights.abs() > 10
-                || adjustments.shadows.abs() > 10;
-            let needs_enhancement = needs_straighten || needs_adjustment;
+    // Limit concurrent full-res image loads to 2 to cap RAM spikes.
+    // Each full-res image is ~80-100MB RGBA; with 2 permits, peak decode
+    // RAM is ~200MB instead of potentially 800MB+ with unlimited threads.
+    let load_semaphore = Arc::new(CountingSemaphore::new(2));
 
-            // Calculate combined confidence
-            let rotation_weight = if straighten_result.suggested_rotation.abs() > 0.5 {
-                0.6
-            } else {
-                0.3
-            };
-            let combined_confidence = straighten_result.confidence * rotation_weight
-                + adj_magnitude.min(1.0) * (1.0 - rotation_weight);
+    // Atomic counter for progress events
+    let completed_count = Arc::new(AtomicUsize::new(0));
 
-            // Generate preview image with edits applied
-            let preview_size: u32 = 600;
-            let preview_img = resize_for_preview(&img, preview_size);
+    // Clone app handle for progress events from within rayon threads
+    let app_for_progress = app.clone();
 
-            // Build EditParams for preview
-            let preview_params = EditParams {
-                fine_rotation: straighten_result.suggested_rotation as f32,
-                brightness: adjustments.brightness,
-                exposure: adjustments.exposure,
-                contrast: adjustments.contrast,
-                highlights: adjustments.highlights,
-                shadows: adjustments.shadows,
-                ..EditParams::default()
-            };
+    // Process images in chunks to allow periodic yielding
+    let chunk_size: usize = 6;
+    let mut final_results: Vec<EnhanceAnalysisResult> = Vec::with_capacity(total_count);
 
-            // Apply edits to generate enhanced preview
-            let enhanced_preview = apply_all_edits_fast(&preview_img, &preview_params)
-                .map_err(|e| format!("Failed to generate preview: {e}"))?;
+    for chunk in image_paths.chunks(chunk_size) {
+        let sem = Arc::clone(&load_semaphore);
+        let counter = Arc::clone(&completed_count);
+        let proc = processor_ref.clone();
+        let app_ref = app_for_progress.clone();
 
-            // Encode both previews to base64
-            let preview_base64 = encode_to_base64_jpeg(&enhanced_preview)?;
-            let original_preview_base64 = encode_to_base64_jpeg(&preview_img)?;
+        let chunk_results: Vec<Result<EnhanceAnalysisResult, String>> = pool.install(|| {
+            chunk
+                .par_iter()
+                .map(|path| {
+                    let img_start = std::time::Instant::now();
 
-            let filename = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
+                    // Acquire semaphore permit before loading full-res image.
+                    // This blocks the thread until a permit is available, limiting
+                    // the number of concurrent ~80MB allocations.
+                    let preview_img = {
+                        let _permit = sem.acquire();
+                        let img = crate::turbo::load_image(path)
+                            .map_err(|e| format!("Failed to open {}: {e}", path.display()))?;
+                        let preview = resize_for_preview(&img, 600);
+                        drop(img); // Free ~80MB before releasing permit
+                        preview
+                        // _permit drops here, releasing the semaphore
+                    };
 
-            Ok(EnhanceAnalysisResult {
-                filename,
-                original_path: path.to_string_lossy().to_string(),
-                straighten: StraightenAnalysis {
-                    rotation: straighten_result.suggested_rotation,
-                    confidence: straighten_result.confidence,
-                    lines_used: straighten_result.lines_used,
-                    vh_agreement: straighten_result.vh_agreement,
-                },
-                adjustments: AdjustmentAnalysis {
-                    brightness: adjustments.brightness,
-                    exposure: adjustments.exposure,
-                    contrast: adjustments.contrast,
-                    highlights: adjustments.highlights,
-                    shadows: adjustments.shadows,
-                    magnitude: adj_magnitude,
-                },
-                combined_confidence,
-                needs_enhancement,
-                preview_base64,
-                original_preview_base64,
-            })
-        })
-        .collect();
+                    // GPU-accelerated straighten analysis on small preview
+                    let straighten_result =
+                        analyze_straighten(&preview_img, Some(path), &proc);
+                    let adjustments = analyze_image_histogram(&preview_img);
 
-    // Collect results, filtering out errors but logging them
-    let mut final_results = Vec::new();
-    for result in results {
-        match result {
-            Ok(r) => final_results.push(r),
-            Err(e) => eprintln!("Warning: Failed to analyze image: {e}"),
+                    // Calculate adjustment magnitude (normalized 0-1)
+                    let adj_magnitude = ((adjustments.brightness.abs() as f32 / 100.0).powi(2)
+                        + (adjustments.exposure.abs() as f32 / 100.0).powi(2)
+                        + (adjustments.contrast.abs() as f32 / 100.0).powi(2)
+                        + (adjustments.highlights.abs() as f32 / 100.0).powi(2)
+                        + (adjustments.shadows.abs() as f32 / 100.0).powi(2))
+                    .sqrt()
+                        / 2.24;
+
+                    let needs_straighten = straighten_result.suggested_rotation.abs() > 0.3
+                        && straighten_result.confidence > 0.4;
+                    let needs_adjustment = adjustments.brightness.abs() > 10
+                        || adjustments.exposure.abs() > 10
+                        || adjustments.contrast.abs() > 10
+                        || adjustments.highlights.abs() > 10
+                        || adjustments.shadows.abs() > 10;
+                    let needs_enhancement = needs_straighten || needs_adjustment;
+
+                    let rotation_weight = if straighten_result.suggested_rotation.abs() > 0.5 {
+                        0.6
+                    } else {
+                        0.3
+                    };
+                    let combined_confidence = straighten_result.confidence * rotation_weight
+                        + adj_magnitude.min(1.0) * (1.0 - rotation_weight);
+
+                    // GPU-accelerated preview generation
+                    let preview_params = EditParams {
+                        fine_rotation: straighten_result.suggested_rotation as f32,
+                        brightness: adjustments.brightness,
+                        exposure: adjustments.exposure,
+                        contrast: adjustments.contrast,
+                        highlights: adjustments.highlights,
+                        shadows: adjustments.shadows,
+                        ..EditParams::default()
+                    };
+
+                    let enhanced_preview =
+                        apply_all_edits_gpu(&preview_img, &preview_params, &proc)
+                            .map_err(|e| format!("Failed to generate preview: {e}"))?;
+
+                    // Encode both previews to base64
+                    let preview_base64 = encode_to_base64_jpeg(&enhanced_preview)?;
+                    let original_preview_base64 = encode_to_base64_jpeg(&preview_img)?;
+
+                    let filename = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    // Emit progress event
+                    let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                    eprintln!(
+                        "[batch-analyze] {filename} completed in {:?} ({done}/{total_count})",
+                        img_start.elapsed()
+                    );
+                    let _ = app_ref.emit(
+                        "enhance-progress",
+                        EnhanceProgressEvent {
+                            phase: "analyze".to_string(),
+                            current: done,
+                            total: total_count,
+                            filename: filename.clone(),
+                        },
+                    );
+
+                    Ok(EnhanceAnalysisResult {
+                        filename,
+                        original_path: path.to_string_lossy().to_string(),
+                        straighten: StraightenAnalysis {
+                            rotation: straighten_result.suggested_rotation,
+                            confidence: straighten_result.confidence,
+                            lines_used: straighten_result.lines_used,
+                            vh_agreement: straighten_result.vh_agreement,
+                        },
+                        adjustments: AdjustmentAnalysis {
+                            brightness: adjustments.brightness,
+                            exposure: adjustments.exposure,
+                            contrast: adjustments.contrast,
+                            highlights: adjustments.highlights,
+                            shadows: adjustments.shadows,
+                            magnitude: adj_magnitude,
+                        },
+                        combined_confidence,
+                        needs_enhancement,
+                        preview_base64,
+                        original_preview_base64,
+                    })
+                })
+                .collect()
+        });
+
+        // Collect chunk results, filtering out errors
+        for result in chunk_results {
+            match result {
+                Ok(r) => final_results.push(r),
+                Err(e) => eprintln!("Warning: Failed to analyze image: {e}"),
+            }
+        }
+
+        // Brief yield between chunks to let GPU queue drain and OS breathe.
+        // Only yield if there are more chunks to process.
+        if final_results.len() < total_count {
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
+
+    eprintln!(
+        "[batch-analyze] Completed {} images in {:?}",
+        final_results.len(),
+        total_start.elapsed()
+    );
 
     Ok(final_results)
 }
@@ -557,47 +784,75 @@ pub async fn batch_analyze_for_enhance(
 /// Apply enhancements to selected images, overwriting the originals.
 #[tauri::command]
 pub async fn batch_apply_enhancements(
+    app: AppHandle,
     enhancements: Vec<EnhanceRequest>,
 ) -> Result<Vec<EnhanceApplyResult>, String> {
-    let results: Vec<EnhanceApplyResult> = enhancements
-        .par_iter()
-        .map(|request| {
-            let result = (|| -> Result<(), String> {
-                // Load the original image at full resolution
-                let img = image::open(&request.original_path)
-                    .map_err(|e| format!("Failed to open image: {e}"))?;
+    // Get GPU processor for accelerated image editing
+    let processor = app.state::<Arc<ImageProcessor>>();
 
-                // Build EditParams
-                let params = EditParams {
-                    fine_rotation: request.rotation as f32,
-                    brightness: request.brightness,
-                    exposure: request.exposure,
-                    contrast: request.contrast,
-                    highlights: request.highlights,
-                    shadows: request.shadows,
-                    ..EditParams::default()
-                };
+    // Process images SEQUENTIALLY to minimize RAM usage.
+    // Each full-res image is ~80MB RGBA; only one is in memory at a time.
+    // GPU operations serialize on a single device anyway, so parallel loading
+    // would only waste RAM without improving throughput.
+    let mut results: Vec<EnhanceApplyResult> = Vec::with_capacity(enhancements.len());
+    let total = enhancements.len();
 
-                // Apply all edits at full resolution
-                let edited = apply_all_edits(&img, &params)?;
+    for (i, request) in enhancements.iter().enumerate() {
+        eprintln!(
+            "[batch-apply] Processing image {}/{total}: {}",
+            i + 1,
+            request.filename
+        );
 
-                // Determine output format from original file extension
-                let path = std::path::Path::new(&request.original_path);
-                let format = get_image_format(path)?;
-
-                // Save over the original
-                save_image(&edited, path, format)?;
-
-                Ok(())
-            })();
-
-            EnhanceApplyResult {
+        // Emit progress event for apply phase
+        let _ = app.emit(
+            "enhance-progress",
+            EnhanceProgressEvent {
+                phase: "apply".to_string(),
+                current: i + 1,
+                total,
                 filename: request.filename.clone(),
-                success: result.is_ok(),
-                error: result.err(),
-            }
-        })
-        .collect();
+            },
+        );
+
+        let result = (|| -> Result<(), String> {
+            // Load the original image at full resolution using turbojpeg
+            let img = crate::turbo::load_image(&request.original_path)
+                .map_err(|e| format!("Failed to open image: {e}"))?;
+
+            // Build EditParams
+            let params = EditParams {
+                fine_rotation: request.rotation as f32,
+                brightness: request.brightness,
+                exposure: request.exposure,
+                contrast: request.contrast,
+                highlights: request.highlights,
+                shadows: request.shadows,
+                ..EditParams::default()
+            };
+
+            // Apply all edits at full resolution (GPU-accelerated)
+            let edited = apply_all_edits_gpu(&img, &params, &processor)?;
+
+            // Drop the source image before saving to free ~80MB
+            drop(img);
+
+            // Determine output format from original file extension
+            let path = Path::new(&request.original_path);
+            let format = get_image_format(path)?;
+
+            // Save over the original
+            save_image(&edited, path, format)?;
+
+            Ok(())
+        })();
+
+        results.push(EnhanceApplyResult {
+            filename: request.filename.clone(),
+            success: result.is_ok(),
+            error: result.err(),
+        });
+    }
 
     Ok(results)
 }
@@ -606,7 +861,65 @@ pub async fn batch_apply_enhancements(
 // Image Processing Pipeline
 // ============================================================================
 
-/// Apply all edits in the correct order (used for saving at full resolution)
+/// Apply all edits using GPU acceleration with CPU fallback.
+/// This is the primary entry point for all image editing operations.
+///
+/// Optimized pipeline:
+/// - Uses fused rotate+adjust when both are needed (single GPU upload/download)
+/// - Avoids unnecessary clones when no quarter rotation or crop is needed
+/// - Quarter rotation and crop are fast CPU ops (lossless transpose / sub-image view)
+pub fn apply_all_edits_gpu(
+    img: &DynamicImage,
+    params: &EditParams,
+    processor: &ImageProcessor,
+) -> Result<DynamicImage, String> {
+    let needs_quarter = params.quarter_turns % 4 != 0;
+    let needs_fine_rotation = params.fine_rotation.abs() > 0.01;
+    let needs_crop = params.crop_enabled;
+    let needs_adjust = params.brightness != 0
+        || params.exposure != 0
+        || params.contrast != 0
+        || params.highlights != 0
+        || params.shadows != 0;
+
+    // Fast path: nothing to do
+    if !needs_quarter && !needs_fine_rotation && !needs_crop && !needs_adjust {
+        return Ok(img.clone());
+    }
+
+    // 1. Apply quarter-turn rotations (0°, 90°, 180°, 270°) - lossless, CPU
+    //    Uses Cow to avoid cloning ~96MB when no quarter rotation is needed.
+    let after_quarter: std::borrow::Cow<'_, DynamicImage> = if needs_quarter {
+        std::borrow::Cow::Owned(apply_quarter_rotation(img, params.quarter_turns))
+    } else {
+        std::borrow::Cow::Borrowed(img)
+    };
+
+    // 2. Apply crop before GPU ops (reduces pixel count for faster GPU processing)
+    let after_crop: std::borrow::Cow<'_, DynamicImage> = if needs_crop {
+        std::borrow::Cow::Owned(apply_crop(&after_quarter, params)?)
+    } else {
+        after_quarter
+    };
+
+    // 3. Fused GPU pipeline: rotation + adjustments in a single upload/download
+    //    This saves ~20-30ms per image by eliminating redundant PCIe transfers.
+    if needs_fine_rotation || needs_adjust {
+        processor.rotate_and_adjust(
+            &after_crop,
+            if needs_fine_rotation { params.fine_rotation } else { 0.0 },
+            params.brightness,
+            params.exposure,
+            params.contrast,
+            params.highlights,
+            params.shadows,
+        )
+    } else {
+        Ok(after_crop.into_owned())
+    }
+}
+
+/// Apply all edits in the correct order (CPU-only fallback, used when no GPU state is available)
 pub fn apply_all_edits(img: &DynamicImage, params: &EditParams) -> Result<DynamicImage, String> {
     let mut result = img.clone();
 
@@ -629,30 +942,6 @@ pub fn apply_all_edits(img: &DynamicImage, params: &EditParams) -> Result<Dynami
     Ok(result)
 }
 
-/// Fast version of apply_all_edits optimized for preview generation.
-/// Uses parallel pixel processing for adjustments.
-fn apply_all_edits_fast(img: &DynamicImage, params: &EditParams) -> Result<DynamicImage, String> {
-    let mut result = img.clone();
-
-    // 1. Apply quarter-turn rotations (0°, 90°, 180°, 270°) - lossless
-    result = apply_quarter_rotation(&result, params.quarter_turns);
-
-    // 2. Apply fine rotation with auto-crop (if non-zero)
-    if params.fine_rotation.abs() > 0.01 {
-        result = apply_fine_rotation(&result, params.fine_rotation)?;
-    }
-
-    // 3. Apply crop (if enabled)
-    if params.crop_enabled {
-        result = apply_crop(&result, params)?;
-    }
-
-    // 4. Apply adjustments using parallel processing
-    result = apply_adjustments_parallel(&result, params);
-
-    Ok(result)
-}
-
 // ============================================================================
 // Rotation
 // ============================================================================
@@ -668,121 +957,10 @@ fn apply_quarter_rotation(img: &DynamicImage, turns: u8) -> DynamicImage {
     }
 }
 
-/// Apply fine rotation (arbitrary angle) with mathematical auto-crop to remove black borders
-/// Uses the same formula as the WebGL shader for consistent preview/save results
+/// Apply fine rotation (arbitrary angle) with mathematical auto-crop.
+/// Delegates to the rayon-parallelized CPU implementation in gpu.rs.
 fn apply_fine_rotation(img: &DynamicImage, angle_degrees: f32) -> Result<DynamicImage, String> {
-    let (width, height) = img.dimensions();
-    let aspect = width as f32 / height as f32;
-
-    // Calculate the auto-crop scale factor (same formula as WebGL shader)
-    // For a rectangle with aspect ratio 'a', rotated by angle θ:
-    // cropScale = min(1/(cos + sin/a), 1/(cos + sin*a))
-    let abs_angle = angle_degrees.abs().to_radians();
-    let cos_a = abs_angle.cos();
-    let sin_a = abs_angle.sin();
-
-    let scale_from_width = 1.0 / (cos_a + sin_a / aspect);
-    let scale_from_height = 1.0 / (cos_a + sin_a * aspect);
-    let crop_scale = scale_from_width.min(scale_from_height);
-
-    // Output image dimensions (preserves aspect ratio)
-    let new_width = ((width as f32) * crop_scale).round() as u32;
-    let new_height = ((height as f32) * crop_scale).round() as u32;
-
-    // Ensure minimum dimensions
-    let new_width = new_width.max(1);
-    let new_height = new_height.max(1);
-
-    // Create the output image at the cropped size
-    let mut result = RgbaImage::new(new_width, new_height);
-
-    let angle_radians = angle_degrees.to_radians();
-    let cos_r = angle_radians.cos();
-    let sin_r = angle_radians.sin();
-
-    // Half dimensions for the inscribed rectangle in NORMALIZED coordinates
-    // (same as WebGL: cropHalfWidth = aspect * cropScale * 0.5, cropHalfHeight = cropScale * 0.5)
-    let crop_half_width = aspect * crop_scale * 0.5;
-    let crop_half_height = crop_scale * 0.5;
-
-    let src_cx = width as f32 / 2.0;
-    let src_cy = height as f32 / 2.0;
-    let dst_cx = new_width as f32 / 2.0;
-    let dst_cy = new_height as f32 / 2.0;
-
-    let rgba = img.to_rgba8();
-
-    // For each pixel in the output, find the corresponding pixel in the rotated source
-    for dst_y in 0..new_height {
-        for dst_x in 0..new_width {
-            // Convert output pixel to normalized coordinates within the inscribed rectangle
-            // Output spans [0, new_width] x [0, new_height]
-            // Normalized inscribed rect spans [-cropHalfWidth, +cropHalfWidth] x [-cropHalfHeight, +cropHalfHeight]
-            let u = (dst_x as f32 - dst_cx) / dst_cx; // -1 to +1
-            let v = (dst_y as f32 - dst_cy) / dst_cy; // -1 to +1
-
-            let x_norm = u * crop_half_width;
-            let y_norm = v * crop_half_height;
-
-            // Apply inverse rotation in normalized space (same as WebGL shader)
-            let x_rot = x_norm * cos_r + y_norm * sin_r;
-            let y_rot = -x_norm * sin_r + y_norm * cos_r;
-
-            // Convert normalized coordinates back to source pixel coordinates
-            // In normalized space, source image spans [-aspect/2, +aspect/2] x [-0.5, +0.5]
-            // So: src_x = (x_rot / (aspect/2)) * (width/2) + width/2 = x_rot/aspect * width + width/2
-            let src_x = x_rot / aspect * (width as f32) + src_cx;
-            let src_y = y_rot * (height as f32) + src_cy;
-
-            // Bilinear interpolation
-            if src_x >= 0.0
-                && src_x < (width - 1) as f32
-                && src_y >= 0.0
-                && src_y < (height - 1) as f32
-            {
-                let pixel = bilinear_sample(&rgba, src_x, src_y);
-                result.put_pixel(dst_x, dst_y, pixel);
-            } else {
-                // Out of bounds - shouldn't happen with proper auto-crop, but use black as fallback
-                result.put_pixel(dst_x, dst_y, Rgba([0, 0, 0, 255]));
-            }
-        }
-    }
-
-    Ok(DynamicImage::ImageRgba8(result))
-}
-
-/// Bilinear interpolation sampling
-fn bilinear_sample(img: &RgbaImage, x: f32, y: f32) -> Rgba<u8> {
-    let x0 = x.floor() as u32;
-    let y0 = y.floor() as u32;
-    let x1 = x0 + 1;
-    let y1 = y0 + 1;
-
-    let fx = x - x0 as f32;
-    let fy = y - y0 as f32;
-
-    let p00 = img.get_pixel(x0, y0);
-    let p10 = img.get_pixel(x1, y0);
-    let p01 = img.get_pixel(x0, y1);
-    let p11 = img.get_pixel(x1, y1);
-
-    let mut result = [0u8; 4];
-    for i in 0..4 {
-        let v00 = p00[i] as f32;
-        let v10 = p10[i] as f32;
-        let v01 = p01[i] as f32;
-        let v11 = p11[i] as f32;
-
-        let v = v00 * (1.0 - fx) * (1.0 - fy)
-            + v10 * fx * (1.0 - fy)
-            + v01 * (1.0 - fx) * fy
-            + v11 * fx * fy;
-
-        result[i] = v.round().clamp(0.0, 255.0) as u8;
-    }
-
-    Rgba(result)
+    crate::gpu::cpu_fine_rotation(img, angle_degrees)
 }
 
 // ============================================================================
@@ -892,6 +1070,7 @@ fn apply_adjustments(img: &DynamicImage, params: &EditParams) -> DynamicImage {
 }
 
 /// Adjustment factors pre-computed for parallel processing
+#[allow(dead_code)]
 struct AdjustmentFactors {
     brightness: f32,
     exposure: f32,
@@ -924,6 +1103,7 @@ impl AdjustmentFactors {
 
 /// Process a single pixel with the given adjustment factors
 #[inline]
+#[allow(dead_code)]
 fn process_pixel(pixel: Rgba<u8>, factors: &AdjustmentFactors) -> Rgba<u8> {
     // Convert to 0-1 range
     let mut r = pixel[0] as f32 / 255.0;
@@ -969,6 +1149,7 @@ fn process_pixel(pixel: Rgba<u8>, factors: &AdjustmentFactors) -> Rgba<u8> {
 }
 
 /// Apply all image adjustments using parallel processing (rayon)
+#[allow(dead_code)]
 fn apply_adjustments_parallel(img: &DynamicImage, params: &EditParams) -> DynamicImage {
     let factors = AdjustmentFactors::from_params(params);
 
@@ -1003,37 +1184,15 @@ fn apply_adjustments_parallel(img: &DynamicImage, params: &EditParams) -> Dynami
 // Utility Functions
 // ============================================================================
 
-/// Resize image for preview while maintaining aspect ratio
+/// Resize image for preview while maintaining aspect ratio.
+/// Uses SIMD-accelerated resize for 14-23x faster performance.
 fn resize_for_preview(img: &DynamicImage, max_size: u32) -> DynamicImage {
-    let (width, height) = img.dimensions();
-    let max_dim = width.max(height);
-
-    if max_dim <= max_size {
-        return img.clone();
-    }
-
-    let scale = max_size as f32 / max_dim as f32;
-    let new_width = (width as f32 * scale) as u32;
-    let new_height = (height as f32 * scale) as u32;
-
-    img.resize_exact(
-        new_width.max(1),
-        new_height.max(1),
-        image::imageops::FilterType::Triangle,
-    )
+    crate::fast_resize::resize_to_fit(img, max_size)
 }
 
-/// Encode image to base64 JPEG
+/// Encode image to base64 JPEG using turbojpeg for faster encoding
 fn encode_to_base64_jpeg(img: &DynamicImage) -> Result<String, String> {
-    let mut buffer = Cursor::new(Vec::new());
-
-    // Convert to RGB for JPEG (no alpha channel)
-    let rgb = img.to_rgb8();
-
-    rgb.write_to(&mut buffer, ImageFormat::Jpeg)
-        .map_err(|e| format!("Failed to encode image: {e}"))?;
-
-    Ok(STANDARD.encode(buffer.into_inner()))
+    crate::turbo::encode_jpeg_base64(&img.to_rgb8(), 85)
 }
 
 /// Get the image format from file extension
@@ -1054,17 +1213,14 @@ fn get_image_format(path: &Path) -> Result<ImageFormat, String> {
     }
 }
 
-/// Save image to disk
+/// Save image to disk (uses turbojpeg for JPEG files)
 fn save_image(img: &DynamicImage, path: &Path, format: ImageFormat) -> Result<(), String> {
-    // For JPEG, convert to RGB (no alpha)
     if format == ImageFormat::Jpeg {
-        let rgb = img.to_rgb8();
-        rgb.save_with_format(path, format)
-            .map_err(|e| format!("Failed to save image: {e}"))?;
+        // Use turbojpeg for faster JPEG encoding
+        crate::turbo::save_jpeg(&img.to_rgb8(), path, 92)
     } else {
         img.save_with_format(path, format)
             .map_err(|e| format!("Failed to save image: {e}"))?;
+        Ok(())
     }
-
-    Ok(())
 }

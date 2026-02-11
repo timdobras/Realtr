@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.1.66-beta"
+version = "0.1.67-beta"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -21,7 +21,7 @@ default = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["rustls-tls"] }
+tauri = { version = "2", features = ["rustls-tls", "protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-shell = "2.0"
 serde = { version = "1", features = ["derive"] }
@@ -43,12 +43,23 @@ walkdir = "2"
 tauri-plugin-updater = "^2.0.0"
 tauri-plugin-process = "^2.0.0"
 
-# Perspective correction and auto-straighten (requires OpenCV installed)
-opencv = { version = "0.92", default-features = false, features = ["imgproc", "imgcodecs"] }
+# Auto-straighten analysis (GPU gradient histogram, no OpenCV needed)
 rand = "0.8"
+
+# Fast JPEG decode/encode via libjpeg-turbo (3-5x faster than image crate)
+turbojpeg = { version = "1.1", features = ["image"] }
 
 # EXIF metadata reading for lens distortion correction
 kamadak-exif = "0.5"
+
+# GPU-accelerated image processing
+wgpu = { version = "25.0", default-features = false, features = ["wgsl", "dx12", "vulkan", "metal"] }
+bytemuck = { version = "1.22", features = ["derive"] }
+pollster = "0.4"
+log = "0.4"
+
+# SIMD-accelerated image resizing (14-23x faster than image crate)
+fast_image_resize = { version = "5.1", features = ["image"] }
 
 [lints.rust]
 unsafe_code = "forbid"

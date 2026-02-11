@@ -1,5 +1,6 @@
 <script lang="ts">
   import { DatabaseService } from '$lib/services/databaseService';
+  import { convertFileSrc } from '@tauri-apps/api/core';
 
   interface Props {
     folderPath: string;
@@ -26,7 +27,7 @@
   }: Props = $props();
 
   let containerRef: HTMLDivElement | null = $state(null);
-  let dataUrl: string | null = $state(null);
+  let imgSrc: string | null = $state(null);
   let loading = $state(false);
   let error = $state(false);
   let hasBeenVisible = $state(false);
@@ -37,7 +38,7 @@
     if (refreshKey !== lastRefreshKey && hasBeenVisible) {
       lastRefreshKey = refreshKey;
       // Clear current image and reload
-      dataUrl = null;
+      imgSrc = null;
       error = false;
       loadImage();
     }
@@ -71,20 +72,22 @@
   });
 
   async function loadImage() {
-    if (loading || dataUrl) return;
+    if (loading || imgSrc) return;
 
     loading = true;
     error = false;
 
     try {
-      const base64 = await DatabaseService.getGalleryThumbnail(
+      // Get the filesystem path to the (possibly just-generated) thumbnail
+      const thumbnailPath = await DatabaseService.getGalleryThumbnailPath(
         folderPath,
         status,
         subfolder,
         filename,
         maxDimension
       );
-      dataUrl = `data:image/jpeg;base64,${base64}`;
+      // Convert to asset protocol URL — served directly from disk, zero base64 overhead
+      imgSrc = convertFileSrc(thumbnailPath) + `?t=${refreshKey}`;
     } catch (e) {
       console.error('Failed to load image:', filename, e);
       error = true;
@@ -93,23 +96,10 @@
     }
   }
 
-  function getMimeType(ext: string): string {
-    const mimeTypes: Record<string, string> = {
-      jpg: 'image/jpeg',
-      jpeg: 'image/jpeg',
-      png: 'image/png',
-      gif: 'image/gif',
-      webp: 'image/webp',
-      bmp: 'image/bmp',
-      heic: 'image/heic'
-    };
-    return mimeTypes[ext.toLowerCase()] || 'image/jpeg';
-  }
-
   function retryLoad(e: MouseEvent) {
     e.stopPropagation(); // Don't trigger parent onclick
     error = false;
-    dataUrl = null;
+    imgSrc = null;
     loadImage();
   }
 </script>
@@ -148,9 +138,9 @@
         Retry
       </button>
     </div>
-  {:else if dataUrl}
+  {:else if imgSrc}
     <!-- Loaded image -->
-    <img src={dataUrl} {alt} class="h-full w-full object-cover" draggable="false" />
+    <img src={imgSrc} {alt} class="h-full w-full object-cover" draggable="false" />
   {:else}
     <!-- Placeholder before observer triggers -->
     <div class="bg-muted absolute inset-0"></div>

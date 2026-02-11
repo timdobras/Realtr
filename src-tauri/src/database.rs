@@ -7,7 +7,10 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tauri::Manager;
+
+use crate::gpu::ImageProcessor;
 use tokio::process::Command;
 
 #[cfg(target_os = "windows")]
@@ -91,6 +94,24 @@ pub struct CompleteSetResult {
     pub properties_moved_to_not_found: usize,
 }
 
+/// Request item for batch thumbnail path resolution.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailBatchRequest {
+    pub folder_path: String,
+    pub status: String,
+    pub limit: Option<usize>,
+}
+
+/// Result item from batch thumbnail path resolution.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailBatchResult {
+    pub folder_path: String,
+    pub total_count: usize,
+    pub paths: Vec<String>,
+}
+
 // Helper function to safely get the database pool
 fn get_database_pool(app: &tauri::AppHandle) -> Result<&SqlitePool, String> {
     match app.try_state::<SqlitePool>() {
@@ -116,33 +137,38 @@ fn get_base_path_for_status(config: &crate::config::AppConfig, status: &str) -> 
     Ok(PathBuf::from(path_str))
 }
 
-// Helper function to generate a thumbnail from an image
+// Helper function to generate a thumbnail from an image.
+// For JPEG files, uses DCT-scaled decoding (turbojpeg) which decodes at reduced
+// resolution directly from the frequency domain — dramatically faster than full decode + resize.
+// For non-JPEG files, falls back to full decode + SIMD resize.
 fn generate_thumbnail(
     source_path: &PathBuf,
     thumbnail_path: &PathBuf,
     max_size: u32,
 ) -> Result<(), String> {
-    // Load the image
-    let img = image::open(source_path)
-        .map_err(|e| format!("Failed to open image: {}", e))?;
+    let ext = source_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+        .unwrap_or_default();
 
-    // Calculate new dimensions while maintaining aspect ratio
-    let (width, height) = img.dimensions();
-    let (new_width, new_height) = if width > height {
-        let ratio = max_size as f32 / width as f32;
-        (max_size, (height as f32 * ratio) as u32)
+    let img = if ext == "jpg" || ext == "jpeg" {
+        // DCT-scaled decode: for a 6000x4000 JPEG targeting 400px, decodes at 1/4 scale
+        // (1500x1000) in ~15ms instead of full decode (~200ms). The remaining resize
+        // from 1500→400 is trivial.
+        crate::turbo::load_jpeg_scaled(source_path.as_path(), max_size)
+            .map_err(|e| format!("Failed to load JPEG thumbnail: {}", e))?
     } else {
-        let ratio = max_size as f32 / height as f32;
-        ((width as f32 * ratio) as u32, max_size)
+        crate::turbo::load_image(source_path)
+            .map_err(|e| format!("Failed to open image: {}", e))?
     };
 
-    // Resize the image (Triangle is fastest for thumbnails)
-    let thumbnail = img.resize(new_width, new_height, image::imageops::FilterType::Triangle);
+    // Resize to exact target using SIMD-accelerated fast_image_resize
+    // (for DCT-scaled JPEGs this is a small resize; for others it's the full resize)
+    let thumbnail = crate::fast_resize::resize_to_fit(&img, max_size);
 
-    // Save the thumbnail as JPEG to save space
-    thumbnail
-        .save_with_format(thumbnail_path, ImageFormat::Jpeg)
-        .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
+    // Save the thumbnail as JPEG using turbojpeg
+    crate::turbo::save_jpeg(&thumbnail.to_rgb8(), thumbnail_path, 85)?;
 
     Ok(())
 }
@@ -180,7 +206,7 @@ async fn get_property_base_path(
     folder_path: &str,
     status: &str,
 ) -> Result<PathBuf, String> {
-    let config = crate::config::load_config(app.clone())
+    let config = crate::config::get_cached_config(&app)
         .await
         .map_err(|e| e.to_string())?;
     let config = config.ok_or("App configuration not found")?;
@@ -486,7 +512,7 @@ pub async fn create_property(
                 .map_err(|e| format!("Failed to commit transaction: {}", e))?;
 
             // Create the folder structure
-            let config_result = crate::config::load_config(app.clone()).await;
+            let config_result = crate::config::get_cached_config(&app).await;
             if let Ok(Some(config)) = config_result {
                 match construct_property_path_from_parts(&config, status, &city, &name) {
                     Ok(property_path) => {
@@ -659,7 +685,7 @@ pub async fn update_property_status(
     // IMPORTANT: Move folder FIRST before updating database
     // This ensures we don't update the database if the folder move fails
     if current_status != new_status {
-        let config_result = crate::config::load_config(app.clone()).await;
+        let config_result = crate::config::get_cached_config(&app).await;
         if let Ok(Some(config)) = config_result {
             // Get base paths using actual folder_path from database
             let new_base = get_base_path_for_status(&config, &new_status);
@@ -685,36 +711,40 @@ pub async fn update_property_status(
 
                     if let Some(old_path) = actual_old_path {
                         if old_path != new_path {
-                            // Create parent directory for new path
-                            if let Some(parent) = new_path.parent() {
-                                if let Err(e) = fs::create_dir_all(parent) {
-                                    return Ok(CommandResult {
-                                        success: false,
-                                        error: Some(format!(
+                            // Move folder on a blocking thread
+                            let old_p = old_path.clone();
+                            let new_p = new_path.clone();
+                            let move_result = tokio::task::spawn_blocking(move || {
+                                if let Some(parent) = new_p.parent() {
+                                    if let Err(e) = fs::create_dir_all(parent) {
+                                        return Err(format!(
                                             "Failed to create parent directory: {}. \
                                             Hint: Make sure no files are open in the folder and try again.",
                                             e
-                                        )),
-                                        data: None,
-                                    });
+                                        ));
+                                    }
                                 }
-                            }
-                            // Move the folder - try with retry for Windows lock issues
-                            if let Err(e) = fs::rename(&old_path, &new_path) {
-                                // On Windows, "Access is denied" often means a file is locked
-                                // Try a small delay and retry once
-                                std::thread::sleep(std::time::Duration::from_millis(100));
-                                if let Err(e2) = fs::rename(&old_path, &new_path) {
-                                    return Ok(CommandResult {
-                                        success: false,
-                                        error: Some(format!(
+                                if let Err(_e) = fs::rename(&old_p, &new_p) {
+                                    std::thread::sleep(std::time::Duration::from_millis(100));
+                                    if let Err(e2) = fs::rename(&old_p, &new_p) {
+                                        return Err(format!(
                                             "Failed to move folder: {}. \
                                             Hint: Close any open files/folders and File Explorer windows for this property, then try again.",
                                             e2
-                                        )),
-                                        data: None,
-                                    });
+                                        ));
+                                    }
                                 }
+                                Ok(())
+                            })
+                            .await
+                            .map_err(|e| format!("Task join error: {e}"))?;
+
+                            if let Err(e) = move_result {
+                                return Ok(CommandResult {
+                                    success: false,
+                                    error: Some(e),
+                                    data: None,
+                                });
                             }
                         }
                     }
@@ -807,7 +837,7 @@ pub async fn set_property_code(
     let new_folder_path = format!("{}/{}", city, new_folder_name);
 
     // Get config for absolute paths
-    let config = crate::config::load_config(app.clone())
+    let config = crate::config::get_cached_config(&app)
         .await
         .map_err(|e| format!("Failed to load config: {}", e))?
         .ok_or("App configuration not found")?;
@@ -817,10 +847,16 @@ pub async fn set_property_code(
     let new_absolute_path = base_path.join(&city).join(&new_folder_name);
 
     // Only rename if paths are different and old path exists
-    if old_absolute_path != new_absolute_path && old_absolute_path.exists() {
-        // Rename the folder
-        std::fs::rename(&old_absolute_path, &new_absolute_path)
-            .map_err(|e| format!("Failed to rename folder: {}", e))?;
+    if old_absolute_path != new_absolute_path {
+        tokio::task::spawn_blocking(move || {
+            if old_absolute_path.exists() {
+                std::fs::rename(&old_absolute_path, &new_absolute_path)
+                    .map_err(|e| format!("Failed to rename folder: {}", e))?;
+            }
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|e| format!("Task join error: {e}"))??;
     }
 
     // Update database with new code and folder_path
@@ -920,7 +956,7 @@ pub async fn update_property(
     let new_folder_path = format!("{}/{}", city, new_folder_name);
 
     // Get config for absolute paths
-    let config = crate::config::load_config(app.clone())
+    let config = crate::config::get_cached_config(&app)
         .await
         .map_err(|e| format!("Failed to load config: {}", e))?
         .ok_or("App configuration not found")?;
@@ -930,37 +966,41 @@ pub async fn update_property(
     // Handle folder operations if name or city changed
     if name_changed || city_changed {
         let old_absolute_path = base_path.join(&old_city).join(&old_folder_name);
-        let new_absolute_path = base_path.join(&city).join(&new_folder_name);
+        let new_absolute_path = base_path.join(city).join(&new_folder_name);
+        let city_changed_flag = city_changed;
+        let city_clone = city.to_string();
+        let base_path_clone = base_path.clone();
 
-        // Check if source folder exists
-        if old_absolute_path.exists() {
-            // Check if target folder already exists (would be a conflict)
-            if old_absolute_path != new_absolute_path && new_absolute_path.exists() {
-                return Ok(CommandResult {
-                    success: false,
-                    error: Some(format!(
+        tokio::task::spawn_blocking(move || {
+            if old_absolute_path.exists() {
+                if old_absolute_path != new_absolute_path && new_absolute_path.exists() {
+                    return Err(format!(
                         "Cannot move/rename: folder '{}' already exists",
                         new_absolute_path.display()
-                    )),
-                    data: None,
-                });
-            }
+                    ));
+                }
 
-            // If city changed, ensure the new city directory exists
-            if city_changed {
-                let new_city_path = base_path.join(&city);
-                if !new_city_path.exists() {
-                    std::fs::create_dir_all(&new_city_path)
-                        .map_err(|e| format!("Failed to create city folder: {}", e))?;
+                if city_changed_flag {
+                    let new_city_path = base_path_clone.join(&city_clone);
+                    if !new_city_path.exists() {
+                        std::fs::create_dir_all(&new_city_path)
+                            .map_err(|e| format!("Failed to create city folder: {}", e))?;
+                    }
+                }
+
+                if old_absolute_path != new_absolute_path {
+                    std::fs::rename(&old_absolute_path, &new_absolute_path)
+                        .map_err(|e| format!("Failed to move/rename folder: {}", e))?;
                 }
             }
-
-            // Move/rename the folder
-            if old_absolute_path != new_absolute_path {
-                std::fs::rename(&old_absolute_path, &new_absolute_path)
-                    .map_err(|e| format!("Failed to move/rename folder: {}", e))?;
-            }
-        }
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?
+        .map_err(|e| {
+            // Return as CommandResult error, not String error
+            e
+        })?;
     }
 
     // Update database
@@ -1159,7 +1199,7 @@ pub async fn get_property_by_id(
 pub async fn scan_and_import_properties(app: tauri::AppHandle) -> Result<CommandResult, String> {
     let pool = get_database_pool(&app)?;
 
-    let config_result = crate::config::load_config(app.clone()).await;
+    let config_result = crate::config::get_cached_config(&app).await;
     let config = match config_result {
         Ok(Some(config)) => config,
         Ok(None) => {
@@ -1280,7 +1320,7 @@ fn find_folder_by_prefix(city_path: &PathBuf, property_name: &str) -> Option<Str
 pub async fn repair_property_statuses(app: tauri::AppHandle) -> Result<CommandResult, String> {
     let pool = get_database_pool(&app)?;
 
-    let config = crate::config::load_config(app.clone())
+    let config = crate::config::get_cached_config(&app)
         .await
         .map_err(|e| e.to_string())?
         .ok_or("App configuration not found")?;
@@ -1300,67 +1340,104 @@ pub async fn repair_property_statuses(app: tauri::AppHandle) -> Result<CommandRe
     .map_err(|e| format!("Failed to fetch properties: {}", e))?;
 
     // Get base paths for all statuses
-    let status_paths: Vec<(&str, Option<PathBuf>)> = vec![
-        ("NEW", get_base_path_for_status(&config, "NEW").ok()),
-        ("DONE", get_base_path_for_status(&config, "DONE").ok()),
-        ("NOT_FOUND", get_base_path_for_status(&config, "NOT_FOUND").ok()),
-        ("ARCHIVE", get_base_path_for_status(&config, "ARCHIVE").ok()),
+    let status_paths: Vec<(String, Option<PathBuf>)> = vec![
+        ("NEW".to_string(), get_base_path_for_status(&config, "NEW").ok()),
+        ("DONE".to_string(), get_base_path_for_status(&config, "DONE").ok()),
+        ("NOT_FOUND".to_string(), get_base_path_for_status(&config, "NOT_FOUND").ok()),
+        ("ARCHIVE".to_string(), get_base_path_for_status(&config, "ARCHIVE").ok()),
     ];
 
-    for (id, folder_path, db_status, name) in properties {
-        result.properties_checked += 1;
+    // Phase 1: Check filesystem locations on a blocking thread
+    // Returns: Vec<(id, folder_path, db_status, name, found_status, new_folder_name)>
+    let properties_clone = properties.clone();
+    let status_paths_clone = status_paths.clone();
+    let scan_results: Vec<(i64, String, String, String, Option<String>, Option<String>, Vec<String>)> =
+        tokio::task::spawn_blocking(move || {
+            let mut results = Vec::new();
 
-        // Parse folder_path into city and property folder name
-        let parts: Vec<&str> = folder_path.split('/').collect();
-        if parts.len() != 2 {
-            result.errors.push(format!(
-                "Property '{}' has invalid folder_path format: '{}'",
-                name, folder_path
-            ));
-            continue;
-        }
-        let city = parts[0];
-        let property_folder_name = parts[1];
-
-        // Convert folder_path to proper PathBuf (handles / -> \ on Windows)
-        let folder_path_buf = folder_path_to_pathbuf(&folder_path);
-
-        // First try exact match
-        let mut found_info: Option<(&str, Option<String>)> = None; // (status, new_folder_name if different)
-
-        for (status, base_path_opt) in &status_paths {
-            if let Some(base_path) = base_path_opt {
-                let full_path = base_path.join(&folder_path_buf);
-                if full_path.exists() {
-                    found_info = Some((status, None)); // Exact match
-                    break;
+            for (id, folder_path, db_status, name) in properties_clone {
+                let parts: Vec<&str> = folder_path.split('/').collect();
+                if parts.len() != 2 {
+                    results.push((id, folder_path, db_status, name, None, None,
+                        vec![format!("Property has invalid folder_path format")]));
+                    continue;
                 }
-            }
-        }
+                let city = parts[0];
+                let property_folder_name = parts[1];
+                let folder_path_buf = folder_path_to_pathbuf(&folder_path);
 
-        // If not found with exact match, try prefix matching (for code suffixes)
-        if found_info.is_none() {
-            for (status, base_path_opt) in &status_paths {
-                if let Some(base_path) = base_path_opt {
-                    let city_path = base_path.join(city);
-                    if let Some(actual_folder_name) = find_folder_by_prefix(&city_path, property_folder_name) {
-                        if actual_folder_name != property_folder_name {
-                            found_info = Some((status, Some(actual_folder_name)));
-                        } else {
-                            found_info = Some((status, None));
+                let mut found_info: Option<(String, Option<String>)> = None;
+
+                // Try exact match
+                for (status, base_path_opt) in &status_paths_clone {
+                    if let Some(base_path) = base_path_opt {
+                        let full_path = base_path.join(&folder_path_buf);
+                        if full_path.exists() {
+                            found_info = Some((status.clone(), None));
+                            break;
                         }
-                        break;
                     }
                 }
-            }
-        }
 
-        // If folder found, update database if needed
-        if let Some((found_status, new_folder_name_opt)) = found_info {
+                // Try prefix matching
+                if found_info.is_none() {
+                    for (status, base_path_opt) in &status_paths_clone {
+                        if let Some(base_path) = base_path_opt {
+                            let city_path = base_path.join(city);
+                            if let Some(actual_folder_name) = find_folder_by_prefix(&city_path, property_folder_name) {
+                                if actual_folder_name != property_folder_name {
+                                    found_info = Some((status.clone(), Some(actual_folder_name)));
+                                } else {
+                                    found_info = Some((status.clone(), None));
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                let (found_status, new_folder_name) = match found_info {
+                    Some((s, n)) => (Some(s), n),
+                    None => (None, None),
+                };
+
+                let errors = if found_status.is_none() {
+                    let checked_paths: Vec<String> = status_paths_clone
+                        .iter()
+                        .filter_map(|(status, base_path_opt)| {
+                            base_path_opt.as_ref().map(|bp| {
+                                format!("{}: {}", status, bp.join(&folder_path_buf).display())
+                            })
+                        })
+                        .collect();
+                    vec![format!(
+                        "Property '{}' folder not found. DB folder_path='{}'. Checked: [{}]",
+                        name, folder_path, checked_paths.join(", ")
+                    )]
+                } else {
+                    vec![]
+                };
+
+                results.push((id, folder_path, db_status, name, found_status, new_folder_name, errors));
+            }
+
+            results
+        })
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?;
+
+    // Phase 2: Update database based on scan results
+    for (id, folder_path, db_status, name, found_status, new_folder_name_opt, errors) in scan_results {
+        result.properties_checked += 1;
+        result.errors.extend(errors);
+
+        if let Some(found_status) = found_status {
             let status_changed = found_status != db_status;
             let folder_path_changed = new_folder_name_opt.is_some();
 
             if status_changed || folder_path_changed {
+                let parts: Vec<&str> = folder_path.split('/').collect();
+                let city = parts[0];
                 let now_ts = chrono::Utc::now().timestamp_millis();
                 let new_folder_path = if let Some(ref new_name) = new_folder_name_opt {
                     format!("{}/{}", city, new_name)
@@ -1369,7 +1446,7 @@ pub async fn repair_property_statuses(app: tauri::AppHandle) -> Result<CommandRe
                 };
 
                 match sqlx::query("UPDATE properties SET status = ?, folder_path = ?, updated_at = ? WHERE id = ?")
-                    .bind(found_status)
+                    .bind(&found_status)
                     .bind(&new_folder_path)
                     .bind(now_ts)
                     .bind(id)
@@ -1395,22 +1472,6 @@ pub async fn repair_property_statuses(app: tauri::AppHandle) -> Result<CommandRe
                     }
                 }
             }
-        } else {
-            // Folder not found in any location - this is a warning but not necessarily an error
-            // The property might have been manually deleted from the filesystem
-            // Include the folder_path and checked paths for debugging
-            let checked_paths: Vec<String> = status_paths
-                .iter()
-                .filter_map(|(status, base_path_opt)| {
-                    base_path_opt.as_ref().map(|bp| {
-                        format!("{}: {}", status, bp.join(&folder_path_buf).display())
-                    })
-                })
-                .collect();
-            result.errors.push(format!(
-                "Property '{}' folder not found. DB folder_path='{}'. Checked: [{}]",
-                name, folder_path, checked_paths.join(", ")
-            ));
         }
     }
 
@@ -1450,101 +1511,165 @@ async fn scan_folder_for_properties(
         errors: Vec::new(),
     };
 
-    let entries =
-        std::fs::read_dir(folder_path).map_err(|e| format!("Failed to read directory: {}", e))?;
+    // Filesystem scan runs on a blocking thread to avoid stalling the Tokio runtime
+    let folder_path_clone = folder_path.clone();
+    let status_clone = status.to_string();
+    let existing_clone = existing_properties.clone();
 
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(e) => {
-                result
-                    .errors
-                    .push(format!("Error reading directory entry: {}", e));
-                continue;
-            }
-        };
+    let (new_properties_to_insert, scan_found, scan_existing, scan_errors) =
+        tokio::task::spawn_blocking(move || {
+            let mut new_props: Vec<(String, String, String, String, Option<String>, String)> =
+                Vec::new();
+            let mut found = 0usize;
+            let mut existing = 0usize;
+            let mut errors = Vec::new();
 
-        let city_path = entry.path();
-        if !city_path.is_dir() {
-            continue;
-        }
+            let entries = match std::fs::read_dir(&folder_path_clone) {
+                Ok(e) => e,
+                Err(e) => return Err(format!("Failed to read directory: {}", e)),
+            };
 
-        let city_name = match city_path.file_name().and_then(|n| n.to_str()) {
-            Some(name) => name.to_string(),
-            None => {
-                result
-                    .errors
-                    .push(format!("Invalid city folder name: {:?}", city_path));
-                continue;
-            }
-        };
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(e) => {
+                        errors.push(format!("Error reading directory entry: {}", e));
+                        continue;
+                    }
+                };
 
-        let city_entries = match std::fs::read_dir(&city_path) {
-            Ok(entries) => entries,
-            Err(e) => {
-                result
-                    .errors
-                    .push(format!("Failed to read city folder {}: {}", city_name, e));
-                continue;
-            }
-        };
+                let city_path = entry.path();
+                if !city_path.is_dir() {
+                    continue;
+                }
 
-        for property_entry in city_entries {
-            let property_entry = match property_entry {
-                Ok(entry) => entry,
-                Err(e) => {
-                    result.errors.push(format!(
-                        "Error reading property entry in {}: {}",
-                        city_name, e
+                let city_name = match city_path.file_name().and_then(|n| n.to_str()) {
+                    Some(name) => name.to_string(),
+                    None => {
+                        errors.push(format!("Invalid city folder name: {:?}", city_path));
+                        continue;
+                    }
+                };
+
+                let city_entries = match std::fs::read_dir(&city_path) {
+                    Ok(entries) => entries,
+                    Err(e) => {
+                        errors.push(format!("Failed to read city folder {}: {}", city_name, e));
+                        continue;
+                    }
+                };
+
+                for property_entry in city_entries {
+                    let property_entry = match property_entry {
+                        Ok(entry) => entry,
+                        Err(e) => {
+                            errors.push(format!(
+                                "Error reading property entry in {}: {}",
+                                city_name, e
+                            ));
+                            continue;
+                        }
+                    };
+
+                    let property_path = property_entry.path();
+                    if !property_path.is_dir() {
+                        continue;
+                    }
+
+                    let folder_name = match property_path.file_name().and_then(|n| n.to_str()) {
+                        Some(name) => name.to_string(),
+                        None => {
+                            errors.push(format!("Invalid property folder name: {:?}", property_path));
+                            continue;
+                        }
+                    };
+
+                    let (property_name, code) = parse_folder_name(&folder_name);
+
+                    found += 1;
+
+                    let property_key = format!("{}/{}", city_name, folder_name);
+
+                    if existing_clone.contains(&property_key) {
+                        existing += 1;
+                        continue;
+                    }
+
+                    if !is_valid_property_folder(&property_path) {
+                        errors.push(format!("Invalid property structure: {}", property_key));
+                        continue;
+                    }
+
+                    new_props.push((
+                        property_name,
+                        city_name.clone(),
+                        status_clone.clone(),
+                        folder_name,
+                        code,
+                        property_key,
                     ));
-                    continue;
                 }
-            };
-
-            let property_path = property_entry.path();
-            if !property_path.is_dir() {
-                continue;
             }
 
-            let folder_name = match property_path.file_name().and_then(|n| n.to_str()) {
-                Some(name) => name.to_string(),
-                None => {
-                    result
-                        .errors
-                        .push(format!("Invalid property folder name: {:?}", property_path));
-                    continue;
-                }
-            };
+            Ok((new_props, found, existing, errors))
+        })
+        .await
+        .map_err(|e| format!("Task join error: {e}"))??;
 
-            // Parse folder name to extract property name and code
-            // e.g., "Apartment 85sqm (45164)" -> name: "Apartment 85sqm", code: Some("45164")
-            let (property_name, code) = parse_folder_name(&folder_name);
+    result.found_properties = scan_found;
+    result.existing_properties = scan_existing;
+    result.errors = scan_errors;
 
-            result.found_properties += 1;
+    // Batch-insert all new properties in a single transaction.
+    // SQLite is ~100x faster with batched transactions vs one-per-insert.
+    if !new_properties_to_insert.is_empty() {
+        let now = chrono::Utc::now().timestamp_millis();
 
-            // Use folder_name for the key since that's what's on disk
-            let property_key = format!("{}/{}", city_name, folder_name);
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to start batch transaction: {}", e))?;
 
-            if existing_properties.contains(&property_key) {
-                result.existing_properties += 1;
-                continue;
-            }
+        for (property_name, city_name, status_str, folder_name, code, property_key) in
+            &new_properties_to_insert
+        {
+            let folder_path = get_relative_folder_path(city_name, folder_name);
 
-            if !is_valid_property_folder(&property_path) {
+            // Upsert city
+            if let Err(e) = sqlx::query(
+                r#"
+                INSERT INTO cities (name, usage_count, created_at)
+                VALUES (?, 1, ?)
+                ON CONFLICT(name) DO UPDATE SET usage_count = usage_count + 1
+                "#,
+            )
+            .bind(city_name)
+            .bind(now)
+            .execute(&mut *tx)
+            .await
+            {
                 result
                     .errors
-                    .push(format!("Invalid property structure: {}", property_key));
+                    .push(format!("Failed to update city for {}: {}", property_key, e));
                 continue;
             }
 
-            match add_property_to_database(
-                pool,
-                &property_name,
-                &city_name,
-                status,
-                &folder_name,
-                code.as_deref(),
+            // Insert property
+            match sqlx::query(
+                r#"
+                INSERT INTO properties (name, city, status, folder_path, notes, code, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
             )
+            .bind(property_name)
+            .bind(city_name)
+            .bind(status_str)
+            .bind(&folder_path)
+            .bind("Imported from existing folder")
+            .bind(code.as_deref())
+            .bind(now)
+            .bind(now)
+            .execute(&mut *tx)
             .await
             {
                 Ok(_) => {
@@ -1557,6 +1682,10 @@ async fn scan_folder_for_properties(
                 }
             }
         }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit batch transaction: {}", e))?;
     }
 
     Ok(result)
@@ -1650,25 +1779,30 @@ async fn add_property_to_database(
 
 // Helper functions
 async fn create_property_folder_structure(property_path: &PathBuf) -> Result<(), String> {
-    std::fs::create_dir_all(property_path)
-        .map_err(|e| format!("Failed to create property directory: {}", e))?;
+    let property_path = property_path.clone();
+    tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&property_path)
+            .map_err(|e| format!("Failed to create property directory: {}", e))?;
 
-    let internet_path = property_path.join("INTERNET");
-    let watermark_path = property_path.join("WATERMARK");
+        let internet_path = property_path.join("INTERNET");
+        let watermark_path = property_path.join("WATERMARK");
 
-    std::fs::create_dir_all(&internet_path)
-        .map_err(|e| format!("Failed to create INTERNET folder: {}", e))?;
+        std::fs::create_dir_all(&internet_path)
+            .map_err(|e| format!("Failed to create INTERNET folder: {}", e))?;
 
-    std::fs::create_dir_all(&watermark_path)
-        .map_err(|e| format!("Failed to create WATERMARK folder: {}", e))?;
+        std::fs::create_dir_all(&watermark_path)
+            .map_err(|e| format!("Failed to create WATERMARK folder: {}", e))?;
 
-    std::fs::create_dir_all(internet_path.join("AGGELIA"))
-        .map_err(|e| format!("Failed to create INTERNET/AGGELIA folder: {}", e))?;
+        std::fs::create_dir_all(internet_path.join("AGGELIA"))
+            .map_err(|e| format!("Failed to create INTERNET/AGGELIA folder: {}", e))?;
 
-    std::fs::create_dir_all(watermark_path.join("AGGELIA"))
-        .map_err(|e| format!("Failed to create WATERMARK/AGGELIA folder: {}", e))?;
+        std::fs::create_dir_all(watermark_path.join("AGGELIA"))
+            .map_err(|e| format!("Failed to create WATERMARK/AGGELIA folder: {}", e))?;
 
-    Ok(())
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -1775,7 +1909,7 @@ pub async fn list_original_images(
     // folder_path is relative (city/name), status determines which base folder to use
 
     // Load config to get base path for status
-    let config = crate::config::load_config(app.clone())
+    let config = crate::config::get_cached_config(&app)
         .await
         .map_err(|e| e.to_string())?;
     let config = config.ok_or("App configuration not found")?;
@@ -1785,43 +1919,46 @@ pub async fn list_original_images(
     let folder_path_buf = folder_path_to_pathbuf(&folder_path);
     let full_path = base_path.join(&folder_path_buf);
 
-    // If not found at expected location, try to find it in other status folders
-    let full_path = if full_path.exists() && full_path.is_dir() {
-        full_path
-    } else {
-        // Fallback: search all status folders for the actual folder location
-        match find_actual_folder_location(&config, &folder_path) {
-            Some((found_path, _actual_status)) => found_path,
-            None => return Err(format!("Folder not found: {}", full_path.display())),
-        }
-    };
+    // Filesystem operations run on a blocking thread
+    tokio::task::spawn_blocking(move || {
+        // If not found at expected location, try to find it in other status folders
+        let full_path = if full_path.exists() && full_path.is_dir() {
+            full_path
+        } else {
+            match find_actual_folder_location(&config, &folder_path) {
+                Some((found_path, _actual_status)) => found_path,
+                None => return Err(format!("Folder not found: {}", full_path.display())),
+            }
+        };
 
-    let mut images = Vec::new();
+        let mut images = Vec::new();
 
-    for entry in fs::read_dir(full_path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
+        for entry in fs::read_dir(full_path).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
 
-        if path.is_file() {
-            // Filter image file extensions (you can extend this list)
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                let ext_lc = ext.to_lowercase();
-                if ext_lc == "jpg"
-                    || ext_lc == "jpeg"
-                    || ext_lc == "png"
-                    || ext_lc == "bmp"
-                    || ext_lc == "gif"
-                    || ext_lc == "heic"
-                {
-                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                        images.push(filename.to_string());
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                    let ext_lc = ext.to_lowercase();
+                    if ext_lc == "jpg"
+                        || ext_lc == "jpeg"
+                        || ext_lc == "png"
+                        || ext_lc == "bmp"
+                        || ext_lc == "gif"
+                        || ext_lc == "heic"
+                    {
+                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                            images.push(filename.to_string());
+                        }
                     }
                 }
             }
         }
-    }
 
-    Ok(images)
+        Ok(images)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -1833,31 +1970,34 @@ pub async fn open_images_in_folder(
 ) -> Result<CommandResult, String> {
     // Get the full absolute path using the property base path
     let full_folder_path = get_property_base_path(&app, &folder_path, &status).await?;
-    if !full_folder_path.exists() || !full_folder_path.is_dir() {
-        return Ok(CommandResult {
-            success: false,
-            error: Some(format!(
-                "Folder path does not exist: {}",
-                full_folder_path.display()
-            )),
-            data: None,
-        });
-    }
 
-    // List all image files in the folder
-    let mut image_paths = Vec::new();
-    for entry in std::fs::read_dir(&full_folder_path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
-                let ext = ext.to_lowercase();
-                if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext.as_str()) {
-                    image_paths.push(path);
+    // Collect image paths on a blocking thread
+    let full_folder_clone = full_folder_path.clone();
+    let mut image_paths = tokio::task::spawn_blocking(move || {
+        if !full_folder_clone.exists() || !full_folder_clone.is_dir() {
+            return Err(format!(
+                "Folder path does not exist: {}",
+                full_folder_clone.display()
+            ));
+        }
+
+        let mut paths = Vec::new();
+        for entry in std::fs::read_dir(&full_folder_clone).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
+                    let ext = ext.to_lowercase();
+                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext.as_str()) {
+                        paths.push(path);
+                    }
                 }
             }
         }
-    }
+        Ok(paths)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))??;
 
     if image_paths.is_empty() {
         return Ok(CommandResult {
@@ -1948,20 +2088,20 @@ pub async fn get_image_as_base64(
 ) -> Result<String, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-    let full_path = property_path.join(&filename);
+    tokio::task::spawn_blocking(move || {
+        let full_path = property_path.join(&filename);
 
-    if !full_path.exists() {
-        return Err(format!("Image file not found: {}", full_path.display()));
-    }
+        if !full_path.exists() {
+            return Err(format!("Image file not found: {}", full_path.display()));
+        }
 
-    // Read file bytes
-    let image_bytes =
-        fs::read(&full_path).map_err(|e| format!("Failed to read image file: {}", e))?;
+        let image_bytes =
+            fs::read(&full_path).map_err(|e| format!("Failed to read image file: {}", e))?;
 
-    // Convert to base64
-    let base64_string = general_purpose::STANDARD.encode(&image_bytes);
-
-    Ok(base64_string)
+        Ok(general_purpose::STANDARD.encode(&image_bytes))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -1971,31 +2111,36 @@ pub async fn list_internet_images(
     status: String,
 ) -> Result<Vec<String>, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-    let internet_path = property_path.join("INTERNET");
 
-    if !internet_path.exists() {
-        return Ok(Vec::new());
-    }
+    tokio::task::spawn_blocking(move || {
+        let internet_path = property_path.join("INTERNET");
 
-    let mut images = Vec::new();
-    for entry in fs::read_dir(internet_path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
+        if !internet_path.exists() {
+            return Ok(Vec::new());
+        }
 
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                let ext_lc = ext.to_lowercase();
-                if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
-                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                        images.push(filename.to_string());
+        let mut images = Vec::new();
+        for entry in fs::read_dir(internet_path).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                    let ext_lc = ext.to_lowercase();
+                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
+                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                            images.push(filename.to_string());
+                        }
                     }
                 }
             }
         }
-    }
 
-    images.sort();
-    Ok(images)
+        images.sort();
+        Ok(images)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -2006,17 +2151,21 @@ pub async fn get_internet_image_as_base64(
     filename: String,
 ) -> Result<String, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-    let full_path = property_path.join("INTERNET").join(&filename);
 
-    if !full_path.exists() {
-        return Err(format!("Image file not found: {}", full_path.display()));
-    }
+    tokio::task::spawn_blocking(move || {
+        let full_path = property_path.join("INTERNET").join(&filename);
 
-    let image_bytes =
-        fs::read(&full_path).map_err(|e| format!("Failed to read image file: {}", e))?;
+        if !full_path.exists() {
+            return Err(format!("Image file not found: {}", full_path.display()));
+        }
 
-    let base64_string = general_purpose::STANDARD.encode(&image_bytes);
-    Ok(base64_string)
+        let image_bytes =
+            fs::read(&full_path).map_err(|e| format!("Failed to read image file: {}", e))?;
+
+        Ok(general_purpose::STANDARD.encode(&image_bytes))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -2026,64 +2175,85 @@ pub async fn copy_images_to_internet(
     status: String,
 ) -> Result<CommandResult, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-    let internet_path = property_path.join("INTERNET");
 
-    // Ensure INTERNET folder exists
-    fs::create_dir_all(&internet_path)
-        .map_err(|e| format!("Failed to create INTERNET folder: {}", e))?;
+    // All filesystem operations run on a blocking thread
+    tokio::task::spawn_blocking(move || {
+        let internet_path = property_path.join("INTERNET");
 
-    // Get list of original images
-    let mut copied_count = 0;
-    let mut errors = Vec::new();
+        // Ensure INTERNET folder exists
+        fs::create_dir_all(&internet_path)
+            .map_err(|e| format!("Failed to create INTERNET folder: {}", e))?;
 
-    for entry in fs::read_dir(&property_path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                let ext_lc = ext.to_lowercase();
-                if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
-                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                        let dest_path = internet_path.join(filename);
-
-                        // Only copy if the file doesn't already exist
-                        if !dest_path.exists() {
-                            match fs::copy(&path, &dest_path) {
-                                Ok(_) => {
-                                    copied_count += 1;
-                                }
-                                Err(e) => {
-                                    errors.push(format!("Failed to copy {}: {}", filename, e))
+        // Collect files to copy first, then copy in parallel
+        let files_to_copy: Vec<(PathBuf, PathBuf)> = fs::read_dir(&property_path)
+            .map_err(|e| e.to_string())?
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                        let ext_lc = ext.to_lowercase();
+                        if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"]
+                            .contains(&ext_lc.as_str())
+                        {
+                            if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                                let dest_path = internet_path.join(filename);
+                                if !dest_path.exists() {
+                                    return Some((path, dest_path));
                                 }
                             }
                         }
                     }
                 }
-            }
-        }
-    }
+                None
+            })
+            .collect();
 
-    if errors.is_empty() {
-        Ok(CommandResult {
-            success: true,
-            error: None,
-            data: Some(serde_json::json!({
-                "copied_count": copied_count,
-                "message": format!("Successfully copied {} images to INTERNET folder", copied_count)
-            })),
-        })
-    } else {
-        Ok(CommandResult {
-            success: false,
-            error: Some(format!(
-                "Copied {} images but encountered errors: {}",
-                copied_count,
-                errors.join(", ")
-            )),
-            data: None,
-        })
-    }
+        let copied_count = AtomicUsize::new(0);
+        let errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+        // Copy files in parallel (overlapping I/O on SSDs, OS readahead on HDDs)
+        files_to_copy.par_iter().for_each(|(src, dest)| {
+            match fs::copy(src, dest) {
+                Ok(_) => {
+                    copied_count.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(e) => {
+                    if let Some(filename) = src.file_name().and_then(|s| s.to_str()) {
+                        if let Ok(mut errs) = errors.lock() {
+                            errs.push(format!("Failed to copy {}: {}", filename, e));
+                        }
+                    }
+                }
+            }
+        });
+
+        let copied_count = copied_count.load(Ordering::Relaxed);
+        let errors = errors.into_inner().unwrap_or_default();
+
+        if errors.is_empty() {
+            Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({
+                    "copied_count": copied_count,
+                    "message": format!("Successfully copied {} images to INTERNET folder", copied_count)
+                })),
+            })
+        } else {
+            Ok(CommandResult {
+                success: false,
+                error: Some(format!(
+                    "Copied {} images but encountered errors: {}",
+                    copied_count,
+                    errors.join(", ")
+                )),
+                data: None,
+            })
+        }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -2096,26 +2266,29 @@ pub async fn list_thumbnails(
     // The thumbnails will be generated on-demand when requested
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-    let mut thumbnails = Vec::new();
-    for entry in fs::read_dir(&property_path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
+    tokio::task::spawn_blocking(move || {
+        let mut thumbnails = Vec::new();
+        for entry in fs::read_dir(&property_path).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
 
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                let ext_lc = ext.to_lowercase();
-                if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
-                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        // Return as .jpg since thumbnails are always JPEG
-                        thumbnails.push(format!("{}.jpg", stem));
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                    let ext_lc = ext.to_lowercase();
+                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
+                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                            thumbnails.push(format!("{}.jpg", stem));
+                        }
                     }
                 }
             }
         }
-    }
 
-    thumbnails.sort();
-    Ok(thumbnails)
+        thumbnails.sort();
+        Ok(thumbnails)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -2135,44 +2308,48 @@ pub async fn get_thumbnail_as_base64(
     let thumbnails_dir = thumbnails_base.join(&safe_folder_name);
     let thumbnail_path = thumbnails_dir.join(&filename);
 
-    // If thumbnail doesn't exist, generate it on-demand
-    if !thumbnail_path.exists() {
-        // Create thumbnails directory if it doesn't exist
-        fs::create_dir_all(&thumbnails_dir)
-            .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
+    // Get the original image path (needs async config)
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-        // Get the original image path
-        let property_path = get_property_base_path(&app, &folder_path, &status).await?;
+    // All filesystem + thumbnail generation runs on a blocking thread
+    tokio::task::spawn_blocking(move || {
+        // If thumbnail doesn't exist, generate it on-demand
+        if !thumbnail_path.exists() {
+            // Create thumbnails directory if it doesn't exist
+            fs::create_dir_all(&thumbnails_dir)
+                .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
 
-        // Remove .jpg extension from filename to get original stem
-        let original_stem = filename.trim_end_matches(".jpg");
+            // Remove .jpg extension from filename to get original stem
+            let original_stem = filename.trim_end_matches(".jpg");
 
-        // Try to find the original image file with any supported extension
-        let supported_exts = ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"];
-        let mut original_path = None;
+            // Try to find the original image file with any supported extension
+            let supported_exts = ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"];
+            let mut original_path = None;
 
-        for ext in &supported_exts {
-            let potential_path = property_path.join(format!("{}.{}", original_stem, ext));
-            if potential_path.exists() {
-                original_path = Some(potential_path);
-                break;
+            for ext in &supported_exts {
+                let potential_path = property_path.join(format!("{}.{}", original_stem, ext));
+                if potential_path.exists() {
+                    original_path = Some(potential_path);
+                    break;
+                }
+            }
+
+            if let Some(source_path) = original_path {
+                // Generate thumbnail (100x100 for fast generation)
+                generate_thumbnail(&source_path, &thumbnail_path, 100)
+                    .map_err(|e| format!("Failed to generate thumbnail: {}", e))?;
+            } else {
+                return Err(format!("Original image not found for thumbnail: {}", original_stem));
             }
         }
 
-        if let Some(source_path) = original_path {
-            // Generate thumbnail (100x100 for fast generation)
-            generate_thumbnail(&source_path, &thumbnail_path, 100)
-                .map_err(|e| format!("Failed to generate thumbnail: {}", e))?;
-        } else {
-            return Err(format!("Original image not found for thumbnail: {}", original_stem));
-        }
-    }
+        let image_bytes =
+            fs::read(&thumbnail_path).map_err(|e| format!("Failed to read thumbnail file: {}", e))?;
 
-    let image_bytes =
-        fs::read(&thumbnail_path).map_err(|e| format!("Failed to read thumbnail file: {}", e))?;
-
-    let base64_string = general_purpose::STANDARD.encode(&image_bytes);
-    Ok(base64_string)
+        Ok(general_purpose::STANDARD.encode(&image_bytes))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 /// Get a gallery-sized thumbnail for workflow step displays.
@@ -2206,54 +2383,215 @@ pub async fn get_gallery_thumbnail_as_base64(
     let thumbnails_dir = thumbnails_base.join(&safe_folder_name).join(&safe_subfolder);
     let thumbnail_path = thumbnails_dir.join(&filename).with_extension("jpg");
 
-    // Get the original image path
+    // Get the original image path (needs async config)
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-    let source_dir = if subfolder.is_empty() {
-        property_path
-    } else {
-        property_path.join(&subfolder)
-    };
-    let source_path = source_dir.join(&filename);
 
-    if !source_path.exists() {
-        return Err(format!("Source image not found: {}", source_path.display()));
-    }
+    // All filesystem + thumbnail generation runs on a blocking thread
+    tokio::task::spawn_blocking(move || {
+        let source_dir = if subfolder.is_empty() {
+            property_path
+        } else {
+            property_path.join(&subfolder)
+        };
+        let source_path = source_dir.join(&filename);
 
-    // Check if we need to regenerate the thumbnail:
-    // 1. Thumbnail doesn't exist, OR
-    // 2. Source image is newer than thumbnail (was modified)
-    let needs_regeneration = if !thumbnail_path.exists() {
-        true
-    } else {
-        // Compare modification times
-        let source_modified = fs::metadata(&source_path)
-            .and_then(|m| m.modified())
-            .ok();
-        let thumb_modified = fs::metadata(&thumbnail_path)
-            .and_then(|m| m.modified())
-            .ok();
-
-        match (source_modified, thumb_modified) {
-            (Some(src_time), Some(thumb_time)) => src_time > thumb_time,
-            _ => true, // If we can't get times, regenerate to be safe
+        if !source_path.exists() {
+            return Err(format!("Source image not found: {}", source_path.display()));
         }
+
+        // Check if we need to regenerate the thumbnail
+        let needs_regeneration = if !thumbnail_path.exists() {
+            true
+        } else {
+            let source_modified = fs::metadata(&source_path)
+                .and_then(|m| m.modified())
+                .ok();
+            let thumb_modified = fs::metadata(&thumbnail_path)
+                .and_then(|m| m.modified())
+                .ok();
+
+            match (source_modified, thumb_modified) {
+                (Some(src_time), Some(thumb_time)) => src_time > thumb_time,
+                _ => true,
+            }
+        };
+
+        if needs_regeneration {
+            fs::create_dir_all(&thumbnails_dir)
+                .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
+
+            generate_thumbnail(&source_path, &thumbnail_path, max_size)
+                .map_err(|e| format!("Failed to generate gallery thumbnail: {}", e))?;
+        }
+
+        let image_bytes = fs::read(&thumbnail_path)
+            .map_err(|e| format!("Failed to read gallery thumbnail file: {}", e))?;
+
+        Ok(general_purpose::STANDARD.encode(&image_bytes))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
+}
+
+/// Get the filesystem path to a gallery-sized thumbnail (generating it if needed).
+/// Returns the absolute path string instead of base64 data — the frontend uses
+/// `convertFileSrc(path)` to serve the file directly via Tauri's asset protocol,
+/// avoiding base64 encoding/decoding overhead entirely.
+#[tauri::command]
+pub async fn get_gallery_thumbnail_path(
+    app: tauri::AppHandle,
+    folder_path: String,
+    status: String,
+    subfolder: String,
+    filename: String,
+    max_dimension: Option<u32>,
+) -> Result<String, String> {
+    let max_size = max_dimension.unwrap_or(400);
+
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {e}"))?;
+
+    let thumbnails_base = app_data_dir.join("thumbnails").join(format!("gallery_{max_size}"));
+    let safe_folder_name = folder_path.replace('/', "_").replace('\\', "_");
+    let safe_subfolder = if subfolder.is_empty() {
+        "root".to_string()
+    } else {
+        subfolder.replace('/', "_").replace('\\', "_")
     };
+    let thumbnails_dir = thumbnails_base.join(&safe_folder_name).join(&safe_subfolder);
+    let thumbnail_path = thumbnails_dir.join(&filename).with_extension("jpg");
 
-    if needs_regeneration {
-        // Create thumbnails directory if it doesn't exist
-        fs::create_dir_all(&thumbnails_dir)
-            .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
+    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-        // Generate thumbnail
-        generate_thumbnail(&source_path, &thumbnail_path, max_size)
-            .map_err(|e| format!("Failed to generate gallery thumbnail: {}", e))?;
+    tokio::task::spawn_blocking(move || {
+        let source_dir = if subfolder.is_empty() {
+            property_path
+        } else {
+            property_path.join(&subfolder)
+        };
+        let source_path = source_dir.join(&filename);
+
+        if !source_path.exists() {
+            return Err(format!("Source image not found: {}", source_path.display()));
+        }
+
+        // Check if we need to regenerate the thumbnail
+        let needs_regeneration = if !thumbnail_path.exists() {
+            true
+        } else {
+            let source_modified = fs::metadata(&source_path)
+                .and_then(|m| m.modified())
+                .ok();
+            let thumb_modified = fs::metadata(&thumbnail_path)
+                .and_then(|m| m.modified())
+                .ok();
+
+            match (source_modified, thumb_modified) {
+                (Some(src_time), Some(thumb_time)) => src_time > thumb_time,
+                _ => true,
+            }
+        };
+
+        if needs_regeneration {
+            fs::create_dir_all(&thumbnails_dir)
+                .map_err(|e| format!("Failed to create thumbnails directory: {e}"))?;
+
+            generate_thumbnail(&source_path, &thumbnail_path, max_size)
+                .map_err(|e| format!("Failed to generate gallery thumbnail: {e}"))?;
+        }
+
+        // Return the absolute path — frontend will use convertFileSrc() to serve it
+        Ok(thumbnail_path.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
+}
+
+/// Batch-resolve thumbnail paths for the properties list.
+/// For each property, lists original images and returns up to `limit` thumbnail paths,
+/// generating thumbnails on-demand if they don't exist. Returns paths instead of base64
+/// so the frontend can use `convertFileSrc()` for zero-copy serving.
+#[tauri::command]
+pub async fn get_thumbnail_paths_batch(
+    app: tauri::AppHandle,
+    properties: Vec<ThumbnailBatchRequest>,
+) -> Result<Vec<ThumbnailBatchResult>, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {e}"))?;
+    let thumbnails_base = app_data_dir.join("thumbnails");
+
+    // Resolve all property base paths (needs async config access)
+    let mut resolved: Vec<(ThumbnailBatchRequest, PathBuf)> = Vec::with_capacity(properties.len());
+    for prop in properties {
+        match get_property_base_path(&app, &prop.folder_path, &prop.status).await {
+            Ok(base_path) => resolved.push((prop, base_path)),
+            Err(_) => {
+                // Skip properties whose base path can't be resolved
+            }
+        }
     }
 
-    let image_bytes = fs::read(&thumbnail_path)
-        .map_err(|e| format!("Failed to read gallery thumbnail file: {}", e))?;
+    tokio::task::spawn_blocking(move || {
+        let supported_exts = ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"];
 
-    let base64_string = general_purpose::STANDARD.encode(&image_bytes);
-    Ok(base64_string)
+        let results: Vec<ThumbnailBatchResult> = resolved
+            .into_iter()
+            .map(|(prop, property_path)| {
+                let limit = prop.limit.unwrap_or(6);
+                let safe_folder_name = prop.folder_path.replace('/', "_").replace('\\', "_");
+                let thumb_dir = thumbnails_base.join(&safe_folder_name);
+
+                // List original images
+                let mut originals: Vec<(String, PathBuf)> = Vec::new();
+                if let Ok(entries) = fs::read_dir(&property_path) {
+                    for entry in entries.filter_map(Result::ok) {
+                        let path = entry.path();
+                        if path.is_file() {
+                            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                                if supported_exts.contains(&ext.to_lowercase().as_str()) {
+                                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                                        originals.push((stem.to_string(), path.clone()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                originals.sort_by(|a, b| a.0.cmp(&b.0));
+                let total_count = originals.len();
+
+                // Generate/resolve up to `limit` thumbnail paths
+                let mut paths: Vec<String> = Vec::new();
+                for (stem, source_path) in originals.into_iter().take(limit) {
+                    let thumb_filename = format!("{stem}.jpg");
+                    let thumbnail_path = thumb_dir.join(&thumb_filename);
+
+                    if !thumbnail_path.exists() {
+                        let _ = fs::create_dir_all(&thumb_dir);
+                        if generate_thumbnail(&source_path, &thumbnail_path, 100).is_err() {
+                            continue;
+                        }
+                    }
+
+                    paths.push(thumbnail_path.to_string_lossy().to_string());
+                }
+
+                ThumbnailBatchResult {
+                    folder_path: prop.folder_path,
+                    total_count,
+                    paths,
+                }
+            })
+            .collect();
+
+        Ok(results)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 /// Pre-generate gallery thumbnails for all images in a subfolder.
@@ -2266,9 +2604,6 @@ pub async fn pregenerate_gallery_thumbnails(
     subfolder: String,
     max_dimension: Option<u32>,
 ) -> Result<CommandResult, String> {
-    use std::sync::Arc;
-    use std::thread;
-
     let max_size = max_dimension.unwrap_or(400);
 
     // Get app data directory for gallery thumbnails
@@ -2285,140 +2620,120 @@ pub async fn pregenerate_gallery_thumbnails(
         property_path.join(&subfolder)
     };
 
-    if !source_dir.exists() {
-        return Ok(CommandResult {
-            success: true,
-            error: None,
-            data: Some(serde_json::json!({"generated": 0, "cached": 0})),
-        });
-    }
+    // All filesystem + thumbnail generation runs on a blocking thread
+    tokio::task::spawn_blocking(move || {
+        if !source_dir.exists() {
+            return Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({"generated": 0, "cached": 0})),
+            });
+        }
 
-    // Get list of image files
-    let supported_extensions = ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"];
-    let mut filenames: Vec<String> = Vec::new();
+        // Get list of image files
+        let supported_extensions = ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"];
+        let mut filenames: Vec<String> = Vec::new();
 
-    if let Ok(entries) = fs::read_dir(&source_dir) {
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            if let Some(ext) = path.extension() {
-                if supported_extensions.contains(&ext.to_string_lossy().to_lowercase().as_str()) {
-                    if let Some(name) = path.file_name() {
-                        filenames.push(name.to_string_lossy().to_string());
+        if let Ok(entries) = fs::read_dir(&source_dir) {
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                if let Some(ext) = path.extension() {
+                    if supported_extensions.contains(&ext.to_string_lossy().to_lowercase().as_str()) {
+                        if let Some(name) = path.file_name() {
+                            filenames.push(name.to_string_lossy().to_string());
+                        }
                     }
                 }
             }
         }
-    }
 
-    if filenames.is_empty() {
-        return Ok(CommandResult {
-            success: true,
-            error: None,
-            data: Some(serde_json::json!({"generated": 0, "cached": 0})),
-        });
-    }
-
-    // Setup thumbnail directory
-    let thumbnails_base = app_data_dir.join("thumbnails").join(format!("gallery_{}", max_size));
-    let safe_folder_name = folder_path.replace('/', "_").replace('\\', "_");
-    let safe_subfolder = if subfolder.is_empty() {
-        "root".to_string()
-    } else {
-        subfolder.replace('/', "_").replace('\\', "_")
-    };
-    let thumbnails_dir = thumbnails_base.join(&safe_folder_name).join(&safe_subfolder);
-    fs::create_dir_all(&thumbnails_dir)
-        .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
-
-    // Filter to only files that need generation (new or modified)
-    let mut to_generate: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let mut cached_count = 0;
-
-    for filename in &filenames {
-        let thumbnail_path = thumbnails_dir.join(filename).with_extension("jpg");
-        let source_path = source_dir.join(filename);
-
-        if !source_path.exists() {
-            continue;
+        if filenames.is_empty() {
+            return Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({"generated": 0, "cached": 0})),
+            });
         }
 
-        // Check if thumbnail exists and is up-to-date
-        let needs_generation = if !thumbnail_path.exists() {
-            true
+        // Setup thumbnail directory
+        let thumbnails_base = app_data_dir.join("thumbnails").join(format!("gallery_{}", max_size));
+        let safe_folder_name = folder_path.replace('/', "_").replace('\\', "_");
+        let safe_subfolder = if subfolder.is_empty() {
+            "root".to_string()
         } else {
-            // Compare modification times
-            let source_modified = fs::metadata(&source_path)
-                .and_then(|m| m.modified())
-                .ok();
-            let thumb_modified = fs::metadata(&thumbnail_path)
-                .and_then(|m| m.modified())
-                .ok();
-
-            match (source_modified, thumb_modified) {
-                (Some(src_time), Some(thumb_time)) => src_time > thumb_time,
-                _ => true,
-            }
+            subfolder.replace('/', "_").replace('\\', "_")
         };
+        let thumbnails_dir = thumbnails_base.join(&safe_folder_name).join(&safe_subfolder);
+        fs::create_dir_all(&thumbnails_dir)
+            .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
 
-        if needs_generation {
-            to_generate.push((source_path, thumbnail_path));
-        } else {
-            cached_count += 1;
+        // Filter to only files that need generation (new or modified)
+        let mut to_generate: Vec<(PathBuf, PathBuf)> = Vec::new();
+        let mut cached_count = 0;
+
+        for filename in &filenames {
+            let thumbnail_path = thumbnails_dir.join(filename).with_extension("jpg");
+            let source_path = source_dir.join(filename);
+
+            if !source_path.exists() {
+                continue;
+            }
+
+            // Check if thumbnail exists and is up-to-date
+            let needs_generation = if !thumbnail_path.exists() {
+                true
+            } else {
+                // Compare modification times
+                let source_modified = fs::metadata(&source_path)
+                    .and_then(|m| m.modified())
+                    .ok();
+                let thumb_modified = fs::metadata(&thumbnail_path)
+                    .and_then(|m| m.modified())
+                    .ok();
+
+                match (source_modified, thumb_modified) {
+                    (Some(src_time), Some(thumb_time)) => src_time > thumb_time,
+                    _ => true,
+                }
+            };
+
+            if needs_generation {
+                to_generate.push((source_path, thumbnail_path));
+            } else {
+                cached_count += 1;
+            }
         }
-    }
 
-    if to_generate.is_empty() {
-        return Ok(CommandResult {
+        if to_generate.is_empty() {
+            return Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({"generated": 0, "cached": cached_count})),
+            });
+        }
+
+        // Generate thumbnails in parallel using rayon (already on blocking thread)
+        let generated_count = AtomicUsize::new(0);
+        to_generate.par_iter().for_each(|(source_path, thumbnail_path)| {
+            if generate_thumbnail(source_path, thumbnail_path, max_size).is_ok() {
+                generated_count.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+
+        let generated_count = generated_count.load(Ordering::Relaxed);
+
+        Ok(CommandResult {
             success: true,
             error: None,
-            data: Some(serde_json::json!({"generated": 0, "cached": cached_count})),
-        });
-    }
-
-    // Generate thumbnails in parallel using threads
-    let to_generate = Arc::new(to_generate);
-    let num_threads = std::cmp::min(8, to_generate.len()); // Max 8 threads
-    let chunk_size = (to_generate.len() + num_threads - 1) / num_threads;
-
-    let mut handles = Vec::new();
-
-    for i in 0..num_threads {
-        let to_generate = Arc::clone(&to_generate);
-        let start = i * chunk_size;
-        let end = std::cmp::min(start + chunk_size, to_generate.len());
-
-        if start >= end {
-            break;
-        }
-
-        let handle = thread::spawn(move || {
-            let mut generated = 0;
-            for j in start..end {
-                let (source_path, thumbnail_path) = &to_generate[j];
-                if generate_thumbnail(source_path, thumbnail_path, max_size).is_ok() {
-                    generated += 1;
-                }
-            }
-            generated
-        });
-        handles.push(handle);
-    }
-
-    // Wait for all threads and sum results
-    let generated_count: usize = handles
-        .into_iter()
-        .filter_map(|h| h.join().ok())
-        .sum();
-
-    Ok(CommandResult {
-        success: true,
-        error: None,
-        data: Some(serde_json::json!({
-            "generated": generated_count,
-            "cached": cached_count,
-            "total": filenames.len()
-        })),
+            data: Some(serde_json::json!({
+                "generated": generated_count,
+                "cached": cached_count,
+                "total": filenames.len()
+            })),
+        })
     })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -2429,55 +2744,59 @@ pub async fn clear_internet_folder(
 ) -> Result<CommandResult, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-    let internet_path = property_path.join("INTERNET");
+    tokio::task::spawn_blocking(move || {
+        let internet_path = property_path.join("INTERNET");
 
-    if !internet_path.exists() {
-        return Ok(CommandResult {
-            success: true,
-            error: None,
-            data: Some(serde_json::json!({"message": "INTERNET folder doesn't exist"})),
-        });
-    }
+        if !internet_path.exists() {
+            return Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({"message": "INTERNET folder doesn't exist"})),
+            });
+        }
 
-    let mut deleted_count = 0;
-    let mut errors = Vec::new();
+        let mut deleted_count = 0;
+        let mut errors = Vec::new();
 
-    for entry in fs::read_dir(&internet_path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
+        for entry in fs::read_dir(&internet_path).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
 
-        if path.is_file() {
-            match fs::remove_file(&path) {
-                Ok(_) => deleted_count += 1,
-                Err(e) => {
-                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                        errors.push(format!("Failed to delete {}: {}", filename, e));
+            if path.is_file() {
+                match fs::remove_file(&path) {
+                    Ok(_) => deleted_count += 1,
+                    Err(e) => {
+                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                            errors.push(format!("Failed to delete {}: {}", filename, e));
+                        }
                     }
                 }
             }
         }
-    }
 
-    if errors.is_empty() {
-        Ok(CommandResult {
-            success: true,
-            error: None,
-            data: Some(serde_json::json!({
-                "deleted_count": deleted_count,
-                "message": format!("Successfully deleted {} images from INTERNET folder", deleted_count)
-            })),
-        })
-    } else {
-        Ok(CommandResult {
-            success: false,
-            error: Some(format!(
-                "Deleted {} images but encountered errors: {}",
-                deleted_count,
-                errors.join(", ")
-            )),
-            data: None,
-        })
-    }
+        if errors.is_empty() {
+            Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({
+                    "deleted_count": deleted_count,
+                    "message": format!("Successfully deleted {} images from INTERNET folder", deleted_count)
+                })),
+            })
+        } else {
+            Ok(CommandResult {
+                success: false,
+                error: Some(format!(
+                    "Deleted {} images but encountered errors: {}",
+                    deleted_count,
+                    errors.join(", ")
+                )),
+                data: None,
+            })
+        }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -2488,7 +2807,7 @@ pub async fn open_image_in_editor(
     filename: String,
     is_from_internet: bool,
 ) -> Result<CommandResult, String> {
-    let config = crate::config::load_config(app.clone())
+    let config = crate::config::get_cached_config(&app)
         .await
         .map_err(|e| e.to_string())?;
     let config = match config {
@@ -2503,7 +2822,12 @@ pub async fn open_image_in_editor(
         property_path.join(&filename)
     };
 
-    if !image_path.exists() {
+    let img_path = image_path.clone();
+    let exists = tokio::task::spawn_blocking(move || img_path.exists())
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?;
+
+    if !exists {
         return Ok(CommandResult {
             success: false,
             error: Some(format!("Image file not found: {}", image_path.display())),
@@ -2573,84 +2897,87 @@ pub async fn rename_internet_images(
     rename_map: Vec<RenameMapping>,
 ) -> Result<CommandResult, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-    let internet_path = property_path.join("INTERNET");
 
-    if !internet_path.exists() {
-        return Ok(CommandResult {
-            success: false,
-            error: Some("INTERNET folder does not exist".to_string()),
-            data: None,
-        });
-    }
+    tokio::task::spawn_blocking(move || {
+        let internet_path = property_path.join("INTERNET");
 
-    let mut renamed_count = 0;
-    let mut errors = Vec::new();
-    let mut temp_renames = Vec::new();
+        if !internet_path.exists() {
+            return Ok(CommandResult {
+                success: false,
+                error: Some("INTERNET folder does not exist".to_string()),
+                data: None,
+            });
+        }
 
-    // First pass: Rename all files to temporary names to avoid conflicts
-    for (i, mapping) in rename_map.iter().enumerate() {
-        let old_path = internet_path.join(&mapping.old_name);
-        let temp_name = format!("temp_rename_{}.tmp", i);
-        let temp_path = internet_path.join(&temp_name);
+        let mut renamed_count = 0;
+        let mut errors = Vec::new();
+        let mut temp_renames = Vec::new();
 
-        if old_path.exists() {
-            match fs::rename(&old_path, &temp_path) {
-                Ok(_) => {
-                    temp_renames.push((temp_name, mapping.new_name.clone()));
+        // First pass: Rename all files to temporary names to avoid conflicts
+        for (i, mapping) in rename_map.iter().enumerate() {
+            let old_path = internet_path.join(&mapping.old_name);
+            let temp_name = format!("temp_rename_{}.tmp", i);
+            let temp_path = internet_path.join(&temp_name);
+
+            if old_path.exists() {
+                match fs::rename(&old_path, &temp_path) {
+                    Ok(_) => {
+                        temp_renames.push((temp_name, mapping.new_name.clone()));
+                    }
+                    Err(e) => {
+                        errors.push(format!(
+                            "Failed to rename {} to temp: {}",
+                            mapping.old_name, e
+                        ));
+                    }
                 }
+            } else {
+                errors.push(format!("File not found: {}", mapping.old_name));
+            }
+        }
+
+        // Second pass: Rename temporary files to final names
+        for (temp_name, final_name) in temp_renames {
+            let temp_path = internet_path.join(&temp_name);
+            let final_path = internet_path.join(&final_name);
+
+            match fs::rename(&temp_path, &final_path) {
+                Ok(_) => renamed_count += 1,
                 Err(e) => {
                     errors.push(format!(
-                        "Failed to rename {} to temp: {}",
-                        mapping.old_name, e
+                        "Failed to rename {} to {}: {}",
+                        temp_name, final_name, e
                     ));
                 }
             }
+        }
+
+        if errors.is_empty() {
+            Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({
+                    "renamed_count": renamed_count,
+                    "message": format!("Successfully renamed {} images", renamed_count)
+                })),
+            })
         } else {
-            errors.push(format!("File not found: {}", mapping.old_name));
+            Ok(CommandResult {
+                success: renamed_count > 0,
+                error: Some(format!(
+                    "Renamed {} images but encountered errors: {}",
+                    renamed_count,
+                    errors.join(", ")
+                )),
+                data: Some(serde_json::json!({
+                    "renamed_count": renamed_count,
+                    "errors": errors
+                })),
+            })
         }
-    }
-
-    // Second pass: Rename temporary files to final names
-    for (temp_name, final_name) in temp_renames {
-        let temp_path = internet_path.join(&temp_name);
-        let final_path = internet_path.join(&final_name);
-
-        match fs::rename(&temp_path, &final_path) {
-            Ok(_) => renamed_count += 1,
-            Err(e) => {
-                errors.push(format!(
-                    "Failed to rename {} to {}: {}",
-                    temp_name, final_name, e
-                ));
-                // Try to restore original name if possible
-                // This is a best-effort cleanup
-            }
-        }
-    }
-
-    if errors.is_empty() {
-        Ok(CommandResult {
-            success: true,
-            error: None,
-            data: Some(serde_json::json!({
-                "renamed_count": renamed_count,
-                "message": format!("Successfully renamed {} images", renamed_count)
-            })),
-        })
-    } else {
-        Ok(CommandResult {
-            success: renamed_count > 0,
-            error: Some(format!(
-                "Renamed {} images but encountered errors: {}",
-                renamed_count,
-                errors.join(", ")
-            )),
-            data: Some(serde_json::json!({
-                "renamed_count": renamed_count,
-                "errors": errors
-            })),
-        })
-    }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -2660,31 +2987,36 @@ pub async fn list_aggelia_images(
     status: String,
 ) -> Result<Vec<String>, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-    let aggelia_path = property_path.join("INTERNET").join("AGGELIA");
 
-    if !aggelia_path.exists() {
-        return Ok(Vec::new());
-    }
+    tokio::task::spawn_blocking(move || {
+        let aggelia_path = property_path.join("INTERNET").join("AGGELIA");
 
-    let mut images = Vec::new();
-    for entry in fs::read_dir(aggelia_path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
+        if !aggelia_path.exists() {
+            return Ok(Vec::new());
+        }
 
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                let ext_lc = ext.to_lowercase();
-                if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
-                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                        images.push(filename.to_string());
+        let mut images = Vec::new();
+        for entry in fs::read_dir(aggelia_path).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                    let ext_lc = ext.to_lowercase();
+                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
+                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                            images.push(filename.to_string());
+                        }
                     }
                 }
             }
         }
-    }
 
-    images.sort();
-    Ok(images)
+        images.sort();
+        Ok(images)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -2695,20 +3027,24 @@ pub async fn get_aggelia_image_as_base64(
     filename: String,
 ) -> Result<String, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-    let full_path = property_path
-        .join("INTERNET")
-        .join("AGGELIA")
-        .join(&filename);
 
-    if !full_path.exists() {
-        return Err(format!("Image file not found: {}", full_path.display()));
-    }
+    tokio::task::spawn_blocking(move || {
+        let full_path = property_path
+            .join("INTERNET")
+            .join("AGGELIA")
+            .join(&filename);
 
-    let image_bytes =
-        fs::read(&full_path).map_err(|e| format!("Failed to read image file: {}", e))?;
+        if !full_path.exists() {
+            return Err(format!("Image file not found: {}", full_path.display()));
+        }
 
-    let base64_string = general_purpose::STANDARD.encode(&image_bytes);
-    Ok(base64_string)
+        let image_bytes =
+            fs::read(&full_path).map_err(|e| format!("Failed to read image file: {}", e))?;
+
+        Ok(general_purpose::STANDARD.encode(&image_bytes))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -2719,59 +3055,80 @@ pub async fn copy_images_to_aggelia(
     filenames: Vec<String>,
 ) -> Result<CommandResult, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-    let internet_path = property_path.join("INTERNET");
-    let aggelia_path = internet_path.join("AGGELIA");
 
-    // Ensure AGGELIA folder exists
-    fs::create_dir_all(&aggelia_path)
-        .map_err(|e| format!("Failed to create AGGELIA folder: {}", e))?;
+    // All filesystem operations run on a blocking thread
+    tokio::task::spawn_blocking(move || {
+        let internet_path = property_path.join("INTERNET");
+        let aggelia_path = internet_path.join("AGGELIA");
 
-    let mut copied_count = 0;
-    let mut errors = Vec::new();
+        // Ensure AGGELIA folder exists
+        fs::create_dir_all(&aggelia_path)
+            .map_err(|e| format!("Failed to create AGGELIA folder: {}", e))?;
 
-    for filename in filenames {
-        let source_path = internet_path.join(&filename);
-        let dest_path = aggelia_path.join(&filename);
+        // Build list of (source, dest) pairs, then copy in parallel
+        let file_pairs: Vec<(PathBuf, PathBuf, String)> = filenames
+            .into_iter()
+            .map(|filename| {
+                let source_path = internet_path.join(&filename);
+                let dest_path = aggelia_path.join(&filename);
+                (source_path, dest_path, filename)
+            })
+            .collect();
 
-        if source_path.exists() {
-            // Only copy if the file doesn't already exist in AGGELIA
-            if !dest_path.exists() {
-                match fs::copy(&source_path, &dest_path) {
-                    Ok(_) => copied_count += 1,
-                    Err(e) => errors.push(format!("Failed to copy {}: {}", filename, e)),
+        let copied_count = AtomicUsize::new(0);
+        let errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+        file_pairs.par_iter().for_each(|(source_path, dest_path, filename)| {
+            if source_path.exists() {
+                if !dest_path.exists() {
+                    match fs::copy(source_path, dest_path) {
+                        Ok(_) => {
+                            copied_count.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(e) => {
+                            if let Ok(mut errs) = errors.lock() {
+                                errs.push(format!("Failed to copy {}: {}", filename, e));
+                            }
+                        }
+                    }
+                } else {
+                    // File already exists, count as "copied"
+                    copied_count.fetch_add(1, Ordering::Relaxed);
                 }
-            } else {
-                // File already exists, count as "copied"
-                copied_count += 1;
+            } else if let Ok(mut errs) = errors.lock() {
+                errs.push(format!("Source file not found: {}", filename));
             }
-        } else {
-            errors.push(format!("Source file not found: {}", filename));
-        }
-    }
+        });
 
-    if errors.is_empty() {
-        Ok(CommandResult {
-            success: true,
-            error: None,
-            data: Some(serde_json::json!({
-                "copied_count": copied_count,
-                "message": format!("Successfully copied {} images to AGGELIA folder", copied_count)
-            })),
-        })
-    } else {
-        Ok(CommandResult {
-            success: copied_count > 0,
-            error: Some(format!(
-                "Copied {} images but encountered errors: {}",
-                copied_count,
-                errors.join(", ")
-            )),
-            data: Some(serde_json::json!({
-                "copied_count": copied_count,
-                "errors": errors
-            })),
-        })
-    }
+        let copied_count = copied_count.load(Ordering::Relaxed);
+        let errors = errors.into_inner().unwrap_or_default();
+
+        if errors.is_empty() {
+            Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({
+                    "copied_count": copied_count,
+                    "message": format!("Successfully copied {} images to AGGELIA folder", copied_count)
+                })),
+            })
+        } else {
+            Ok(CommandResult {
+                success: copied_count > 0,
+                error: Some(format!(
+                    "Copied {} images but encountered errors: {}",
+                    copied_count,
+                    errors.join(", ")
+                )),
+                data: Some(serde_json::json!({
+                    "copied_count": copied_count,
+                    "errors": errors
+                })),
+            })
+        }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -2781,58 +3138,63 @@ pub async fn clear_aggelia_folder(
     status: String,
 ) -> Result<CommandResult, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-    let aggelia_path = property_path.join("INTERNET").join("AGGELIA");
 
-    if !aggelia_path.exists() {
-        return Ok(CommandResult {
-            success: true,
-            error: None,
-            data: Some(serde_json::json!({"message": "AGGELIA folder doesn't exist"})),
-        });
-    }
+    tokio::task::spawn_blocking(move || {
+        let aggelia_path = property_path.join("INTERNET").join("AGGELIA");
 
-    let mut deleted_count = 0;
-    let mut errors = Vec::new();
+        if !aggelia_path.exists() {
+            return Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({"message": "AGGELIA folder doesn't exist"})),
+            });
+        }
 
-    for entry in fs::read_dir(&aggelia_path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
+        let mut deleted_count = 0;
+        let mut errors = Vec::new();
 
-        if path.is_file() {
-            match fs::remove_file(&path) {
-                Ok(_) => deleted_count += 1,
-                Err(e) => {
-                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                        errors.push(format!("Failed to delete {}: {}", filename, e));
+        for entry in fs::read_dir(&aggelia_path).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+
+            if path.is_file() {
+                match fs::remove_file(&path) {
+                    Ok(_) => deleted_count += 1,
+                    Err(e) => {
+                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                            errors.push(format!("Failed to delete {}: {}", filename, e));
+                        }
                     }
                 }
             }
         }
-    }
 
-    if errors.is_empty() {
-        Ok(CommandResult {
-            success: true,
-            error: None,
-            data: Some(serde_json::json!({
-                "deleted_count": deleted_count,
-                "message": format!("Successfully deleted {} images from AGGELIA folder", deleted_count)
-            })),
-        })
-    } else {
-        Ok(CommandResult {
-            success: deleted_count > 0,
-            error: Some(format!(
-                "Deleted {} images but encountered errors: {}",
-                deleted_count,
-                errors.join(", ")
-            )),
-            data: Some(serde_json::json!({
-                "deleted_count": deleted_count,
-                "errors": errors
-            })),
-        })
-    }
+        if errors.is_empty() {
+            Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({
+                    "deleted_count": deleted_count,
+                    "message": format!("Successfully deleted {} images from AGGELIA folder", deleted_count)
+                })),
+            })
+        } else {
+            Ok(CommandResult {
+                success: deleted_count > 0,
+                error: Some(format!(
+                    "Deleted {} images but encountered errors: {}",
+                    deleted_count,
+                    errors.join(", ")
+                )),
+                data: Some(serde_json::json!({
+                    "deleted_count": deleted_count,
+                    "errors": errors
+                })),
+            })
+        }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -2843,7 +3205,7 @@ pub async fn open_image_in_advanced_editor(
     filename: String,
     from_aggelia: bool,
 ) -> Result<CommandResult, String> {
-    let config = crate::config::load_config(app.clone())
+    let config = crate::config::get_cached_config(&app)
         .await
         .map_err(|e| e.to_string())?;
     let config = match config {
@@ -2863,7 +3225,12 @@ pub async fn open_image_in_advanced_editor(
             .join(&filename)
     };
 
-    if !image_path.exists() {
+    let img_path = image_path.clone();
+    let exists = tokio::task::spawn_blocking(move || img_path.exists())
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?;
+
+    if !exists {
         return Ok(CommandResult {
             success: false,
             error: Some(format!("Image file not found: {}", image_path.display())),
@@ -2925,7 +3292,7 @@ pub async fn copy_and_watermark_images(
     folder_path: String,
     status: String,
 ) -> Result<CommandResult, String> {
-    let config = crate::config::load_config(app.clone())
+    let config = crate::config::get_cached_config(&app)
         .await
         .map_err(|e| e.to_string())?;
     let config = match config {
@@ -2951,49 +3318,64 @@ pub async fn copy_and_watermark_images(
     };
 
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-    let internet_path = property_path.join("INTERNET");
-    let aggelia_path = internet_path.join("AGGELIA");
-    let watermark_path = property_path.join("WATERMARK");
-    let watermark_aggelia_path = watermark_path.join("AGGELIA");
 
-    // Ensure WATERMARK folders exist
-    fs::create_dir_all(&watermark_path)
-        .map_err(|e| format!("Failed to create WATERMARK folder: {}", e))?;
-    fs::create_dir_all(&watermark_aggelia_path)
-        .map_err(|e| format!("Failed to create WATERMARK/AGGELIA folder: {}", e))?;
+    // Get GPU processor for accelerated watermark blending
+    let processor = app.state::<Arc<ImageProcessor>>();
+    let processor_ref = processor.inner().clone();
+    let wm_config = config.watermark_config.clone();
 
-    // Load watermark image once
-    let watermark_img = image::open(&watermark_img_path)
-        .map_err(|e| format!("Failed to load watermark image: {}", e))?;
+    // All filesystem + image processing runs on a blocking thread
+    let (processed_count, errors) = tokio::task::spawn_blocking(move || {
+        let internet_path = property_path.join("INTERNET");
+        let aggelia_path = internet_path.join("AGGELIA");
+        let watermark_path = property_path.join("WATERMARK");
+        let watermark_aggelia_path = watermark_path.join("AGGELIA");
 
-    let mut processed_count = 0;
-    let mut errors = Vec::new();
+        // Ensure WATERMARK folders exist
+        fs::create_dir_all(&watermark_path)
+            .map_err(|e| format!("Failed to create WATERMARK folder: {}", e))?;
+        fs::create_dir_all(&watermark_aggelia_path)
+            .map_err(|e| format!("Failed to create WATERMARK/AGGELIA folder: {}", e))?;
 
-    // Process INTERNET folder -> WATERMARK folder
-    if internet_path.exists() {
-        match copy_and_process_folder_with_config(
-            &internet_path,
-            &watermark_path,
-            &watermark_img,
-            &config.watermark_config,
-        ) {
-            Ok(count) => processed_count += count,
-            Err(e) => errors.push(format!("INTERNET folder: {}", e)),
+        // Load watermark image once (turbojpeg for JPEG, image crate for others)
+        let watermark_img = crate::turbo::load_image(&watermark_img_path)
+            .map_err(|e| format!("Failed to load watermark image: {}", e))?;
+
+        let mut processed_count = 0usize;
+        let mut errors = Vec::new();
+
+        // Process INTERNET folder -> WATERMARK folder
+        if internet_path.exists() {
+            match copy_and_process_folder_with_config(
+                &internet_path,
+                &watermark_path,
+                &watermark_img,
+                &wm_config,
+                &processor_ref,
+            ) {
+                Ok(count) => processed_count += count,
+                Err(e) => errors.push(format!("INTERNET folder: {}", e)),
+            }
         }
-    }
 
-    // Process INTERNET/AGGELIA folder -> WATERMARK/AGGELIA folder
-    if aggelia_path.exists() {
-        match copy_and_process_folder_with_config(
-            &aggelia_path,
-            &watermark_aggelia_path,
-            &watermark_img,
-            &config.watermark_config,
-        ) {
-            Ok(count) => processed_count += count,
-            Err(e) => errors.push(format!("AGGELIA folder: {}", e)),
+        // Process INTERNET/AGGELIA folder -> WATERMARK/AGGELIA folder
+        if aggelia_path.exists() {
+            match copy_and_process_folder_with_config(
+                &aggelia_path,
+                &watermark_aggelia_path,
+                &watermark_img,
+                &wm_config,
+                &processor_ref,
+            ) {
+                Ok(count) => processed_count += count,
+                Err(e) => errors.push(format!("AGGELIA folder: {}", e)),
+            }
         }
-    }
+
+        Ok::<_, String>((processed_count, errors))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))??;
 
     if errors.is_empty() {
         Ok(CommandResult {
@@ -3025,7 +3407,10 @@ fn copy_and_process_folder_with_config(
     dest_path: &PathBuf,
     watermark_img: &DynamicImage,
     config: &crate::config::WatermarkConfig,
+    processor: &Arc<ImageProcessor>,
 ) -> Result<usize, String> {
+    use std::collections::HashMap;
+
     // Collect all image files first
     let image_files: Vec<(PathBuf, PathBuf)> = fs::read_dir(source_path)
         .map_err(|e| e.to_string())?
@@ -3049,9 +3434,23 @@ fn copy_and_process_folder_with_config(
     let processed_count = AtomicUsize::new(0);
     let errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
+    // Cache resized watermarks by target (base image) dimensions.
+    // Real estate photos from the same camera are all the same size, so this
+    // eliminates N-1 redundant watermark resizes (typically 19/20+ are cache hits).
+    let wm_cache: std::sync::Mutex<HashMap<(u32, u32), RgbaImage>> =
+        std::sync::Mutex::new(HashMap::new());
+
     // Process images in parallel using rayon
+    let processor = processor.clone();
     image_files.par_iter().for_each(|(source, dest)| {
-        match apply_watermark_to_image_with_config(source, dest, watermark_img, config) {
+        match apply_watermark_to_image_with_cached_wm(
+            source,
+            dest,
+            watermark_img,
+            config,
+            &processor,
+            &wm_cache,
+        ) {
             Ok(_) => {
                 processed_count.fetch_add(1, Ordering::Relaxed);
             }
@@ -3075,21 +3474,53 @@ fn copy_and_process_folder_with_config(
     Ok(processed_count.load(Ordering::Relaxed))
 }
 
-fn apply_watermark_to_image_with_config(
+/// Apply watermark with a shared cache for the resized watermark.
+/// The cache avoids redundant SIMD resize operations when all images have the same dimensions.
+fn apply_watermark_to_image_with_cached_wm(
     source_path: &PathBuf,
     dest_path: &PathBuf,
     watermark_img: &DynamicImage,
     config: &crate::config::WatermarkConfig,
+    processor: &Arc<ImageProcessor>,
+    wm_cache: &std::sync::Mutex<std::collections::HashMap<(u32, u32), RgbaImage>>,
 ) -> Result<(), String> {
-    // Load source image
-    let mut base_img = image::open(source_path)
+    // Load source image using turbojpeg
+    let mut base_img = crate::turbo::load_image(source_path)
         .map_err(|e| format!("Failed to open source image: {}", e))?
         .to_rgba8();
 
-    // Apply watermark using config
-    apply_watermark_with_config(&mut base_img, watermark_img, config)?;
+    let base_dims = base_img.dimensions();
 
-    // Save watermarked image - convert to RGB for JPEG (doesn't support alpha)
+    // Check cache for pre-resized watermark matching this base image size
+    let cached_wm = {
+        let guard = wm_cache.lock().map_err(|e| format!("Lock error: {e}"))?;
+        guard.get(&base_dims).cloned()
+    };
+
+    if let Some(resized_wm) = cached_wm {
+        // Cache hit — apply directly without resize
+        if config.size_mode == "tile" {
+            apply_tiled_watermark(&mut base_img, &resized_wm, config, processor)?;
+        } else {
+            apply_single_watermark(&mut base_img, &resized_wm, config, processor)?;
+        }
+    } else {
+        // Cache miss — resize, cache, and apply
+        apply_watermark_with_config(&mut base_img, watermark_img, config, processor)?;
+
+        // Cache the resized watermark for future images with same dimensions
+        // We need to compute the resized version again for caching (it's computed inside
+        // apply_watermark_with_config). For simplicity, compute the target size and cache.
+        let (wm_width, wm_height) = watermark_img.dimensions();
+        let (new_wm_width, new_wm_height) =
+            compute_watermark_size(base_dims, (wm_width, wm_height), config);
+        let resized_wm = crate::fast_resize::resize_exact(watermark_img, new_wm_width, new_wm_height)
+            .to_rgba8();
+        let mut guard = wm_cache.lock().map_err(|e| format!("Lock error: {e}"))?;
+        guard.entry(base_dims).or_insert(resized_wm);
+    }
+
+    // Save watermarked image
     let ext = dest_path
         .extension()
         .and_then(|e| e.to_str())
@@ -3097,11 +3528,44 @@ fn apply_watermark_to_image_with_config(
         .unwrap_or_default();
 
     if ext == "jpg" || ext == "jpeg" {
-        // Convert RGBA to RGB for JPEG format
+        // Use turbojpeg for fast JPEG encoding
         let rgb_img: image::RgbImage = image::DynamicImage::ImageRgba8(base_img).to_rgb8();
-        rgb_img
+        crate::turbo::save_jpeg(&rgb_img, dest_path, 92)?;
+    } else {
+        base_img
             .save(dest_path)
             .map_err(|e| format!("Failed to save watermarked image: {}", e))?;
+    }
+
+    Ok(())
+}
+
+fn apply_watermark_to_image_with_config(
+    source_path: &PathBuf,
+    dest_path: &PathBuf,
+    watermark_img: &DynamicImage,
+    config: &crate::config::WatermarkConfig,
+    processor: &Arc<ImageProcessor>,
+) -> Result<(), String> {
+    // Load source image using turbojpeg
+    let mut base_img = crate::turbo::load_image(source_path)
+        .map_err(|e| format!("Failed to open source image: {}", e))?
+        .to_rgba8();
+
+    // Apply watermark using config (GPU-accelerated)
+    apply_watermark_with_config(&mut base_img, watermark_img, config, processor)?;
+
+    // Save watermarked image
+    let ext = dest_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    if ext == "jpg" || ext == "jpeg" {
+        // Use turbojpeg for fast JPEG encoding
+        let rgb_img: image::RgbImage = image::DynamicImage::ImageRgba8(base_img).to_rgb8();
+        crate::turbo::save_jpeg(&rgb_img, dest_path, 92)?;
     } else {
         base_img
             .save(dest_path)
@@ -3117,7 +3581,7 @@ pub async fn generate_watermark_preview(
     sample_image_base64: Option<String>,
 ) -> Result<String, String> {
     // Load watermark config
-    let config = crate::config::load_config(app.clone())
+    let config = crate::config::get_cached_config(&app)
         .await
         .map_err(|e| e.to_string())?;
     let config = match config {
@@ -3134,51 +3598,62 @@ pub async fn generate_watermark_preview(
         None => return Err("No watermark image configured".into()),
     };
 
-    let watermark_img =
-        image::open(&watermark_path).map_err(|e| format!("Failed to load watermark: {}", e))?;
+    let processor = app.state::<Arc<ImageProcessor>>();
+    let processor_ref = processor.inner().clone();
+    let wm_config = config.watermark_config.clone();
 
-    // Create or use sample image
-    let mut base_img = if let Some(base64_data) = sample_image_base64 {
-        // Decode base64 and load as image
-        let image_data = general_purpose::STANDARD
-            .decode(base64_data)
-            .map_err(|e| format!("Failed to decode base64: {}", e))?;
-        image::load_from_memory(&image_data)
-            .map_err(|e| format!("Failed to load image from memory: {}", e))?
-            .to_rgba8()
-    } else {
-        // Create a sample gray image (800x600)
-        let mut img = RgbaImage::new(800, 600);
-        for pixel in img.pixels_mut() {
-            *pixel = image::Rgba([200, 200, 200, 255]);
-        }
-        img
-    };
+    // All image I/O + processing runs on a blocking thread
+    let base64_result = tokio::task::spawn_blocking(move || {
+        let watermark_img = crate::turbo::load_image(&watermark_path)
+            .map_err(|e| format!("Failed to load watermark: {}", e))?;
 
-    // Apply watermark using current config
-    apply_watermark_with_config(&mut base_img, &watermark_img, &config.watermark_config)?;
+        // Create or use sample image
+        let mut base_img = if let Some(base64_data) = sample_image_base64 {
+            // Decode base64 and load as image
+            let image_data = general_purpose::STANDARD
+                .decode(base64_data)
+                .map_err(|e| format!("Failed to decode base64: {}", e))?;
+            image::load_from_memory(&image_data)
+                .map_err(|e| format!("Failed to load image from memory: {}", e))?
+                .to_rgba8()
+        } else {
+            // Create a sample gray image (800x600)
+            let mut img = RgbaImage::new(800, 600);
+            for pixel in img.pixels_mut() {
+                *pixel = image::Rgba([200, 200, 200, 255]);
+            }
+            img
+        };
 
-    // Encode result as base64
-    let mut buffer = Vec::new();
-    let mut cursor = std::io::Cursor::new(&mut buffer);
-    base_img
-        .write_to(&mut cursor, ImageFormat::Png)
-        .map_err(|e| format!("Failed to encode image: {}", e))?;
+        // Apply watermark using current config (GPU-accelerated)
+        apply_watermark_with_config(&mut base_img, &watermark_img, &wm_config, &processor_ref)?;
 
-    let base64_result = general_purpose::STANDARD.encode(&buffer);
+        // Encode result as base64
+        let mut buffer = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut buffer);
+        base_img
+            .write_to(&mut cursor, ImageFormat::Png)
+            .map_err(|e| format!("Failed to encode image: {}", e))?;
+
+        Ok::<_, String>(general_purpose::STANDARD.encode(&buffer))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))??;
+
     Ok(base64_result)
 }
 
-fn apply_watermark_with_config(
-    base_img: &mut RgbaImage,
-    watermark_img: &DynamicImage,
+/// Compute watermark target dimensions based on config and base image size.
+/// Extracted so it can be used for both the apply function and the cache key.
+fn compute_watermark_size(
+    base_dims: (u32, u32),
+    wm_dims: (u32, u32),
     config: &crate::config::WatermarkConfig,
-) -> Result<(), String> {
-    let (base_width, base_height) = base_img.dimensions();
-    let (wm_width, wm_height) = watermark_img.dimensions();
+) -> (u32, u32) {
+    let (base_width, base_height) = base_dims;
+    let (wm_width, wm_height) = wm_dims;
 
-    // Calculate watermark size based on size_mode
-    let (new_wm_width, new_wm_height) = match config.size_mode.as_str() {
+    match config.size_mode.as_str() {
         "proportional" => {
             let reference_size = match config.relative_to.as_str() {
                 "longest-side" => base_width.max(base_height),
@@ -3199,7 +3674,6 @@ fn apply_watermark_with_config(
             )
         }
         "fit" => {
-            // Fit within image bounds while maintaining aspect ratio
             let scale_x = base_width as f32 / wm_width as f32;
             let scale_y = base_height as f32 / wm_height as f32;
             let scale = scale_x.min(scale_y).min(1.0);
@@ -3210,7 +3684,7 @@ fn apply_watermark_with_config(
             )
         }
         "stretch" => (base_width, base_height),
-        "tile" => (wm_width, wm_height), // Keep original size for tiling
+        "tile" => (wm_width, wm_height),
         _ => {
             let max_size = (base_width.max(base_height) as f32 * config.size_percentage) as u32;
             let scale = max_size as f32 / wm_width.max(wm_height) as f32;
@@ -3219,22 +3693,29 @@ fn apply_watermark_with_config(
                 (wm_height as f32 * scale) as u32,
             )
         }
-    };
+    }
+}
 
-    // Resize watermark (CatmullRom is faster than Lanczos3 with good quality)
-    let resized_watermark = watermark_img
-        .resize_exact(
-            new_wm_width,
-            new_wm_height,
-            image::imageops::FilterType::CatmullRom,
-        )
-        .to_rgba8();
+fn apply_watermark_with_config(
+    base_img: &mut RgbaImage,
+    watermark_img: &DynamicImage,
+    config: &crate::config::WatermarkConfig,
+    processor: &Arc<ImageProcessor>,
+) -> Result<(), String> {
+    let base_dims = base_img.dimensions();
+    let wm_dims = watermark_img.dimensions();
 
-    // Apply watermark based on mode
+    let (new_wm_width, new_wm_height) = compute_watermark_size(base_dims, wm_dims, config);
+
+    // Resize watermark using SIMD-accelerated fast_image_resize
+    let resized_watermark =
+        crate::fast_resize::resize_exact(watermark_img, new_wm_width, new_wm_height).to_rgba8();
+
+    // Apply watermark based on mode (GPU-accelerated)
     if config.size_mode == "tile" {
-        apply_tiled_watermark(base_img, &resized_watermark, config)?;
+        apply_tiled_watermark(base_img, &resized_watermark, config, processor)?;
     } else {
-        apply_single_watermark(base_img, &resized_watermark, config)?;
+        apply_single_watermark(base_img, &resized_watermark, config, processor)?;
     }
 
     Ok(())
@@ -3244,6 +3725,7 @@ fn apply_single_watermark(
     base_img: &mut RgbaImage,
     watermark: &RgbaImage,
     config: &crate::config::WatermarkConfig,
+    processor: &Arc<ImageProcessor>,
 ) -> Result<(), String> {
     let (base_width, base_height) = base_img.dimensions();
     let (wm_width, wm_height) = watermark.dimensions();
@@ -3266,8 +3748,8 @@ fn apply_single_watermark(
     let pos_x = (base_x as i32 + config.offset_x).max(0).min(base_width as i32 - wm_width as i32) as u32;
     let pos_y = (base_y as i32 + config.offset_y).max(0).min(base_height as i32 - wm_height as i32) as u32;
 
-    // Apply watermark with opacity
-    blend_watermark(base_img, watermark, pos_x, pos_y, config.opacity, config.use_alpha_channel);
+    // Apply watermark with opacity (GPU-accelerated)
+    processor.blend_watermark(base_img, watermark, pos_x, pos_y, config.opacity, config.use_alpha_channel);
 
     Ok(())
 }
@@ -3276,6 +3758,7 @@ fn apply_tiled_watermark(
     base_img: &mut RgbaImage,
     watermark: &RgbaImage,
     config: &crate::config::WatermarkConfig,
+    processor: &Arc<ImageProcessor>,
 ) -> Result<(), String> {
     let (base_width, base_height) = base_img.dimensions();
     let (wm_width, wm_height) = watermark.dimensions();
@@ -3284,7 +3767,7 @@ fn apply_tiled_watermark(
     while y < base_height {
         let mut x = 0;
         while x < base_width {
-            blend_watermark(base_img, watermark, x, y, config.opacity, config.use_alpha_channel);
+            processor.blend_watermark(base_img, watermark, x, y, config.opacity, config.use_alpha_channel);
             x += wm_width + config.offset_x.unsigned_abs();
         }
         y += wm_height + config.offset_y.unsigned_abs();
@@ -3293,6 +3776,7 @@ fn apply_tiled_watermark(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn blend_watermark(
     base_img: &mut RgbaImage,
     watermark: &RgbaImage,
@@ -3331,6 +3815,7 @@ fn blend_watermark(
     }
 }
 
+#[allow(dead_code)]
 fn apply_watermark_to_image(
     source_path: &PathBuf,
     dest_path: &PathBuf,
@@ -3338,7 +3823,7 @@ fn apply_watermark_to_image(
     opacity: f32,
 ) -> Result<(), String> {
     // Load source image
-    let mut base_img = image::open(source_path)
+    let mut base_img = crate::turbo::load_image(source_path)
         .map_err(|e| format!("Failed to open source image: {}", e))?
         .to_rgba8();
 
@@ -3356,14 +3841,9 @@ fn apply_watermark_to_image(
     let new_wm_width = (wm_width as f32 * scale) as u32;
     let new_wm_height = (wm_height as f32 * scale) as u32;
 
-    // Resize watermark (CatmullRom is faster than Lanczos3 with good quality)
-    let resized_watermark = watermark_img
-        .resize_exact(
-            new_wm_width,
-            new_wm_height,
-            image::imageops::FilterType::CatmullRom,
-        )
-        .to_rgba8();
+    // Resize watermark using SIMD-accelerated fast_image_resize
+    let resized_watermark =
+        crate::fast_resize::resize_exact(&watermark_img, new_wm_width, new_wm_height).to_rgba8();
 
     // Calculate center position
     let pos_x = (base_width - new_wm_width) / 2;
@@ -3423,31 +3903,35 @@ pub async fn list_watermark_images(
 ) -> Result<Vec<String>, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-    let watermark_path = property_path.join("WATERMARK");
+    tokio::task::spawn_blocking(move || {
+        let watermark_path = property_path.join("WATERMARK");
 
-    if !watermark_path.exists() {
-        return Ok(Vec::new());
-    }
+        if !watermark_path.exists() {
+            return Ok(Vec::new());
+        }
 
-    let mut images = Vec::new();
-    for entry in fs::read_dir(watermark_path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
+        let mut images = Vec::new();
+        for entry in fs::read_dir(watermark_path).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
 
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                let ext_lc = ext.to_lowercase();
-                if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
-                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                        images.push(filename.to_string());
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                    let ext_lc = ext.to_lowercase();
+                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
+                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                            images.push(filename.to_string());
+                        }
                     }
                 }
             }
         }
-    }
 
-    images.sort();
-    Ok(images)
+        images.sort();
+        Ok(images)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -3458,33 +3942,37 @@ pub async fn list_watermark_aggelia_images(
 ) -> Result<Vec<String>, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-    let watermark_aggelia_path = property_path
-        .join("WATERMARK")
-        .join("AGGELIA");
+    tokio::task::spawn_blocking(move || {
+        let watermark_aggelia_path = property_path
+            .join("WATERMARK")
+            .join("AGGELIA");
 
-    if !watermark_aggelia_path.exists() {
-        return Ok(Vec::new());
-    }
+        if !watermark_aggelia_path.exists() {
+            return Ok(Vec::new());
+        }
 
-    let mut images = Vec::new();
-    for entry in fs::read_dir(watermark_aggelia_path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
+        let mut images = Vec::new();
+        for entry in fs::read_dir(watermark_aggelia_path).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
 
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                let ext_lc = ext.to_lowercase();
-                if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
-                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                        images.push(filename.to_string());
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                    let ext_lc = ext.to_lowercase();
+                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
+                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                            images.push(filename.to_string());
+                        }
                     }
                 }
             }
         }
-    }
 
-    images.sort();
-    Ok(images)
+        images.sort();
+        Ok(images)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -3497,26 +3985,29 @@ pub async fn get_watermark_image_as_base64(
 ) -> Result<String, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-    let full_path = if from_aggelia {
-        property_path
-            .join("WATERMARK")
-            .join("AGGELIA")
-            .join(&filename)
-    } else {
-        property_path
-            .join("WATERMARK")
-            .join(&filename)
-    };
+    tokio::task::spawn_blocking(move || {
+        let full_path = if from_aggelia {
+            property_path
+                .join("WATERMARK")
+                .join("AGGELIA")
+                .join(&filename)
+        } else {
+            property_path
+                .join("WATERMARK")
+                .join(&filename)
+        };
 
-    if !full_path.exists() {
-        return Err(format!("Image file not found: {}", full_path.display()));
-    }
+        if !full_path.exists() {
+            return Err(format!("Image file not found: {}", full_path.display()));
+        }
 
-    let image_bytes =
-        fs::read(&full_path).map_err(|e| format!("Failed to read image file: {}", e))?;
+        let image_bytes =
+            fs::read(&full_path).map_err(|e| format!("Failed to read image file: {}", e))?;
 
-    let base64_string = general_purpose::STANDARD.encode(&image_bytes);
-    Ok(base64_string)
+        Ok(general_purpose::STANDARD.encode(&image_bytes))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -3527,47 +4018,49 @@ pub async fn clear_watermark_folders(
 ) -> Result<CommandResult, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-    let watermark_path = property_path.join("WATERMARK");
-    let mut deleted_count = 0;
-    let mut errors = Vec::new();
+    tokio::task::spawn_blocking(move || {
+        let watermark_path = property_path.join("WATERMARK");
+        let mut deleted_count = 0;
+        let mut errors = Vec::new();
 
-    if watermark_path.exists() {
-        // Clear main WATERMARK folder
-        match clear_folder_images(&watermark_path) {
-            Ok(count) => deleted_count += count,
-            Err(e) => errors.push(format!("WATERMARK folder: {}", e)),
-        }
-
-        // Clear WATERMARK/AGGELIA folder
-        let aggelia_path = watermark_path.join("AGGELIA");
-        if aggelia_path.exists() {
-            match clear_folder_images(&aggelia_path) {
+        if watermark_path.exists() {
+            match clear_folder_images(&watermark_path) {
                 Ok(count) => deleted_count += count,
-                Err(e) => errors.push(format!("WATERMARK/AGGELIA folder: {}", e)),
+                Err(e) => errors.push(format!("WATERMARK folder: {}", e)),
+            }
+
+            let aggelia_path = watermark_path.join("AGGELIA");
+            if aggelia_path.exists() {
+                match clear_folder_images(&aggelia_path) {
+                    Ok(count) => deleted_count += count,
+                    Err(e) => errors.push(format!("WATERMARK/AGGELIA folder: {}", e)),
+                }
             }
         }
-    }
 
-    if errors.is_empty() {
-        Ok(CommandResult {
-            success: true,
-            error: None,
-            data: Some(serde_json::json!({
-                "deleted_count": deleted_count,
-                "message": format!("Successfully deleted {} images from WATERMARK folders", deleted_count)
-            })),
-        })
-    } else {
-        Ok(CommandResult {
-            success: deleted_count > 0,
-            error: Some(format!(
-                "Deleted {} images but encountered errors: {}",
-                deleted_count,
-                errors.join(", ")
-            )),
-            data: None,
-        })
-    }
+        if errors.is_empty() {
+            Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({
+                    "deleted_count": deleted_count,
+                    "message": format!("Successfully deleted {} images from WATERMARK folders", deleted_count)
+                })),
+            })
+        } else {
+            Ok(CommandResult {
+                success: deleted_count > 0,
+                error: Some(format!(
+                    "Deleted {} images but encountered errors: {}",
+                    deleted_count,
+                    errors.join(", ")
+                )),
+                data: None,
+            })
+        }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 fn clear_folder_images(folder_path: &PathBuf) -> Result<usize, String> {
@@ -3601,21 +4094,24 @@ pub async fn open_property_folder(
 
     println!("Attempting to open: {}", full_path.display());
 
-    // Use opener crate which handles cross-platform file opening
-    match opener::open(&full_path) {
-        Ok(_) => Ok(CommandResult {
-            success: true,
-            error: None,
-            data: Some(serde_json::json!({
-                "opened_path": full_path.to_string_lossy()
-            })),
-        }),
-        Err(e) => Ok(CommandResult {
-            success: false,
-            error: Some(format!("Failed to open folder: {}", e)),
-            data: None,
-        }),
-    }
+    tokio::task::spawn_blocking(move || {
+        match opener::open(&full_path) {
+            Ok(_) => Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({
+                    "opened_path": full_path.to_string_lossy()
+                })),
+            }),
+            Err(e) => Ok(CommandResult {
+                success: false,
+                error: Some(format!("Failed to open folder: {}", e)),
+                data: None,
+            }),
+        }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -3644,157 +4140,161 @@ pub async fn fill_aggelia_to_25(
     status: String,
 ) -> Result<CommandResult, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-    let internet_aggelia_path = property_path.join("INTERNET").join("AGGELIA");
-    let watermark_aggelia_path = property_path.join("WATERMARK").join("AGGELIA");
 
-    // Ensure folders exist
-    if !internet_aggelia_path.exists() {
-        return Ok(CommandResult {
-            success: false,
-            error: Some("INTERNET/AGGELIA folder does not exist".to_string()),
-            data: None,
-        });
-    }
+    // All filesystem + image processing runs on a blocking thread
+    tokio::task::spawn_blocking(move || {
+        let internet_aggelia_path = property_path.join("INTERNET").join("AGGELIA");
+        let watermark_aggelia_path = property_path.join("WATERMARK").join("AGGELIA");
 
-    // Get existing images from INTERNET/AGGELIA
-    let mut existing_images: Vec<String> = Vec::new();
-    for entry in fs::read_dir(&internet_aggelia_path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                let ext_lc = ext.to_lowercase();
-                if ["jpg", "jpeg", "png", "bmp", "gif", "webp"].contains(&ext_lc.as_str()) {
-                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                        existing_images.push(filename.to_string());
-                    }
-                }
-            }
+        // Ensure folders exist
+        if !internet_aggelia_path.exists() {
+            return Ok(CommandResult {
+                success: false,
+                error: Some("INTERNET/AGGELIA folder does not exist".to_string()),
+                data: None,
+            });
         }
-    }
 
-    existing_images.sort();
+        // Get existing images from INTERNET/AGGELIA
+        let mut existing_images: Vec<String> = Vec::new();
+        for entry in fs::read_dir(&internet_aggelia_path).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
 
-    let current_count = existing_images.len();
-
-    // Check if already at 25+
-    if current_count >= 25 {
-        return Ok(CommandResult {
-            success: true,
-            error: None,
-            data: Some(serde_json::json!({
-                "message": "Property already has 25 or more images",
-                "current_count": current_count,
-                "added_count": 0
-            })),
-        });
-    }
-
-    if current_count == 0 {
-        return Ok(CommandResult {
-            success: false,
-            error: Some("No images in AGGELIA folder to duplicate".to_string()),
-            data: None,
-        });
-    }
-
-    // Ensure WATERMARK/AGGELIA exists
-    fs::create_dir_all(&watermark_aggelia_path)
-        .map_err(|e| format!("Failed to create WATERMARK/AGGELIA folder: {}", e))?;
-
-    // Find the highest existing number for naming
-    let mut max_number: u32 = 0;
-    for img in &existing_images {
-        if let Some(num_str) = img.split('.').next() {
-            if let Ok(num) = num_str.parse::<u32>() {
-                if num > max_number {
-                    max_number = num;
-                }
-            }
-        }
-    }
-
-    let images_to_add = 25 - current_count;
-
-    // Process images in parallel using rayon
-    use rayon::prelude::*;
-
-    let results: Vec<Result<String, String>> = (0..images_to_add)
-        .into_par_iter()
-        .map(|i| {
-            // Cycle through existing images
-            let source_filename = &existing_images[i % current_count];
-            let source_path = internet_aggelia_path.join(source_filename);
-
-            // Get the extension from source
-            let ext = source_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("jpg")
-                .to_lowercase();
-
-            // New filename with next sequential number
-            let new_number = max_number + (i as u32) + 1;
-            let new_filename = format!("{:02}.{}", new_number, ext);
-
-            let dest_internet_path = internet_aggelia_path.join(&new_filename);
-            let dest_watermark_path = watermark_aggelia_path.join(&new_filename);
-
-            // Process for INTERNET/AGGELIA
-            match crop_and_save_image(&source_path, &dest_internet_path) {
-                Ok(()) => {
-                    // Also create cropped version for WATERMARK/AGGELIA if source exists there
-                    let watermark_source = watermark_aggelia_path.join(source_filename);
-                    if watermark_source.exists() {
-                        if let Err(e) = crop_and_save_image(&watermark_source, &dest_watermark_path) {
-                            return Err(format!("Failed to create watermark copy for {}: {}", new_filename, e));
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                    let ext_lc = ext.to_lowercase();
+                    if ["jpg", "jpeg", "png", "bmp", "gif", "webp"].contains(&ext_lc.as_str()) {
+                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                            existing_images.push(filename.to_string());
                         }
                     }
-                    Ok(new_filename)
                 }
-                Err(e) => Err(format!("Failed to create {}: {}", new_filename, e)),
             }
-        })
-        .collect();
-
-    // Aggregate results
-    let mut added_count = 0;
-    let mut errors: Vec<String> = Vec::new();
-    for result in results {
-        match result {
-            Ok(_) => added_count += 1,
-            Err(e) => errors.push(e),
         }
-    }
 
-    if errors.is_empty() {
-        Ok(CommandResult {
-            success: true,
-            error: None,
-            data: Some(serde_json::json!({
-                "message": format!("Added {} images to reach 25", added_count),
-                "added_count": added_count,
-                "total_count": current_count + added_count
-            })),
-        })
-    } else {
-        Ok(CommandResult {
-            success: added_count > 0,
-            error: Some(format!("Added {} images with some errors: {}", added_count, errors.join(", "))),
-            data: Some(serde_json::json!({
-                "added_count": added_count,
-                "errors": errors
-            })),
-        })
-    }
+        existing_images.sort();
+
+        let current_count = existing_images.len();
+
+        // Check if already at 25+
+        if current_count >= 25 {
+            return Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({
+                    "message": "Property already has 25 or more images",
+                    "current_count": current_count,
+                    "added_count": 0
+                })),
+            });
+        }
+
+        if current_count == 0 {
+            return Ok(CommandResult {
+                success: false,
+                error: Some("No images in AGGELIA folder to duplicate".to_string()),
+                data: None,
+            });
+        }
+
+        // Ensure WATERMARK/AGGELIA exists
+        fs::create_dir_all(&watermark_aggelia_path)
+            .map_err(|e| format!("Failed to create WATERMARK/AGGELIA folder: {}", e))?;
+
+        // Find the highest existing number for naming
+        let mut max_number: u32 = 0;
+        for img in &existing_images {
+            if let Some(num_str) = img.split('.').next() {
+                if let Ok(num) = num_str.parse::<u32>() {
+                    if num > max_number {
+                        max_number = num;
+                    }
+                }
+            }
+        }
+
+        let images_to_add = 25 - current_count;
+
+        // Process images in parallel using rayon
+        let results: Vec<Result<String, String>> = (0..images_to_add)
+            .into_par_iter()
+            .map(|i| {
+                // Cycle through existing images
+                let source_filename = &existing_images[i % current_count];
+                let source_path = internet_aggelia_path.join(source_filename);
+
+                // Get the extension from source
+                let ext = source_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("jpg")
+                    .to_lowercase();
+
+                // New filename with next sequential number
+                let new_number = max_number + (i as u32) + 1;
+                let new_filename = format!("{:02}.{}", new_number, ext);
+
+                let dest_internet_path = internet_aggelia_path.join(&new_filename);
+                let dest_watermark_path = watermark_aggelia_path.join(&new_filename);
+
+                // Process for INTERNET/AGGELIA
+                match crop_and_save_image(&source_path, &dest_internet_path) {
+                    Ok(()) => {
+                        // Also create cropped version for WATERMARK/AGGELIA if source exists there
+                        let watermark_source = watermark_aggelia_path.join(source_filename);
+                        if watermark_source.exists() {
+                            if let Err(e) = crop_and_save_image(&watermark_source, &dest_watermark_path) {
+                                return Err(format!("Failed to create watermark copy for {}: {}", new_filename, e));
+                            }
+                        }
+                        Ok(new_filename)
+                    }
+                    Err(e) => Err(format!("Failed to create {}: {}", new_filename, e)),
+                }
+            })
+            .collect();
+
+        // Aggregate results
+        let mut added_count = 0;
+        let mut errors: Vec<String> = Vec::new();
+        for result in results {
+            match result {
+                Ok(_) => added_count += 1,
+                Err(e) => errors.push(e),
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({
+                    "message": format!("Added {} images to reach 25", added_count),
+                    "added_count": added_count,
+                    "total_count": current_count + added_count
+                })),
+            })
+        } else {
+            Ok(CommandResult {
+                success: added_count > 0,
+                error: Some(format!("Added {} images with some errors: {}", added_count, errors.join(", "))),
+                data: Some(serde_json::json!({
+                    "added_count": added_count,
+                    "errors": errors
+                })),
+            })
+        }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 /// Crop an image by 1% on each edge and save to destination
 fn crop_and_save_image(source_path: &PathBuf, dest_path: &PathBuf) -> Result<(), String> {
     use image::GenericImageView;
 
-    let img = image::open(source_path)
+    let img = crate::turbo::load_image(source_path)
         .map_err(|e| format!("Failed to open image: {}", e))?;
 
     let (width, height) = img.dimensions();
@@ -3826,11 +4326,8 @@ fn crop_and_save_image(source_path: &PathBuf, dest_path: &PathBuf) -> Result<(),
         .unwrap_or_default();
 
     if ext == "jpg" || ext == "jpeg" {
-        // Convert to RGB for JPEG (no alpha channel)
-        let rgb_img = cropped.to_rgb8();
-        rgb_img
-            .save(dest_path)
-            .map_err(|e| format!("Failed to save cropped image: {}", e))?;
+        // Use turbojpeg for fast JPEG encoding
+        crate::turbo::save_jpeg(&cropped.to_rgb8(), dest_path, 92)?;
     } else {
         cropped
             .save(dest_path)
@@ -3898,7 +4395,7 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
     let pool = get_database_pool(&app)?;
 
     // Load config
-    let config = crate::config::load_config(app.clone())
+    let config = crate::config::get_cached_config(&app)
         .await
         .map_err(|e| e.to_string())?
         .ok_or("App configuration not found")?;
@@ -3909,10 +4406,16 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
     }
 
     let sets_folder = PathBuf::from(&config.sets_folder_path);
-    if !sets_folder.exists() {
-        std::fs::create_dir_all(&sets_folder)
-            .map_err(|e| format!("Failed to create sets folder: {}", e))?;
-    }
+    let sets_folder_clone = sets_folder.clone();
+    tokio::task::spawn_blocking(move || {
+        if !sets_folder_clone.exists() {
+            std::fs::create_dir_all(&sets_folder_clone)
+                .map_err(|e| format!("Failed to create sets folder: {}", e))?;
+        }
+        Ok::<_, String>(())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))??;
 
     // Get all DONE properties
     let done_properties: Vec<Property> = sqlx::query_as::<_, (
@@ -3958,46 +4461,52 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
         return Err("No DONE properties with codes found to create a set.".to_string());
     }
 
-    // Create ZIP file
+    // Create ZIP file (heavy I/O — runs on blocking thread)
     let now = chrono::Local::now();
     let set_name = format!("Done - {}", now.format("%Y-%m-%d %H-%M-%S"));
     let zip_filename = format!("{}.zip", set_name);
     let zip_path = sets_folder.join(&zip_filename);
 
-    let file = std::fs::File::create(&zip_path)
-        .map_err(|e| format!("Failed to create ZIP file: {}", e))?;
-
-    let mut zip = zip::ZipWriter::new(file);
-    // Use Stored (no compression) instead of Deflated for speed
-    // Photos are already compressed (JPEG/PNG), so deflate provides minimal benefit
-    // but takes much longer. Stored mode is ~10x faster with minimal size increase.
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
-
-    // Add each property to the ZIP
     let done_base_path = get_base_path_for_status(&config, "DONE")?;
-    for property in &with_code {
-        // Use folder_path which contains the actual folder name (including code suffix)
-        let property_path = done_base_path.join(folder_path_to_pathbuf(&property.folder_path));
+    {
+        let zip_path = zip_path.clone();
+        let done_base_path = done_base_path.clone();
+        let with_code_ref: Vec<_> = with_code.iter().map(|p| (p.folder_path.clone(), p.city.clone())).collect();
+        tokio::task::spawn_blocking(move || {
+            let file = std::fs::File::create(&zip_path)
+                .map_err(|e| format!("Failed to create ZIP file: {}", e))?;
 
-        if property_path.exists() {
-            // The ZIP will have structure: City/PropertyName/...
-            // We need to create the City folder in the ZIP
-            let city_folder = format!("{}/", property.city);
-            let _ = zip.add_directory(&city_folder, options); // Ignore if already exists
+            let mut zip = zip::ZipWriter::new(file);
+            // Use Stored (no compression) instead of Deflated for speed
+            // Photos are already compressed (JPEG/PNG), so deflate provides minimal benefit
+            // but takes much longer. Stored mode is ~10x faster with minimal size increase.
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
 
-            // Add the property folder with its contents
-            add_directory_to_zip(
-                &mut zip,
-                &property_path,
-                &done_base_path,
-                options,
-            )?;
-        }
+            // Add each property to the ZIP
+            for (folder_path, city) in &with_code_ref {
+                let property_path = done_base_path.join(folder_path_to_pathbuf(folder_path));
+
+                if property_path.exists() {
+                    let city_folder = format!("{}/", city);
+                    let _ = zip.add_directory(&city_folder, options);
+
+                    add_directory_to_zip(
+                        &mut zip,
+                        &property_path,
+                        &done_base_path,
+                        options,
+                    )?;
+                }
+            }
+
+            zip.finish()
+                .map_err(|e| format!("Failed to finish ZIP file: {}", e))?;
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|e| format!("Task join error: {e}"))??;
     }
-
-    zip.finish()
-        .map_err(|e| format!("Failed to finish ZIP file: {}", e))?;
 
     // Insert set record into database
     let now_timestamp = chrono::Utc::now().timestamp_millis();
@@ -4031,12 +4540,11 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
         .map_err(|e| format!("Failed to insert set_property record: {}", e))?;
     }
 
-    // Move properties with code to ARCHIVE
+    // Update DB statuses for properties with code -> ARCHIVE
     let archive_base_path = get_base_path_for_status(&config, "ARCHIVE")?;
     let properties_archived = with_code.len();
     for property in &with_code {
         if let Some(property_id) = property.id {
-            // Update status in database
             let now_ts = chrono::Utc::now().timestamp_millis();
             sqlx::query("UPDATE properties SET status = 'ARCHIVE', updated_at = ? WHERE id = ?")
                 .bind(now_ts)
@@ -4044,29 +4552,14 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
                 .execute(pool)
                 .await
                 .map_err(|e| format!("Failed to update property status: {}", e))?;
-
-            // Move folder - use folder_path which has the actual folder name
-            let folder_path_buf = folder_path_to_pathbuf(&property.folder_path);
-            let old_path = done_base_path.join(&folder_path_buf);
-            let new_path = archive_base_path.join(&folder_path_buf);
-
-            if old_path.exists() && old_path != new_path {
-                if let Some(parent) = new_path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| format!("Failed to create parent directory: {}", e))?;
-                }
-                std::fs::rename(&old_path, &new_path)
-                    .map_err(|e| format!("Failed to move folder to archive: {}", e))?;
-            }
         }
     }
 
-    // Move properties without code to NOT_FOUND
+    // Update DB statuses for properties without code -> NOT_FOUND
     let not_found_base_path = get_base_path_for_status(&config, "NOT_FOUND")?;
     let properties_moved_to_not_found = without_code.len();
     for property in &without_code {
         if let Some(property_id) = property.id {
-            // Update status in database
             let now_ts = chrono::Utc::now().timestamp_millis();
             sqlx::query("UPDATE properties SET status = 'NOT_FOUND', updated_at = ? WHERE id = ?")
                 .bind(now_ts)
@@ -4074,21 +4567,54 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
                 .execute(pool)
                 .await
                 .map_err(|e| format!("Failed to update property status: {}", e))?;
-
-            // Move folder - use folder_path which has the actual folder name
-            let folder_path_buf = folder_path_to_pathbuf(&property.folder_path);
-            let old_path = done_base_path.join(&folder_path_buf);
-            let new_path = not_found_base_path.join(&folder_path_buf);
-
-            if old_path.exists() && old_path != new_path {
-                if let Some(parent) = new_path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| format!("Failed to create parent directory: {}", e))?;
-                }
-                std::fs::rename(&old_path, &new_path)
-                    .map_err(|e| format!("Failed to move folder to not found: {}", e))?;
-            }
         }
+    }
+
+    // Move folders on disk (blocking I/O on dedicated thread)
+    {
+        let with_code_paths: Vec<_> = with_code.iter().map(|p| p.folder_path.clone()).collect();
+        let without_code_paths: Vec<_> = without_code.iter().map(|p| p.folder_path.clone()).collect();
+        let done_base = done_base_path.clone();
+        let archive_base = archive_base_path.clone();
+        let not_found_base = not_found_base_path.clone();
+
+        tokio::task::spawn_blocking(move || {
+            // Move properties with code to ARCHIVE
+            for fp in &with_code_paths {
+                let folder_path_buf = folder_path_to_pathbuf(fp);
+                let old_path = done_base.join(&folder_path_buf);
+                let new_path = archive_base.join(&folder_path_buf);
+
+                if old_path.exists() && old_path != new_path {
+                    if let Some(parent) = new_path.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("Failed to create parent directory: {}", e))?;
+                    }
+                    std::fs::rename(&old_path, &new_path)
+                        .map_err(|e| format!("Failed to move folder to archive: {}", e))?;
+                }
+            }
+
+            // Move properties without code to NOT_FOUND
+            for fp in &without_code_paths {
+                let folder_path_buf = folder_path_to_pathbuf(fp);
+                let old_path = done_base.join(&folder_path_buf);
+                let new_path = not_found_base.join(&folder_path_buf);
+
+                if old_path.exists() && old_path != new_path {
+                    if let Some(parent) = new_path.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("Failed to create parent directory: {}", e))?;
+                    }
+                    std::fs::rename(&old_path, &new_path)
+                        .map_err(|e| format!("Failed to move folder to not found: {}", e))?;
+                }
+            }
+
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|e| format!("Task join error: {e}"))??;
     }
 
     Ok(CompleteSetResult {
@@ -4166,7 +4692,7 @@ pub async fn get_set_properties(
 /// Open the sets folder in file explorer
 #[tauri::command]
 pub async fn open_sets_folder(app: tauri::AppHandle) -> Result<CommandResult, String> {
-    let config = crate::config::load_config(app.clone())
+    let config = crate::config::get_cached_config(&app)
         .await
         .map_err(|e| e.to_string())?
         .ok_or("App configuration not found")?;
@@ -4181,28 +4707,32 @@ pub async fn open_sets_folder(app: tauri::AppHandle) -> Result<CommandResult, St
 
     let sets_folder = PathBuf::from(&config.sets_folder_path);
 
-    if !sets_folder.exists() {
-        return Ok(CommandResult {
-            success: false,
-            error: Some("Sets folder does not exist".to_string()),
-            data: None,
-        });
-    }
+    tokio::task::spawn_blocking(move || {
+        if !sets_folder.exists() {
+            return Ok(CommandResult {
+                success: false,
+                error: Some("Sets folder does not exist".to_string()),
+                data: None,
+            });
+        }
 
-    match opener::open(&sets_folder) {
-        Ok(()) => Ok(CommandResult {
-            success: true,
-            error: None,
-            data: Some(serde_json::json!({
-                "opened_path": sets_folder.to_string_lossy()
-            })),
-        }),
-        Err(e) => Ok(CommandResult {
-            success: false,
-            error: Some(format!("Failed to open folder: {}", e)),
-            data: None,
-        }),
-    }
+        match opener::open(&sets_folder) {
+            Ok(()) => Ok(CommandResult {
+                success: true,
+                error: None,
+                data: Some(serde_json::json!({
+                    "opened_path": sets_folder.to_string_lossy()
+                })),
+            }),
+            Err(e) => Ok(CommandResult {
+                success: false,
+                error: Some(format!("Failed to open folder: {}", e)),
+                data: None,
+            }),
+        }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 /// Delete a set record and optionally the ZIP file
@@ -4233,11 +4763,17 @@ pub async fn delete_set(
 
     // Delete the ZIP file if requested
     if delete_zip {
-        let zip_file = PathBuf::from(&zip_path);
-        if zip_file.exists() {
-            std::fs::remove_file(&zip_file)
-                .map_err(|e| format!("Failed to delete ZIP file: {}", e))?;
-        }
+        let zip_path_clone = zip_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let zip_file = PathBuf::from(&zip_path_clone);
+            if zip_file.exists() {
+                std::fs::remove_file(&zip_file)
+                    .map_err(|e| format!("Failed to delete ZIP file: {}", e))?;
+            }
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|e| format!("Task join error: {e}"))??;
     }
 
     // Delete set_properties records (CASCADE should handle this, but be explicit)

@@ -189,3 +189,15 @@ export interface EnhanceApplyResult {
   success: boolean;
   error?: string;
 }
+
+export interface ThumbnailBatchRequest {
+  folderPath: string;
+  status: string;
+  limit?: number;
+}
+
+export interface ThumbnailBatchResult {
+  folderPath: string;
+  totalCount: number;
+  paths: string[];
+}

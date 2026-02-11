@@ -1,21 +1,28 @@
 //! Line segment detection and RANSAC-based angle estimation for image straightening.
 //!
-//! Uses OpenCV's Line Segment Detector (LSD) to find line segments,
+//! Uses GPU gradient histogram (replacing OpenCV LSD) to find dominant line angles,
 //! then applies RANSAC to find the dominant vertical angle.
 
+use crate::gpu::ImageProcessor;
 use crate::perspective::{
-    PerspectiveAnalysis, VanishingPoint, VanishingPointType,
-    CONFIDENCE_THRESHOLD, MAX_ANGLE_STDDEV_DEG, MAX_ROTATION_DEG,
-    MIN_INLIER_COUNT, MIN_LINE_LENGTH_RATIO, MIN_ROTATION_THRESHOLD_DEG,
-    RANSAC_INLIER_THRESHOLD_DEG, RANSAC_ITERATIONS, VERTICAL_TOLERANCE_DEG,
+    PerspectiveAnalysis, VanishingPoint, VanishingPointType, CONFIDENCE_THRESHOLD,
+    MAX_ANGLE_STDDEV_DEG, MAX_ROTATION_DEG, MIN_INLIER_COUNT, MIN_LINE_LENGTH_RATIO,
+    MIN_ROTATION_THRESHOLD_DEG, RANSAC_INLIER_THRESHOLD_DEG, RANSAC_ITERATIONS,
+    VERTICAL_TOLERANCE_DEG,
 };
 use image::{DynamicImage, GenericImageView};
-use opencv::core::{Mat, Scalar, CV_8UC1};
-use opencv::imgproc;
-use opencv::prelude::{LineSegmentDetectorTrait, MatTraitConst, MatTrait};
 use rand::Rng;
 
-/// A detected line segment
+/// Gradient magnitude threshold for histogram voting
+const GRADIENT_MAGNITUDE_THRESHOLD: f32 = 30.0;
+
+/// Minimum peak prominence as fraction of max peak
+const PEAK_PROMINENCE_RATIO: f64 = 0.05;
+
+/// Peak detection window half-width in bins (0.1 degree per bin)
+const PEAK_WINDOW_HALF: usize = 20; // +/- 2 degrees
+
+/// A detected line segment (synthesized from gradient histogram peaks)
 #[derive(Debug, Clone)]
 struct LineSegment {
     /// Start X coordinate
@@ -39,16 +46,7 @@ impl LineSegment {
         let dy = y2 - y1;
         let length = (dx * dx + dy * dy).sqrt();
 
-        // Calculate angle from vertical (0 = vertical line)
-        // IMPORTANT: Normalize direction so we always measure from lower-y to higher-y point
-        // This ensures consistent angle sign regardless of which endpoint LSD reports first
-        let (norm_dx, norm_dy) = if dy >= 0.0 {
-            (dx, dy)
-        } else {
-            (-dx, -dy)
-        };
-        // atan2(dx, dy) gives angle from vertical axis
-        // Positive = tilts right, Negative = tilts left
+        let (norm_dx, norm_dy) = if dy >= 0.0 { (dx, dy) } else { (-dx, -dy) };
         let angle_from_vertical = norm_dx.atan2(norm_dy);
 
         Self {
@@ -62,102 +60,201 @@ impl LineSegment {
     }
 }
 
-/// Detect line segments using OpenCV's LSD
-fn detect_line_segments_lsd(gray: &image::GrayImage) -> Result<Vec<LineSegment>, String> {
+/// Detect vertical line segments using GPU gradient histogram.
+///
+/// Replaces the old OpenCV LSD approach. Computes the gradient histogram
+/// on the grayscale image, finds peaks near 0/180 degrees (which correspond
+/// to vertical edges), and synthesizes virtual line segments.
+fn detect_vertical_lines_from_histogram(
+    gray: &image::GrayImage,
+    processor: &ImageProcessor,
+) -> Result<Vec<LineSegment>, String> {
     let (width, height) = gray.dimensions();
 
-    // Convert image::GrayImage to OpenCV Mat
-    let mat = gray_image_to_mat(gray)?;
+    // Compute gradient histogram
+    let histogram =
+        processor.gradient_histogram(gray.as_raw(), width, height, GRADIENT_MAGNITUDE_THRESHOLD)?;
 
-    // Create LSD detector with default parameters for best detection
-    let mut lsd = imgproc::create_line_segment_detector_def()
-        .map_err(|e| format!("Failed to create LSD detector: {e}"))?;
+    // Find peaks
+    let peaks = find_histogram_peaks(&histogram);
 
-    // Detect lines - need all 5 arguments, but we only use lines
-    let mut lines = Mat::default();
-    let mut width_out = Mat::default();
-    let mut prec_out = Mat::default();
-    let mut nfa_out = Mat::default();
-    lsd.detect(&mat, &mut lines, &mut width_out, &mut prec_out, &mut nfa_out)
-        .map_err(|e| format!("LSD detection failed: {e}"))?;
+    if peaks.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    println!("LSD raw output: rows={}, cols={}, type={}", lines.rows(), lines.cols(), lines.typ());
-
-    // Convert to LineSegment structs
-    // LSD output is a Mat of shape (N, 1) with type CV_32FC4 (each element is [x1,y1,x2,y2])
+    // Only keep peaks that correspond to vertical edges
+    // (gradient near 0 or 180 degrees = horizontal gradient = vertical edge)
+    let vertical_tolerance_rad = VERTICAL_TOLERANCE_DEG.to_radians();
     let min_length = f64::from(height) * MIN_LINE_LENGTH_RATIO;
-    let mut segments = Vec::new();
 
-    // Only consider lines in the central 50% of the image width
-    // This avoids edge distortion and furniture at sides
+    // Central 50% of image width
     let center_margin = f64::from(width) * 0.25;
     let left_bound = center_margin;
     let right_bound = f64::from(width) - center_margin;
 
-    let num_lines = lines.rows();
-    println!("Processing {} detected lines (center zone: {:.0}-{:.0}px)", num_lines, left_bound, right_bound);
+    let mut segments = Vec::new();
 
-    for i in 0..num_lines {
-        // Each row contains a Vec4f (x1, y1, x2, y2)
-        let line: &opencv::core::Vec4f = lines.at(i)
-            .map_err(|e| format!("Failed to get line {}: {e}", i))?;
-
-        let x1 = f64::from(line[0]);
-        let y1 = f64::from(line[1]);
-        let x2 = f64::from(line[2]);
-        let y2 = f64::from(line[3]);
-
-        // Check if line is in center zone (both endpoints or midpoint)
-        let mid_x = (x1 + x2) / 2.0;
-        let in_center = mid_x >= left_bound && mid_x <= right_bound;
-
-        if !in_center {
+    for peak in &peaks {
+        // Only consider vertical-edge peaks
+        if !peak.is_vertical_edge {
             continue;
         }
 
-        let segment = LineSegment::new(x1, y1, x2, y2);
+        // Check if the deviation is within vertical tolerance
+        if peak.deviation_from_vertical_rad.abs() > vertical_tolerance_rad {
+            continue;
+        }
 
-        // Filter by minimum length
-        if segment.length >= min_length {
-            segments.push(segment);
+        // Synthesize multiple lines across the image
+        let relative_weight = peak.weight / peaks.iter().map(|p| p.weight).fold(0.0_f64, f64::max);
+        let num_lines = (relative_weight * 10.0).round().max(3.0) as usize;
+
+        for i in 0..num_lines {
+            let frac = (i as f64 + 0.5) / num_lines as f64;
+            let x = left_bound + (right_bound - left_bound) * frac;
+            let line_len = f64::from(height) * 0.6;
+            let y_center = f64::from(height) * 0.5;
+
+            let tilt = peak.deviation_from_vertical_rad;
+            let dx = (line_len / 2.0) * tilt.sin();
+            let dy = (line_len / 2.0) * tilt.cos();
+
+            let seg = LineSegment::new(x - dx, y_center - dy, x + dx, y_center + dy);
+            if seg.length >= min_length {
+                segments.push(seg);
+            }
         }
     }
 
-    println!("LSD detected {} lines, {} after length+center filtering (min_length: {:.1}px)",
-        num_lines, segments.len(), min_length);
+    eprintln!(
+        "[detection] gradient histogram found {} vertical-edge peaks -> {} virtual lines",
+        peaks.iter().filter(|p| p.is_vertical_edge).count(),
+        segments.len()
+    );
 
     Ok(segments)
 }
 
-/// Convert image::GrayImage to OpenCV Mat
-fn gray_image_to_mat(gray: &image::GrayImage) -> Result<Mat, String> {
-    let (width, height) = gray.dimensions();
+/// A detected peak in the gradient histogram
+#[derive(Debug, Clone)]
+struct HistogramPeak {
+    /// Center angle in degrees
+    angle_deg: f64,
+    /// Weight/magnitude
+    weight: f64,
+    /// Whether this peak corresponds to a vertical edge
+    is_vertical_edge: bool,
+    /// Deviation from exact vertical (in radians, signed)
+    deviation_from_vertical_rad: f64,
+}
 
-    // Create empty Mat with correct dimensions
-    let mut mat = Mat::new_rows_cols_with_default(
-        height as i32,
-        width as i32,
-        CV_8UC1,
-        Scalar::all(0.0),
-    ).map_err(|e| format!("Failed to create Mat: {e}"))?;
+/// Find peaks in the 3600-bin gradient histogram
+fn find_histogram_peaks(histogram: &[f32]) -> Vec<HistogramPeak> {
+    let num_bins = histogram.len();
+    if num_bins == 0 {
+        return Vec::new();
+    }
 
-    // Copy pixel data row by row (more efficient than pixel-by-pixel)
-    let raw_data = gray.as_raw();
-    for y in 0..height as i32 {
-        let row_start = (y as usize) * (width as usize);
-        let row_end = row_start + (width as usize);
-        let row_data = &raw_data[row_start..row_end];
+    let max_val = histogram.iter().copied().fold(0.0_f32, f32::max);
+    if max_val < 1.0 {
+        return Vec::new();
+    }
 
-        for (x, &pixel) in row_data.iter().enumerate() {
-            *mat.at_2d_mut::<u8>(y, x as i32)
-                .map_err(|e| format!("Failed to set pixel at ({},{}): {e}", x, y))? = pixel;
+    let min_prominence = max_val as f64 * PEAK_PROMINENCE_RATIO;
+
+    // Find local maxima
+    let mut raw_peaks: Vec<(usize, f64)> = Vec::new();
+    for i in 0..num_bins {
+        let val = histogram[i] as f64;
+        if val < min_prominence {
+            continue;
+        }
+
+        let mut is_peak = true;
+        for offset in 1..=PEAK_WINDOW_HALF {
+            let left = (i + num_bins - offset) % num_bins;
+            let right = (i + offset) % num_bins;
+            if histogram[left] as f64 > val || histogram[right] as f64 > val {
+                is_peak = false;
+                break;
+            }
+        }
+
+        if is_peak {
+            raw_peaks.push((i, val));
         }
     }
 
-    println!("Created Mat: {}x{}, type: {}, channels: {}",
-        mat.cols(), mat.rows(), mat.typ(), mat.channels());
+    // Merge nearby peaks (within 2 degrees = 20 bins)
+    let mut merged: Vec<HistogramPeak> = Vec::new();
+    let mut used = vec![false; raw_peaks.len()];
 
-    Ok(mat)
+    for i in 0..raw_peaks.len() {
+        if used[i] {
+            continue;
+        }
+
+        let (bin_i, weight_i) = raw_peaks[i];
+        let mut total_weight = weight_i;
+        let mut weighted_angle_sum = (bin_i as f64 * 0.1) * weight_i;
+        used[i] = true;
+
+        for j in (i + 1)..raw_peaks.len() {
+            if used[j] {
+                continue;
+            }
+            let (bin_j, weight_j) = raw_peaks[j];
+            let dist = circular_bin_distance(bin_i, bin_j, num_bins);
+            if dist <= PEAK_WINDOW_HALF * 2 {
+                weighted_angle_sum += (bin_j as f64 * 0.1) * weight_j;
+                total_weight += weight_j;
+                used[j] = true;
+            }
+        }
+
+        let center_angle = weighted_angle_sum / total_weight;
+
+        // Classify: gradient near 0/180 = vertical edge, near 90/270 = horizontal edge
+        let angle = center_angle.rem_euclid(360.0);
+        let dev_from_0 = if angle > 180.0 { 360.0 - angle } else { angle };
+        let dev_from_180 = (angle - 180.0).abs();
+        let min_v_dev = dev_from_0.min(dev_from_180);
+
+        let is_vertical = min_v_dev <= VERTICAL_TOLERANCE_DEG;
+
+        // Signed deviation: gradient slightly above 0 -> line tilts right (positive)
+        let signed_dev_deg = if angle <= 90.0 {
+            angle
+        } else if angle >= 270.0 {
+            angle - 360.0
+        } else if angle <= 180.0 {
+            angle - 180.0
+        } else {
+            angle - 180.0
+        };
+
+        merged.push(HistogramPeak {
+            angle_deg: center_angle,
+            weight: total_weight,
+            is_vertical_edge: is_vertical,
+            deviation_from_vertical_rad: signed_dev_deg.to_radians(),
+        });
+    }
+
+    merged.sort_by(|a, b| {
+        b.weight
+            .partial_cmp(&a.weight)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    merged.truncate(20);
+
+    merged
+}
+
+/// Compute circular distance between two bin indices
+fn circular_bin_distance(a: usize, b: usize, total: usize) -> usize {
+    let diff = if a > b { a - b } else { b - a };
+    diff.min(total - diff)
 }
 
 /// Filter line segments to keep only near-vertical lines
@@ -184,7 +281,6 @@ struct RansacResult {
 }
 
 /// Find the dominant vertical angle using weighted RANSAC
-/// Uses length² weighting to heavily favor long architectural lines
 fn find_dominant_angle_ransac(lines: &[LineSegment]) -> RansacResult {
     if lines.is_empty() {
         return RansacResult {
@@ -210,22 +306,19 @@ fn find_dominant_angle_ransac(lines: &[LineSegment]) -> RansacResult {
     let mut best_inlier_count = 0;
     let inlier_threshold_rad = RANSAC_INLIER_THRESHOLD_DEG.to_radians();
 
-    // Total weight for confidence calculation (length squared)
     let total_weight: f64 = lines.iter().map(|l| l.length * l.length).sum();
 
     for _ in 0..RANSAC_ITERATIONS {
-        // Random sample
         let sample_idx = rng.gen_range(0..lines.len());
         let hypothesis_angle = lines[sample_idx].angle_from_vertical;
 
-        // Count weighted inliers (length² weighting)
         let mut weighted_count = 0.0;
         let mut inlier_count = 0;
 
         for line in lines {
             let angle_diff = (line.angle_from_vertical - hypothesis_angle).abs();
             if angle_diff < inlier_threshold_rad {
-                weighted_count += line.length * line.length;  // Weight by length²
+                weighted_count += line.length * line.length;
                 inlier_count += 1;
             }
         }
@@ -237,7 +330,7 @@ fn find_dominant_angle_ransac(lines: &[LineSegment]) -> RansacResult {
         }
     }
 
-    // Collect inlier angles and weights for refinement and stddev
+    // Refine angle with weighted average of inliers
     let mut inlier_angles: Vec<f64> = Vec::new();
     let mut inlier_weights: Vec<f64> = Vec::new();
 
@@ -249,40 +342,43 @@ fn find_dominant_angle_ransac(lines: &[LineSegment]) -> RansacResult {
         }
     }
 
-    // Refine angle by taking weighted average of inliers
     let refined_weight_sum: f64 = inlier_weights.iter().sum();
     let refined_angle = if refined_weight_sum > 0.0 {
-        inlier_angles.iter()
+        inlier_angles
+            .iter()
             .zip(inlier_weights.iter())
             .map(|(a, w)| a * w)
-            .sum::<f64>() / refined_weight_sum
+            .sum::<f64>()
+            / refined_weight_sum
     } else {
         best_angle
     };
 
-    // Calculate weighted standard deviation of inlier angles
     let variance = if refined_weight_sum > 0.0 && inlier_angles.len() > 1 {
-        inlier_angles.iter()
+        inlier_angles
+            .iter()
             .zip(inlier_weights.iter())
             .map(|(a, w)| {
                 let diff = a - refined_angle;
                 diff * diff * w
             })
-            .sum::<f64>() / refined_weight_sum
+            .sum::<f64>()
+            / refined_weight_sum
     } else {
         0.0
     };
     let angle_stddev = variance.sqrt().to_degrees();
 
-    // Confidence = ratio of inlier weight to total weight
     let confidence = if total_weight > 0.0 {
         (best_weighted_count / total_weight) as f32
     } else {
         0.0
     };
 
-    println!("RANSAC: {} inliers, confidence={:.2}, stddev={:.2}°",
-        best_inlier_count, confidence, angle_stddev);
+    eprintln!(
+        "[detection/ransac] {} inliers, confidence={:.2}, stddev={:.2} deg",
+        best_inlier_count, confidence, angle_stddev
+    );
 
     RansacResult {
         angle: refined_angle,
@@ -292,84 +388,99 @@ fn find_dominant_angle_ransac(lines: &[LineSegment]) -> RansacResult {
     }
 }
 
-/// Main entry point - analyze image for straightening using LSD + RANSAC
-pub fn analyze_perspective(img: &DynamicImage) -> Result<PerspectiveAnalysis, String> {
+/// Main entry point - analyze image for perspective correction using gradient histogram + RANSAC
+pub fn analyze_perspective(
+    img: &DynamicImage,
+    processor: &ImageProcessor,
+) -> Result<PerspectiveAnalysis, String> {
     let (width, height) = img.dimensions();
 
-    println!("\n=== Perspective Analysis ===");
-    println!("Image size: {}x{}", width, height);
+    eprintln!("\n=== Perspective Analysis ===");
+    eprintln!("Image size: {}x{}", width, height);
 
-    // 1. Convert to grayscale for LSD
+    // 1. Convert to grayscale
     let gray = img.to_luma8();
 
-    // 2. Detect all line segments using LSD
-    let all_lines = detect_line_segments_lsd(&gray)?;
+    // 2. Detect vertical lines using gradient histogram
+    let all_lines = detect_vertical_lines_from_histogram(&gray, processor)?;
 
     // 3. Filter for near-vertical lines
     let vertical_lines = filter_vertical_lines(&all_lines);
 
-    println!("Found {} vertical lines out of {} after length filter",
-        vertical_lines.len(), all_lines.len());
+    eprintln!(
+        "Found {} vertical lines out of {} total",
+        vertical_lines.len(),
+        all_lines.len()
+    );
 
     if vertical_lines.is_empty() {
-        println!("No vertical lines found - skipping correction");
+        eprintln!("No vertical lines found - skipping correction");
         return Ok(no_correction_needed());
     }
 
     // 4. Find dominant angle using weighted RANSAC
     let result = find_dominant_angle_ransac(&vertical_lines);
 
-    // 5. Calculate rotation needed (negative because we want to correct the tilt)
+    // 5. Calculate rotation needed (negative to correct the tilt)
     let rotation_deg = -result.angle.to_degrees();
 
-    println!("Dominant angle: {:.2}°, rotation needed: {:.2}°",
-        result.angle.to_degrees(), rotation_deg);
+    eprintln!(
+        "Dominant angle: {:.2} deg, rotation needed: {:.2} deg",
+        result.angle.to_degrees(),
+        rotation_deg
+    );
 
-    // 6. Quality checks - be conservative to avoid making images worse
+    // 6. Quality checks
 
-    // Check minimum inlier count
     if result.inlier_count < MIN_INLIER_COUNT {
-        println!("REJECT: Only {} inliers (need at least {})",
-            result.inlier_count, MIN_INLIER_COUNT);
+        eprintln!(
+            "REJECT: Only {} inliers (need at least {})",
+            result.inlier_count, MIN_INLIER_COUNT
+        );
         return Ok(no_correction_needed());
     }
 
-    // Check confidence threshold
     if result.confidence < CONFIDENCE_THRESHOLD {
-        println!("REJECT: Confidence {:.2} below threshold {:.2}",
-            result.confidence, CONFIDENCE_THRESHOLD);
+        eprintln!(
+            "REJECT: Confidence {:.2} below threshold {:.2}",
+            result.confidence, CONFIDENCE_THRESHOLD
+        );
         return Ok(no_correction_needed());
     }
 
-    // Check angle variance (high variance = ambiguous detection)
     if result.angle_stddev > MAX_ANGLE_STDDEV_DEG {
-        println!("REJECT: Angle stddev {:.2}° exceeds max {:.2}° - detection ambiguous",
-            result.angle_stddev, MAX_ANGLE_STDDEV_DEG);
+        eprintln!(
+            "REJECT: Angle stddev {:.2} deg exceeds max {:.2} deg - detection ambiguous",
+            result.angle_stddev, MAX_ANGLE_STDDEV_DEG
+        );
         return Ok(no_correction_needed());
     }
 
-    // Check minimum rotation threshold
     if rotation_deg.abs() < MIN_ROTATION_THRESHOLD_DEG {
-        println!("SKIP: Rotation {:.2}° below minimum threshold {:.2}°",
-            rotation_deg, MIN_ROTATION_THRESHOLD_DEG);
+        eprintln!(
+            "SKIP: Rotation {:.2} deg below minimum threshold {:.2} deg",
+            rotation_deg, MIN_ROTATION_THRESHOLD_DEG
+        );
         return Ok(already_straight(result.confidence, result.inlier_count));
     }
 
-    // Check maximum rotation
     if rotation_deg.abs() > MAX_ROTATION_DEG {
-        println!("REJECT: Rotation {:.2}° exceeds maximum {:.2}° - needs manual review",
-            rotation_deg, MAX_ROTATION_DEG);
+        eprintln!(
+            "REJECT: Rotation {:.2} deg exceeds maximum {:.2} deg - needs manual review",
+            rotation_deg, MAX_ROTATION_DEG
+        );
         return Ok(needs_manual_review());
     }
 
-    println!("ACCEPT: Applying {:.2}° rotation (confidence={:.2}, inliers={}, stddev={:.2}°)",
-        rotation_deg, result.confidence, result.inlier_count, result.angle_stddev);
+    eprintln!(
+        "ACCEPT: Applying {:.2} deg rotation (confidence={:.2}, inliers={}, stddev={:.2} deg)",
+        rotation_deg, result.confidence, result.inlier_count, result.angle_stddev
+    );
 
-    // Create a synthetic vertical VP for compatibility with rectification code
     let center_x = f64::from(width) / 2.0;
     let vp = VanishingPoint {
         x: center_x + result.angle.tan() * f64::from(height) * 10.0,
-        y: -f64::from(height) * 10.0,  // Far above image
+        y: -f64::from(height) * 10.0,
         confidence: result.confidence,
         vp_type: VanishingPointType::Vertical,
     };
@@ -383,7 +494,7 @@ pub fn analyze_perspective(img: &DynamicImage) -> Result<PerspectiveAnalysis, St
     })
 }
 
-/// Return analysis indicating no correction needed (no vertical lines detected)
+/// Return analysis indicating no correction needed
 fn no_correction_needed() -> PerspectiveAnalysis {
     PerspectiveAnalysis {
         vanishing_points: vec![],
@@ -405,7 +516,7 @@ fn already_straight(confidence: f32, lines_detected: usize) -> PerspectiveAnalys
     }
 }
 
-/// Return analysis indicating image needs manual review (extreme rotation)
+/// Return analysis indicating image needs manual review
 fn needs_manual_review() -> PerspectiveAnalysis {
     PerspectiveAnalysis {
         vanishing_points: vec![],
@@ -434,12 +545,19 @@ mod tests {
     #[test]
     fn test_filter_vertical_lines() {
         let lines = vec![
-            LineSegment::new(100.0, 0.0, 100.0, 100.0),  // Vertical
-            LineSegment::new(0.0, 0.0, 100.0, 0.0),      // Horizontal
-            LineSegment::new(100.0, 0.0, 110.0, 100.0),  // Near vertical (~6°)
+            LineSegment::new(100.0, 0.0, 100.0, 100.0), // Vertical
+            LineSegment::new(0.0, 0.0, 100.0, 0.0),     // Horizontal
+            LineSegment::new(100.0, 0.0, 110.0, 100.0), // Near vertical (~6 deg)
         ];
 
         let filtered = filter_vertical_lines(&lines);
-        assert_eq!(filtered.len(), 2);  // Vertical and near-vertical should pass
+        assert_eq!(filtered.len(), 2); // Vertical and near-vertical should pass
+    }
+
+    #[test]
+    fn test_circular_bin_distance() {
+        assert_eq!(circular_bin_distance(10, 20, 3600), 10);
+        assert_eq!(circular_bin_distance(3590, 10, 3600), 20);
+        assert_eq!(circular_bin_distance(0, 3599, 3600), 1);
     }
 }

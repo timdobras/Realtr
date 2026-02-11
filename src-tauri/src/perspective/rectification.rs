@@ -169,13 +169,7 @@ pub fn generate_correction_preview(
     let scale = f64::from(max_size) / f64::from(width.max(height));
 
     if scale < 1.0 {
-        let new_width = (f64::from(width) * scale) as u32;
-        let new_height = (f64::from(height) * scale) as u32;
-        Ok(corrected_img.resize_exact(
-            new_width.max(1),
-            new_height.max(1),
-            image::imageops::FilterType::Triangle,
-        ))
+        Ok(crate::fast_resize::resize_to_fit(corrected_img, max_size))
     } else {
         Ok(corrected_img.clone())
     }
@@ -189,10 +183,11 @@ mod tests {
     #[test]
     fn test_rotation_matrix_identity() {
         let matrix = compute_rotation_matrix(0.0, 100.0, 100.0);
-        let identity = Matrix3::identity();
+        let identity = Matrix3::<f64>::identity();
         for i in 0..3 {
             for j in 0..3 {
-                assert!((matrix[(i, j)] - identity[(i, j)]).abs() < 1e-10);
+                let diff: f64 = matrix[(i, j)] - identity[(i, j)];
+                assert!(diff.abs() < 1e-10);
             }
         }
     }

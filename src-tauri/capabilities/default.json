@@ -17,6 +17,12 @@
       ]
     },
     "core:default",
+    {
+      "identifier": "core:app:default"
+    },
+    {
+      "identifier": "core:resources:default"
+    },
     "opener:default",
     "fs:default",
     "fs:allow-create",

@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tauri::Manager;
+use tokio::sync::RwLock;
+
+/// Cached config state managed by Tauri. Avoids re-reading config.json from disk
+/// on every single command invocation (dozens of times per user interaction).
+pub type ConfigCache = Arc<RwLock<Option<AppConfig>>>;
 
 /// Helper function for serde default value
 fn default_true() -> bool {
@@ -104,9 +110,9 @@ pub struct CommandResult {
     pub error: Option<String>,
 }
 
-// Rest of your commands remain the same
-#[tauri::command]
-pub async fn load_config(app: tauri::AppHandle) -> Result<Option<AppConfig>, String> {
+/// Load config from disk (internal, no caching).
+/// This performs the actual file read and migration logic.
+fn load_config_from_disk(app: &tauri::AppHandle) -> Result<Option<AppConfig>, String> {
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let config_path = app_data_dir.join("config.json");
 
@@ -158,6 +164,39 @@ pub async fn load_config(app: tauri::AppHandle) -> Result<Option<AppConfig>, Str
     Ok(Some(config))
 }
 
+/// Get the config from the in-memory cache, loading from disk on first access.
+/// This is the primary entry point for all internal Rust code that needs the config.
+/// Eliminates dozens of redundant file reads per user interaction.
+pub async fn get_cached_config(app: &tauri::AppHandle) -> Result<Option<AppConfig>, String> {
+    let cache = app.state::<ConfigCache>();
+
+    // Fast path: read lock, check if cached
+    {
+        let guard = cache.read().await;
+        if guard.is_some() {
+            return Ok(guard.clone());
+        }
+    }
+
+    // Slow path: write lock, load from disk, cache it
+    let mut guard = cache.write().await;
+    // Double-check after acquiring write lock (another task may have filled it)
+    if guard.is_some() {
+        return Ok(guard.clone());
+    }
+
+    let config = load_config_from_disk(app)?;
+    *guard = config.clone();
+    Ok(config)
+}
+
+/// Tauri command: load config (exposed to frontend).
+/// Uses the in-memory cache for fast access.
+#[tauri::command]
+pub async fn load_config(app: tauri::AppHandle) -> Result<Option<AppConfig>, String> {
+    get_cached_config(&app).await
+}
+
 #[tauri::command]
 pub async fn save_config(
     app: tauri::AppHandle,
@@ -176,6 +215,11 @@ pub async fn save_config(
     std::fs::write(&config_path, json)
         .map_err(|e| format!("Failed to write config file: {}", e))?;
 
+    // Update the in-memory cache so subsequent reads are instant
+    let cache = app.state::<ConfigCache>();
+    let mut guard = cache.write().await;
+    *guard = Some(config);
+
     Ok(CommandResult {
         success: true,
         error: None,
@@ -191,6 +235,11 @@ pub async fn reset_config(app: tauri::AppHandle) -> Result<CommandResult, String
         std::fs::remove_file(&config_path)
             .map_err(|e| format!("Failed to remove config file: {}", e))?;
     }
+
+    // Clear the in-memory cache
+    let cache = app.state::<ConfigCache>();
+    let mut guard = cache.write().await;
+    *guard = None;
 
     Ok(CommandResult {
         success: true,

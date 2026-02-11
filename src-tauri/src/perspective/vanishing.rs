@@ -4,12 +4,14 @@
 //! walls converge in perspective. The offset of this vanishing point from the
 //! image center directly encodes camera tilt.
 //!
-//! This provides geometric validation independent from line-angle averaging.
+//! This provides geometric validation independent from gradient histogram analysis.
+//! Now operates on real Hough-detected lines rather than synthesized virtual lines.
 
-use crate::perspective::straighten::{ClassifiedLine, RansacResult};
+use crate::perspective::straighten::ClassifiedLine;
 
 /// Estimated vanishing point
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct VPEstimate {
     /// Position (can be outside image bounds)
     pub x: f64,
@@ -86,8 +88,8 @@ pub fn estimate_vertical_vp(
     let spread = compute_cluster_spread(&valid_intersections, cluster.x, cluster.y);
     let spread_factor = (1.0 - spread / (f64::from(width) * 0.2)).max(0.0);
 
-    let confidence = ((supporting_pairs as f32 / 10.0).min(1.0) * spread_factor as f32 * 0.7)
-        .clamp(0.0, 0.6);
+    let confidence =
+        ((supporting_pairs as f32 / 10.0).min(1.0) * spread_factor as f32 * 0.7).clamp(0.0, 0.6);
 
     Some(VPEstimate {
         x: cluster.x,
@@ -153,8 +155,8 @@ pub fn estimate_horizontal_vp(
     let spread = compute_cluster_spread(&valid_intersections, cluster.x, cluster.y);
     let spread_factor = (1.0 - spread / (f64::from(height) * 0.2)).max(0.0);
 
-    let confidence = ((supporting_pairs as f32 / 10.0).min(1.0) * spread_factor as f32 * 0.6)
-        .clamp(0.0, 0.5);
+    let confidence =
+        ((supporting_pairs as f32 / 10.0).min(1.0) * spread_factor as f32 * 0.6).clamp(0.0, 0.5);
 
     Some(VPEstimate {
         x: cluster.x,
@@ -236,8 +238,10 @@ fn cluster_intersections(
 
     // Start from weighted centroid
     let total_weight: f64 = intersections.iter().map(|i| i.weight).sum();
-    let mut center_x: f64 = intersections.iter().map(|i| i.x * i.weight).sum::<f64>() / total_weight;
-    let mut center_y: f64 = intersections.iter().map(|i| i.y * i.weight).sum::<f64>() / total_weight;
+    let mut center_x: f64 =
+        intersections.iter().map(|i| i.x * i.weight).sum::<f64>() / total_weight;
+    let mut center_y: f64 =
+        intersections.iter().map(|i| i.y * i.weight).sum::<f64>() / total_weight;
 
     // Mean-shift iterations
     for _ in 0..20 {
@@ -315,11 +319,13 @@ fn compute_cluster_spread(
     variance.sqrt()
 }
 
-/// Validate RANSAC result using vanishing point estimation.
+/// Validate histogram-derived angle using vanishing point estimation.
 ///
+/// Takes the histogram angle and confidence, and the real detected lines.
 /// Returns adjusted (angle, confidence) based on VP agreement.
 pub fn validate_with_vp(
-    ransac: &RansacResult,
+    histogram_angle: f64,
+    histogram_confidence: f32,
     vertical_lines: &[ClassifiedLine],
     horizontal_lines: &[ClassifiedLine],
     img_dims: (u32, u32),
@@ -327,29 +333,39 @@ pub fn validate_with_vp(
     let v_vp = estimate_vertical_vp(vertical_lines, img_dims);
     let h_vp = estimate_horizontal_vp(horizontal_lines, img_dims);
 
-    let mut angle = ransac.angle;
-    let mut confidence = ransac.confidence;
+    let mut angle = histogram_angle;
+    let mut confidence = histogram_confidence;
 
     // Check vertical VP
     if let Some(vp) = &v_vp {
-        let agreement = (vp.tilt_angle - ransac.angle).abs() < 1.5;
+        let agreement = (vp.tilt_angle - histogram_angle).abs() < 2.0;
+
+        eprintln!(
+            "[straighten] VP-V: tilt={:.3}, conf={:.3}, agrees={}",
+            vp.tilt_angle, vp.confidence, agreement
+        );
 
         if agreement {
             // VP agrees - confidence boost
             confidence += 0.15 * vp.confidence;
-        } else if vp.confidence > ransac.confidence * 0.8 {
+        } else if vp.confidence > histogram_confidence * 0.8 {
             // VP strongly disagrees and is confident - blend angles
-            angle = angle * 0.7 + vp.tilt_angle * 0.3;
+            angle = angle * 0.75 + vp.tilt_angle * 0.25;
             confidence *= 0.85;
         } else {
             // VP disagrees but less confident - slight penalty
-            confidence *= 0.9;
+            confidence *= 0.92;
         }
     }
 
     // Check horizontal VP (less reliable, smaller adjustments)
     if let Some(vp) = &h_vp {
-        let agreement = (vp.tilt_angle - angle).abs() < 2.0;
+        let agreement = (vp.tilt_angle - angle).abs() < 2.5;
+
+        eprintln!(
+            "[straighten] VP-H: tilt={:.3}, conf={:.3}, agrees={}",
+            vp.tilt_angle, vp.confidence, agreement
+        );
 
         if agreement {
             confidence += 0.08 * vp.confidence;
@@ -360,24 +376,24 @@ pub fn validate_with_vp(
 
     // Cross-validation: if both VPs exist and agree, extra boost
     if let (Some(v), Some(h)) = (&v_vp, &h_vp) {
-        if (v.tilt_angle - h.tilt_angle).abs() < 1.5 {
+        if (v.tilt_angle - h.tilt_angle).abs() < 2.0 {
             confidence += 0.10;
+            eprintln!("[straighten] VP cross-validation: V and H agree, +0.10 boost");
         }
     }
 
-    (angle, confidence.clamp(0.0, 0.90))
+    (angle, confidence.clamp(0.0, 0.95))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::perspective::straighten::{LineSegment, PositionType};
+    use crate::perspective::straighten::{LineSegment, LineType};
 
     fn make_classified_line(x1: f64, y1: f64, x2: f64, y2: f64) -> ClassifiedLine {
         ClassifiedLine {
             segment: LineSegment::new(x1, y1, x2, y2),
             line_type: LineType::Vertical,
-            position: PositionType::Border,
             weight: 1.0,
         }
     }
@@ -432,5 +448,20 @@ mod tests {
         // Should cluster around ~100, -500
         assert!((cluster.x - 100.0).abs() < 20.0);
         assert!((cluster.y - (-500.0)).abs() < 20.0);
+    }
+
+    #[test]
+    fn test_validate_with_vp_no_lines() {
+        let (angle, conf) = validate_with_vp(1.5, 0.7, &[], &[], (800, 600));
+        // With no lines, should return histogram values with slight penalty
+        assert!((angle - 1.5).abs() < 0.01);
+        assert!((conf - 0.7).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_make_classified_line() {
+        let line = make_classified_line(100.0, 0.0, 100.0, 500.0);
+        assert_eq!(line.line_type, LineType::Vertical);
+        assert!((line.segment.length - 500.0).abs() < 0.1);
     }
 }

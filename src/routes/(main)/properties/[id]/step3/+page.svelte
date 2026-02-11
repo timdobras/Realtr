@@ -27,13 +27,19 @@
   // Get the id from the URL params
   let propertyId = $derived(Number($page.params.id));
 
-  // Refresh images when window regains focus (user returns from external editor)
+  // Only refresh images on focus if the window was blurred for >2s
+  let lastBlurTime = 0;
+  function handleWindowBlur() {
+    lastBlurTime = Date.now();
+  }
   function handleWindowFocus() {
-    imageRefreshKey++;
+    if (lastBlurTime > 0 && Date.now() - lastBlurTime > 2000) {
+      imageRefreshKey++;
+    }
   }
 
   onMount(async () => {
-    // Listen for window focus to refresh images
+    window.addEventListener('blur', handleWindowBlur);
     window.addEventListener('focus', handleWindowFocus);
 
     if (!propertyId) {
@@ -60,6 +66,7 @@
   });
 
   onDestroy(() => {
+    window.removeEventListener('blur', handleWindowBlur);
     window.removeEventListener('focus', handleWindowFocus);
   });
 
@@ -67,8 +74,15 @@
     if (!property) return;
 
     try {
-      await loadInternetImages();
-      await loadAggeliaImages();
+      // Fetch AGGELIA list once, share with both loaders (avoids duplicate IPC call)
+      const aggeliaResponse = await invoke('list_aggelia_images', {
+        folderPath: property.folder_path,
+        status: property.status
+      });
+      const aggeliaFileList: string[] = Array.isArray(aggeliaResponse) ? aggeliaResponse : [];
+
+      await loadInternetImages(aggeliaFileList);
+      loadAggeliaImagesFromList(aggeliaFileList);
 
       // Pre-generate thumbnails in parallel for faster display
       pregenerateThumbnails();
@@ -108,7 +122,7 @@
     });
   }
 
-  async function loadInternetImages() {
+  async function loadInternetImages(aggeliaFileList: string[]) {
     if (!property) return;
 
     const response = await invoke('list_internet_images', {
@@ -120,46 +134,25 @@
       // Sort filenames numerically
       const sortedFilenames = sortImagesByNumericFilename(response);
 
-      // Check which images are already in AGGELIA
-      const aggeliaFileList = await invoke('list_aggelia_images', {
-        folderPath: property.folder_path,
-        status: property.status
-      });
-
-      const aggeliaFiles = Array.isArray(aggeliaFileList) ? aggeliaFileList : [];
-
       // Just store filenames with selection state - LazyImage handles loading
       internetImages = sortedFilenames.map((filename) => ({
         filename,
         selected: false,
-        inAggelia: aggeliaFiles.includes(filename)
+        inAggelia: aggeliaFileList.includes(filename)
       }));
     }
   }
 
-  async function loadAggeliaImages() {
-    if (!property) return;
+  function loadAggeliaImagesFromList(aggeliaFileList: string[]) {
+    // Sort filenames numerically
+    const sortedFilenames = sortImagesByNumericFilename([...aggeliaFileList]);
 
-    try {
-      const response = await invoke('list_aggelia_images', {
-        folderPath: property.folder_path,
-        status: property.status
-      });
-
-      if (Array.isArray(response)) {
-        // Sort filenames numerically
-        const sortedFilenames = sortImagesByNumericFilename(response);
-
-        // Just store filenames - LazyImage handles loading
-        aggeliaImages = sortedFilenames.map((filename) => ({
-          filename,
-          selected: false,
-          inAggelia: true
-        }));
-      }
-    } catch (e) {
-      aggeliaImages = [];
-    }
+    // Just store filenames - LazyImage handles loading
+    aggeliaImages = sortedFilenames.map((filename) => ({
+      filename,
+      selected: false,
+      inAggelia: true
+    }));
   }
 
   // Select all available images

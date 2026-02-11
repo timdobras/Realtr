@@ -9,3 +9,17 @@ node_modules
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 ~/.tauri/myapp.key
+
+# Windows NUL device artifacts
+nul
+src-tauri/nul
+
+# Log files
+src-tauri/*.log
+
+# Test images
+src-tauri/test_images/
+src-tauri/test_images_rotated/
+
+# Local Claude settings
+.claude/settings.local.json
