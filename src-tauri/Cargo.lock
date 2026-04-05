@@ -5753,7 +5753,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-app"
-version = "0.1.66-beta"
+version = "0.1.68-beta"
 dependencies = [
  "base64 0.21.7",
  "bytemuck",
@@ -5779,6 +5779,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-shell",
  "tauri-plugin-updater",
+ "tempfile",
  "tokio",
  "turbojpeg",
  "uuid",

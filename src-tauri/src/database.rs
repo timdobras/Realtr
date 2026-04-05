@@ -112,6 +112,161 @@ pub struct ThumbnailBatchResult {
     pub paths: Vec<String>,
 }
 
+/// Supported image file extensions (lowercase).
+const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"];
+
+/// Check whether a file extension (case-insensitive) represents a supported image format.
+fn is_image_extension(ext: &str) -> bool {
+    IMAGE_EXTENSIONS.contains(&ext.to_lowercase().as_str())
+}
+
+/// List image filenames in `dir`, sorted alphabetically.
+/// Returns an empty vec if `dir` does not exist.
+fn list_image_filenames(dir: &std::path::Path) -> Result<Vec<String>, String> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut images = Vec::new();
+    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                if is_image_extension(ext) {
+                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                        images.push(filename.to_string());
+                    }
+                }
+            }
+        }
+    }
+    images.sort();
+    Ok(images)
+}
+
+/// Delete all files (not subdirectories) in `dir`.
+/// Returns (deleted_count, errors). If `dir` does not exist, returns (0, []).
+fn clear_files_in_dir(dir: &std::path::Path) -> (usize, Vec<String>) {
+    if !dir.exists() {
+        return (0, Vec::new());
+    }
+    let mut deleted = 0;
+    let mut errors = Vec::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                match fs::remove_file(&path) {
+                    Ok(()) => deleted += 1,
+                    Err(e) => {
+                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                            errors.push(format!("Failed to delete {}: {}", filename, e));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (deleted, errors)
+}
+
+/// Two-pass rename: old → temp, then temp → final.
+/// Avoids name conflicts when files swap positions (e.g. A→B, B→A).
+/// Returns (renamed_count, errors).
+fn rename_files_two_pass(
+    dir: &std::path::Path,
+    rename_map: &[(String, String)],
+) -> (usize, Vec<String>) {
+    let mut renamed = 0;
+    let mut errors = Vec::new();
+    let mut temp_renames = Vec::new();
+
+    // Pass 1: old → temp
+    for (i, (old_name, _new_name)) in rename_map.iter().enumerate() {
+        let old_path = dir.join(old_name);
+        let temp_name = format!("temp_rename_{}.tmp", i);
+        let temp_path = dir.join(&temp_name);
+
+        if old_path.exists() {
+            match fs::rename(&old_path, &temp_path) {
+                Ok(()) => {
+                    temp_renames.push((temp_name, _new_name.clone()));
+                }
+                Err(e) => {
+                    errors.push(format!("Failed to rename {} to temp: {}", old_name, e));
+                }
+            }
+        } else {
+            errors.push(format!("File not found: {}", old_name));
+        }
+    }
+
+    // Pass 2: temp → final
+    for (temp_name, final_name) in &temp_renames {
+        let temp_path = dir.join(temp_name);
+        let final_path = dir.join(final_name);
+
+        match fs::rename(&temp_path, &final_path) {
+            Ok(()) => renamed += 1,
+            Err(e) => {
+                errors.push(format!("Failed to rename {} to {}: {}", temp_name, final_name, e));
+            }
+        }
+    }
+
+    (renamed, errors)
+}
+
+/// Copy image files from `src_dir` to `dest_dir`, skipping files that already exist in dest.
+/// Returns (copied_count, errors).
+fn copy_new_images_to_dir(src_dir: &std::path::Path, dest_dir: &std::path::Path) -> (usize, Vec<String>) {
+    let files_to_copy: Vec<(PathBuf, PathBuf)> = match fs::read_dir(src_dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                        if is_image_extension(ext) {
+                            if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                                let dest_path = dest_dir.join(filename);
+                                if !dest_path.exists() {
+                                    return Some((path, dest_path));
+                                }
+                            }
+                        }
+                    }
+                }
+                None
+            })
+            .collect(),
+        Err(e) => return (0, vec![format!("Failed to read source dir: {}", e)]),
+    };
+
+    let copied_count = AtomicUsize::new(0);
+    let errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+    files_to_copy.par_iter().for_each(|(src, dest)| {
+        match fs::copy(src, dest) {
+            Ok(_) => {
+                copied_count.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(e) => {
+                if let Some(filename) = src.file_name().and_then(|s| s.to_str()) {
+                    if let Ok(mut errs) = errors.lock() {
+                        errs.push(format!("Failed to copy {}: {}", filename, e));
+                    }
+                }
+            }
+        }
+    });
+
+    (
+        copied_count.load(Ordering::Relaxed),
+        errors.into_inner().unwrap_or_default(),
+    )
+}
+
 // Helper function to safely get the database pool
 fn get_database_pool(app: &tauri::AppHandle) -> Result<&SqlitePool, String> {
     match app.try_state::<SqlitePool>() {
@@ -1709,7 +1864,7 @@ fn parse_folder_name(folder_name: &str) -> (String, Option<String>) {
             // Check if the content in parentheses looks like a code (alphanumeric, not too long)
             if !potential_code.is_empty()
                 && potential_code.len() <= 20
-                && potential_code.chars().all(|c| c.is_alphanumeric())
+                && potential_code.chars().all(|c| c.is_alphanumeric() || c == '-')
             {
                 let property_name = folder_name[..open_paren].to_string();
                 return (property_name, Some(potential_code.to_string()));
@@ -2113,31 +2268,7 @@ pub async fn list_internet_images(
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
     tokio::task::spawn_blocking(move || {
-        let internet_path = property_path.join("INTERNET");
-
-        if !internet_path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let mut images = Vec::new();
-        for entry in fs::read_dir(internet_path).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-
-            if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                    let ext_lc = ext.to_lowercase();
-                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
-                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                            images.push(filename.to_string());
-                        }
-                    }
-                }
-            }
-        }
-
-        images.sort();
-        Ok(images)
+        list_image_filenames(&property_path.join("INTERNET"))
     })
     .await
     .map_err(|e| format!("Task join error: {e}"))?
@@ -2184,52 +2315,7 @@ pub async fn copy_images_to_internet(
         fs::create_dir_all(&internet_path)
             .map_err(|e| format!("Failed to create INTERNET folder: {}", e))?;
 
-        // Collect files to copy first, then copy in parallel
-        let files_to_copy: Vec<(PathBuf, PathBuf)> = fs::read_dir(&property_path)
-            .map_err(|e| e.to_string())?
-            .filter_map(|entry| entry.ok())
-            .filter_map(|entry| {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                        let ext_lc = ext.to_lowercase();
-                        if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"]
-                            .contains(&ext_lc.as_str())
-                        {
-                            if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                                let dest_path = internet_path.join(filename);
-                                if !dest_path.exists() {
-                                    return Some((path, dest_path));
-                                }
-                            }
-                        }
-                    }
-                }
-                None
-            })
-            .collect();
-
-        let copied_count = AtomicUsize::new(0);
-        let errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-
-        // Copy files in parallel (overlapping I/O on SSDs, OS readahead on HDDs)
-        files_to_copy.par_iter().for_each(|(src, dest)| {
-            match fs::copy(src, dest) {
-                Ok(_) => {
-                    copied_count.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(e) => {
-                    if let Some(filename) = src.file_name().and_then(|s| s.to_str()) {
-                        if let Ok(mut errs) = errors.lock() {
-                            errs.push(format!("Failed to copy {}: {}", filename, e));
-                        }
-                    }
-                }
-            }
-        });
-
-        let copied_count = copied_count.load(Ordering::Relaxed);
-        let errors = errors.into_inner().unwrap_or_default();
+        let (copied_count, errors) = copy_new_images_to_dir(&property_path, &internet_path);
 
         if errors.is_empty() {
             Ok(CommandResult {
@@ -2747,32 +2833,7 @@ pub async fn clear_internet_folder(
     tokio::task::spawn_blocking(move || {
         let internet_path = property_path.join("INTERNET");
 
-        if !internet_path.exists() {
-            return Ok(CommandResult {
-                success: true,
-                error: None,
-                data: Some(serde_json::json!({"message": "INTERNET folder doesn't exist"})),
-            });
-        }
-
-        let mut deleted_count = 0;
-        let mut errors = Vec::new();
-
-        for entry in fs::read_dir(&internet_path).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-
-            if path.is_file() {
-                match fs::remove_file(&path) {
-                    Ok(_) => deleted_count += 1,
-                    Err(e) => {
-                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                            errors.push(format!("Failed to delete {}: {}", filename, e));
-                        }
-                    }
-                }
-            }
-        }
+        let (deleted_count, errors) = clear_files_in_dir(&internet_path);
 
         if errors.is_empty() {
             Ok(CommandResult {
@@ -2909,48 +2970,11 @@ pub async fn rename_internet_images(
             });
         }
 
-        let mut renamed_count = 0;
-        let mut errors = Vec::new();
-        let mut temp_renames = Vec::new();
-
-        // First pass: Rename all files to temporary names to avoid conflicts
-        for (i, mapping) in rename_map.iter().enumerate() {
-            let old_path = internet_path.join(&mapping.old_name);
-            let temp_name = format!("temp_rename_{}.tmp", i);
-            let temp_path = internet_path.join(&temp_name);
-
-            if old_path.exists() {
-                match fs::rename(&old_path, &temp_path) {
-                    Ok(_) => {
-                        temp_renames.push((temp_name, mapping.new_name.clone()));
-                    }
-                    Err(e) => {
-                        errors.push(format!(
-                            "Failed to rename {} to temp: {}",
-                            mapping.old_name, e
-                        ));
-                    }
-                }
-            } else {
-                errors.push(format!("File not found: {}", mapping.old_name));
-            }
-        }
-
-        // Second pass: Rename temporary files to final names
-        for (temp_name, final_name) in temp_renames {
-            let temp_path = internet_path.join(&temp_name);
-            let final_path = internet_path.join(&final_name);
-
-            match fs::rename(&temp_path, &final_path) {
-                Ok(_) => renamed_count += 1,
-                Err(e) => {
-                    errors.push(format!(
-                        "Failed to rename {} to {}: {}",
-                        temp_name, final_name, e
-                    ));
-                }
-            }
-        }
+        let pairs: Vec<(String, String)> = rename_map
+            .iter()
+            .map(|m| (m.old_name.clone(), m.new_name.clone()))
+            .collect();
+        let (renamed_count, errors) = rename_files_two_pass(&internet_path, &pairs);
 
         if errors.is_empty() {
             Ok(CommandResult {
@@ -3142,32 +3166,7 @@ pub async fn clear_aggelia_folder(
     tokio::task::spawn_blocking(move || {
         let aggelia_path = property_path.join("INTERNET").join("AGGELIA");
 
-        if !aggelia_path.exists() {
-            return Ok(CommandResult {
-                success: true,
-                error: None,
-                data: Some(serde_json::json!({"message": "AGGELIA folder doesn't exist"})),
-            });
-        }
-
-        let mut deleted_count = 0;
-        let mut errors = Vec::new();
-
-        for entry in fs::read_dir(&aggelia_path).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-
-            if path.is_file() {
-                match fs::remove_file(&path) {
-                    Ok(_) => deleted_count += 1,
-                    Err(e) => {
-                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                            errors.push(format!("Failed to delete {}: {}", filename, e));
-                        }
-                    }
-                }
-            }
-        }
+        let (deleted_count, errors) = clear_files_in_dir(&aggelia_path);
 
         if errors.is_empty() {
             Ok(CommandResult {
@@ -4795,4 +4794,962 @@ pub async fn delete_set(
         error: None,
         data: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+
+    fn test_config() -> AppConfig {
+        AppConfig {
+            new_folder_path: "C:\\Photos\\NEW".to_string(),
+            done_folder_path: "C:\\Photos\\DONE".to_string(),
+            not_found_folder_path: "C:\\Photos\\NOT_FOUND".to_string(),
+            archive_folder_path: "C:\\Photos\\ARCHIVE".to_string(),
+            sets_folder_path: "C:\\Photos\\SETS".to_string(),
+            ..AppConfig::default()
+        }
+    }
+
+    // ── get_base_path_for_status ─────────────────────────────────────
+
+    #[test]
+    fn base_path_for_new_status() {
+        let config = test_config();
+        let result = get_base_path_for_status(&config, "NEW").unwrap();
+        assert_eq!(result, PathBuf::from("C:\\Photos\\NEW"));
+    }
+
+    #[test]
+    fn base_path_for_done_status() {
+        let config = test_config();
+        let result = get_base_path_for_status(&config, "DONE").unwrap();
+        assert_eq!(result, PathBuf::from("C:\\Photos\\DONE"));
+    }
+
+    #[test]
+    fn base_path_for_not_found_status() {
+        let config = test_config();
+        let result = get_base_path_for_status(&config, "NOT_FOUND").unwrap();
+        assert_eq!(result, PathBuf::from("C:\\Photos\\NOT_FOUND"));
+    }
+
+    #[test]
+    fn base_path_for_archive_status() {
+        let config = test_config();
+        let result = get_base_path_for_status(&config, "ARCHIVE").unwrap();
+        assert_eq!(result, PathBuf::from("C:\\Photos\\ARCHIVE"));
+    }
+
+    #[test]
+    fn base_path_for_invalid_status() {
+        let config = test_config();
+        let result = get_base_path_for_status(&config, "INVALID");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid status"));
+    }
+
+    #[test]
+    fn base_path_for_empty_folder_path() {
+        let mut config = test_config();
+        config.new_folder_path = String::new();
+        let result = get_base_path_for_status(&config, "NEW");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not configured"));
+    }
+
+    // ── construct_property_path_from_parts ────────────────────────────
+
+    #[test]
+    fn construct_path_normal_case() {
+        let config = test_config();
+        let result =
+            construct_property_path_from_parts(&config, "NEW", "Athens", "Villa Alpha").unwrap();
+        let expected = PathBuf::from("C:\\Photos\\NEW").join("Athens").join("Villa Alpha");
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn construct_path_invalid_status() {
+        let config = test_config();
+        let result = construct_property_path_from_parts(&config, "BOGUS", "Athens", "Villa");
+        assert!(result.is_err());
+    }
+
+    // ── get_relative_folder_path ─────────────────────────────────────
+
+    #[test]
+    fn relative_folder_path_format() {
+        assert_eq!(get_relative_folder_path("Athens", "Villa Alpha"), "Athens/Villa Alpha");
+    }
+
+    #[test]
+    fn relative_folder_path_empty_parts() {
+        assert_eq!(get_relative_folder_path("", "Villa"), "/Villa");
+        assert_eq!(get_relative_folder_path("City", ""), "City/");
+    }
+
+    // ── folder_path_to_pathbuf ───────────────────────────────────────
+
+    #[test]
+    fn folder_path_to_pathbuf_splits_correctly() {
+        let result = folder_path_to_pathbuf("Athens/Villa Alpha");
+        let expected = PathBuf::from("Athens").join("Villa Alpha");
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn folder_path_to_pathbuf_single_component() {
+        let result = folder_path_to_pathbuf("OnlyCity");
+        assert_eq!(result, PathBuf::from("OnlyCity"));
+    }
+
+    #[test]
+    fn folder_path_to_pathbuf_empty() {
+        let result = folder_path_to_pathbuf("");
+        assert_eq!(result, PathBuf::from(""));
+    }
+
+    // ── parse_folder_name ────────────────────────────────────────────
+
+    #[test]
+    fn parse_folder_name_no_code() {
+        let (name, code) = parse_folder_name("Villa Alpha");
+        assert_eq!(name, "Villa Alpha");
+        assert!(code.is_none());
+    }
+
+    #[test]
+    fn parse_folder_name_with_code() {
+        let (name, code) = parse_folder_name("Villa Alpha (45164)");
+        assert_eq!(name, "Villa Alpha");
+        assert_eq!(code.unwrap(), "45164");
+    }
+
+    #[test]
+    fn parse_folder_name_empty_parens() {
+        let (name, code) = parse_folder_name("Villa Alpha ()");
+        assert_eq!(name, "Villa Alpha ()");
+        assert!(code.is_none());
+    }
+
+    #[test]
+    fn parse_folder_name_parens_in_middle() {
+        let (name, code) = parse_folder_name("Villa (Notes) Alpha");
+        assert_eq!(name, "Villa (Notes) Alpha");
+        assert!(code.is_none());
+    }
+
+    #[test]
+    fn parse_folder_name_code_too_long() {
+        let (name, code) = parse_folder_name("Villa (123456789012345678901)");
+        // 21 chars, exceeds 20 limit
+        assert_eq!(name, "Villa (123456789012345678901)");
+        assert!(code.is_none());
+    }
+
+    #[test]
+    fn parse_folder_name_hyphenated_code() {
+        // set_property_code creates hyphenated codes via code.replace('/', "-")
+        let (name, code) = parse_folder_name("Villa Alpha (204905-44538)");
+        assert_eq!(name, "Villa Alpha");
+        assert_eq!(code.unwrap(), "204905-44538");
+    }
+
+    // ── find_actual_folder_location (filesystem) ─────────────────────
+
+    #[test]
+    fn find_actual_folder_location_found_in_done() {
+        let tmp = tempfile::tempdir().unwrap();
+        let done_path = tmp.path().join("DONE");
+        let property_dir = done_path.join("Athens").join("Villa");
+        std::fs::create_dir_all(&property_dir).unwrap();
+
+        let config = AppConfig {
+            new_folder_path: tmp.path().join("NEW").to_string_lossy().to_string(),
+            done_folder_path: done_path.to_string_lossy().to_string(),
+            not_found_folder_path: tmp.path().join("NF").to_string_lossy().to_string(),
+            archive_folder_path: tmp.path().join("ARCHIVE").to_string_lossy().to_string(),
+            ..AppConfig::default()
+        };
+
+        let result = find_actual_folder_location(&config, "Athens/Villa");
+        assert!(result.is_some());
+        let (path, status) = result.unwrap();
+        assert_eq!(status, "DONE");
+        assert_eq!(path, property_dir);
+    }
+
+    #[test]
+    fn find_actual_folder_location_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            new_folder_path: tmp.path().join("NEW").to_string_lossy().to_string(),
+            done_folder_path: tmp.path().join("DONE").to_string_lossy().to_string(),
+            not_found_folder_path: tmp.path().join("NF").to_string_lossy().to_string(),
+            archive_folder_path: tmp.path().join("ARCHIVE").to_string_lossy().to_string(),
+            ..AppConfig::default()
+        };
+
+        let result = find_actual_folder_location(&config, "Athens/Villa");
+        assert!(result.is_none());
+    }
+
+    // ── create_property_folder_structure (filesystem) ────────────────
+
+    #[tokio::test]
+    async fn create_folder_structure_creates_all_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let property_path = tmp.path().join("TestProperty");
+
+        create_property_folder_structure(&property_path.to_path_buf())
+            .await
+            .unwrap();
+
+        assert!(property_path.exists());
+        assert!(property_path.join("INTERNET").exists());
+        assert!(property_path.join("WATERMARK").exists());
+        assert!(property_path.join("INTERNET").join("AGGELIA").exists());
+        assert!(property_path.join("WATERMARK").join("AGGELIA").exists());
+    }
+
+    #[tokio::test]
+    async fn create_folder_structure_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let property_path = tmp.path().join("TestProperty");
+
+        create_property_folder_structure(&property_path.to_path_buf())
+            .await
+            .unwrap();
+        // Call again - should not error
+        create_property_folder_structure(&property_path.to_path_buf())
+            .await
+            .unwrap();
+
+        assert!(property_path.join("INTERNET").join("AGGELIA").exists());
+    }
+
+    // ── Database tests (in-memory SQLite) ────────────────────────────
+
+    async fn setup_test_db() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create in-memory database");
+        run_migrations(&pool)
+            .await
+            .expect("Migrations failed");
+        pool
+    }
+
+    #[tokio::test]
+    async fn migrations_create_all_tables() {
+        let pool = setup_test_db().await;
+
+        // Verify properties table exists with expected columns
+        let cols: Vec<String> = sqlx::query("PRAGMA table_info(properties)")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.get::<String, _>("name"))
+            .collect();
+
+        assert!(cols.contains(&"id".to_string()));
+        assert!(cols.contains(&"name".to_string()));
+        assert!(cols.contains(&"city".to_string()));
+        assert!(cols.contains(&"status".to_string()));
+        assert!(cols.contains(&"folder_path".to_string()));
+        assert!(cols.contains(&"code".to_string()));
+        assert!(cols.contains(&"created_at".to_string()));
+        assert!(cols.contains(&"updated_at".to_string()));
+
+        // Verify cities table
+        let city_cols: Vec<String> = sqlx::query("PRAGMA table_info(cities)")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.get::<String, _>("name"))
+            .collect();
+
+        assert!(city_cols.contains(&"name".to_string()));
+        assert!(city_cols.contains(&"usage_count".to_string()));
+
+        // Verify sets and set_properties tables exist
+        let tables: Vec<String> =
+            sqlx::query("SELECT name FROM sqlite_master WHERE type='table'")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| r.get::<String, _>("name"))
+                .collect();
+
+        assert!(tables.contains(&"sets".to_string()));
+        assert!(tables.contains(&"set_properties".to_string()));
+    }
+
+    #[tokio::test]
+    async fn migrations_are_idempotent() {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_migrations(&pool).await.unwrap();
+        // Run again - should not error
+        run_migrations(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn add_property_inserts_correctly() {
+        let pool = setup_test_db().await;
+
+        add_property_to_database(&pool, "Villa Alpha", "Athens", "NEW", "Villa Alpha", None)
+            .await
+            .unwrap();
+
+        let row = sqlx::query("SELECT name, city, status, folder_path FROM properties WHERE name = 'Villa Alpha'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(row.get::<String, _>("name"), "Villa Alpha");
+        assert_eq!(row.get::<String, _>("city"), "Athens");
+        assert_eq!(row.get::<String, _>("status"), "NEW");
+        assert_eq!(row.get::<String, _>("folder_path"), "Athens/Villa Alpha");
+    }
+
+    #[tokio::test]
+    async fn add_property_creates_city() {
+        let pool = setup_test_db().await;
+
+        add_property_to_database(&pool, "Villa", "Athens", "NEW", "Villa", None)
+            .await
+            .unwrap();
+
+        let row = sqlx::query("SELECT usage_count FROM cities WHERE name = 'Athens'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(row.get::<i32, _>("usage_count"), 1);
+    }
+
+    #[tokio::test]
+    async fn add_property_increments_city_usage() {
+        let pool = setup_test_db().await;
+
+        add_property_to_database(&pool, "Villa A", "Athens", "NEW", "Villa A", None)
+            .await
+            .unwrap();
+        add_property_to_database(&pool, "Villa B", "Athens", "DONE", "Villa B", None)
+            .await
+            .unwrap();
+
+        let row = sqlx::query("SELECT usage_count FROM cities WHERE name = 'Athens'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(row.get::<i32, _>("usage_count"), 2);
+    }
+
+    #[tokio::test]
+    async fn add_property_with_code() {
+        let pool = setup_test_db().await;
+
+        add_property_to_database(
+            &pool,
+            "Villa Alpha",
+            "Athens",
+            "DONE",
+            "Villa Alpha (45164)",
+            Some("45164"),
+        )
+        .await
+        .unwrap();
+
+        let row = sqlx::query("SELECT code, folder_path FROM properties WHERE name = 'Villa Alpha'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(row.get::<Option<String>, _>("code"), Some("45164".to_string()));
+        assert_eq!(row.get::<String, _>("folder_path"), "Athens/Villa Alpha (45164)");
+    }
+
+    #[tokio::test]
+    async fn get_existing_properties_set_empty_db() {
+        let pool = setup_test_db().await;
+        let set = get_existing_properties_set(&pool).await.unwrap();
+        assert!(set.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_existing_properties_set_returns_folder_paths() {
+        let pool = setup_test_db().await;
+
+        add_property_to_database(&pool, "Villa A", "Athens", "NEW", "Villa A", None)
+            .await
+            .unwrap();
+        add_property_to_database(&pool, "Villa B", "Rome", "DONE", "Villa B", None)
+            .await
+            .unwrap();
+
+        let set = get_existing_properties_set(&pool).await.unwrap();
+        assert_eq!(set.len(), 2);
+        assert!(set.contains("Athens/Villa A"));
+        assert!(set.contains("Rome/Villa B"));
+    }
+
+    // ── is_image_extension ───────────────────────────────────────────
+
+    #[test]
+    fn image_extension_jpg() {
+        assert!(is_image_extension("jpg"));
+        assert!(is_image_extension("JPG"));
+        assert!(is_image_extension("Jpeg"));
+    }
+
+    #[test]
+    fn image_extension_png_bmp_gif_webp_heic() {
+        assert!(is_image_extension("png"));
+        assert!(is_image_extension("bmp"));
+        assert!(is_image_extension("gif"));
+        assert!(is_image_extension("webp"));
+        assert!(is_image_extension("heic"));
+    }
+
+    #[test]
+    fn image_extension_rejects_non_images() {
+        assert!(!is_image_extension("txt"));
+        assert!(!is_image_extension("pdf"));
+        assert!(!is_image_extension("mp4"));
+        assert!(!is_image_extension("svg"));
+        assert!(!is_image_extension("tiff"));
+        assert!(!is_image_extension(""));
+    }
+
+    // ── list_image_filenames ─────────────────────────────────────────
+
+    #[test]
+    fn list_images_empty_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = list_image_filenames(tmp.path()).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn list_images_nonexistent_dir() {
+        let result = list_image_filenames(std::path::Path::new("/nonexistent/path")).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn list_images_filters_and_sorts() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Create image and non-image files
+        fs::write(tmp.path().join("b.jpg"), b"img").unwrap();
+        fs::write(tmp.path().join("a.png"), b"img").unwrap();
+        fs::write(tmp.path().join("c.txt"), b"text").unwrap();
+        fs::write(tmp.path().join("d.HEIC"), b"img").unwrap();
+
+        let result = list_image_filenames(tmp.path()).unwrap();
+        assert_eq!(result, vec!["a.png", "b.jpg", "d.HEIC"]);
+    }
+
+    #[test]
+    fn list_images_skips_subdirectories() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("photo.jpg"), b"img").unwrap();
+        fs::create_dir(tmp.path().join("subdir")).unwrap();
+
+        let result = list_image_filenames(tmp.path()).unwrap();
+        assert_eq!(result, vec!["photo.jpg"]);
+    }
+
+    // ── clear_files_in_dir ───────────────────────────────────────────
+
+    #[test]
+    fn clear_files_deletes_files_preserves_subdirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.jpg"), b"img").unwrap();
+        fs::write(tmp.path().join("b.png"), b"img").unwrap();
+        let subdir = tmp.path().join("AGGELIA");
+        fs::create_dir(&subdir).unwrap();
+        fs::write(subdir.join("inside.jpg"), b"img").unwrap();
+
+        let (deleted, errors) = clear_files_in_dir(tmp.path());
+        assert_eq!(deleted, 2);
+        assert!(errors.is_empty());
+        // Files deleted
+        assert!(!tmp.path().join("a.jpg").exists());
+        assert!(!tmp.path().join("b.png").exists());
+        // Subdirectory and its contents preserved
+        assert!(subdir.exists());
+        assert!(subdir.join("inside.jpg").exists());
+    }
+
+    #[test]
+    fn clear_files_nonexistent_dir() {
+        let (deleted, errors) = clear_files_in_dir(std::path::Path::new("/nonexistent"));
+        assert_eq!(deleted, 0);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn clear_files_empty_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (deleted, errors) = clear_files_in_dir(tmp.path());
+        assert_eq!(deleted, 0);
+        assert!(errors.is_empty());
+    }
+
+    // ── rename_files_two_pass ────────────────────────────────────────
+
+    #[test]
+    fn rename_two_pass_simple() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("01.jpg"), b"one").unwrap();
+        fs::write(tmp.path().join("02.jpg"), b"two").unwrap();
+
+        let map = vec![
+            ("01.jpg".to_string(), "A.jpg".to_string()),
+            ("02.jpg".to_string(), "B.jpg".to_string()),
+        ];
+
+        let (renamed, errors) = rename_files_two_pass(tmp.path(), &map);
+        assert_eq!(renamed, 2);
+        assert!(errors.is_empty());
+        assert!(tmp.path().join("A.jpg").exists());
+        assert!(tmp.path().join("B.jpg").exists());
+        assert!(!tmp.path().join("01.jpg").exists());
+        assert!(!tmp.path().join("02.jpg").exists());
+    }
+
+    #[test]
+    fn rename_two_pass_swap() {
+        // The classic A↔B swap that single-pass rename can't handle
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("A.jpg"), b"content_a").unwrap();
+        fs::write(tmp.path().join("B.jpg"), b"content_b").unwrap();
+
+        let map = vec![
+            ("A.jpg".to_string(), "B.jpg".to_string()),
+            ("B.jpg".to_string(), "A.jpg".to_string()),
+        ];
+
+        let (renamed, errors) = rename_files_two_pass(tmp.path(), &map);
+        assert_eq!(renamed, 2);
+        assert!(errors.is_empty());
+        // Verify contents were actually swapped
+        assert_eq!(fs::read(tmp.path().join("A.jpg")).unwrap(), b"content_b");
+        assert_eq!(fs::read(tmp.path().join("B.jpg")).unwrap(), b"content_a");
+    }
+
+    #[test]
+    fn rename_two_pass_missing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("exists.jpg"), b"data").unwrap();
+
+        let map = vec![
+            ("exists.jpg".to_string(), "renamed.jpg".to_string()),
+            ("missing.jpg".to_string(), "also_renamed.jpg".to_string()),
+        ];
+
+        let (renamed, errors) = rename_files_two_pass(tmp.path(), &map);
+        assert_eq!(renamed, 1);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("File not found: missing.jpg"));
+        assert!(tmp.path().join("renamed.jpg").exists());
+    }
+
+    #[test]
+    fn rename_two_pass_no_temp_files_left() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("01.jpg"), b"data").unwrap();
+
+        let map = vec![("01.jpg".to_string(), "final.jpg".to_string())];
+
+        let (renamed, errors) = rename_files_two_pass(tmp.path(), &map);
+        assert_eq!(renamed, 1);
+        assert!(errors.is_empty());
+
+        // Verify no temp files remain
+        for entry in fs::read_dir(tmp.path()).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().to_string();
+            assert!(!name.contains("temp_rename_"), "Temp file left behind: {}", name);
+        }
+    }
+
+    // ── copy_new_images_to_dir ───────────────────────────────────────
+
+    #[test]
+    fn copy_images_copies_only_images() {
+        let src = tempfile::tempdir().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+
+        fs::write(src.path().join("photo.jpg"), b"img_data").unwrap();
+        fs::write(src.path().join("doc.pdf"), b"pdf_data").unwrap();
+        fs::write(src.path().join("pic.PNG"), b"png_data").unwrap();
+
+        let (copied, errors) = copy_new_images_to_dir(src.path(), dest.path());
+        assert_eq!(copied, 2);
+        assert!(errors.is_empty());
+        assert!(dest.path().join("photo.jpg").exists());
+        assert!(dest.path().join("pic.PNG").exists());
+        assert!(!dest.path().join("doc.pdf").exists());
+    }
+
+    #[test]
+    fn copy_images_skips_existing() {
+        let src = tempfile::tempdir().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+
+        fs::write(src.path().join("photo.jpg"), b"new_data").unwrap();
+        fs::write(dest.path().join("photo.jpg"), b"old_data").unwrap();
+
+        let (copied, errors) = copy_new_images_to_dir(src.path(), dest.path());
+        assert_eq!(copied, 0);
+        assert!(errors.is_empty());
+        // Existing file not overwritten
+        assert_eq!(fs::read(dest.path().join("photo.jpg")).unwrap(), b"old_data");
+    }
+
+    #[test]
+    fn copy_images_empty_source() {
+        let src = tempfile::tempdir().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+
+        let (copied, errors) = copy_new_images_to_dir(src.path(), dest.path());
+        assert_eq!(copied, 0);
+        assert!(errors.is_empty());
+    }
+
+    // ── DB: delete property ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn delete_property_removes_from_db() {
+        let pool = setup_test_db().await;
+
+        add_property_to_database(&pool, "Villa", "Athens", "NEW", "Villa", None)
+            .await
+            .unwrap();
+
+        // Get property id
+        let row = sqlx::query("SELECT id FROM properties WHERE name = 'Villa'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let id: i64 = row.get("id");
+
+        // Delete it
+        sqlx::query("DELETE FROM properties WHERE id = ?")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Verify gone
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM properties WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_nonexistent_property_succeeds() {
+        let pool = setup_test_db().await;
+        // DELETE on non-existent id should not error (affects 0 rows)
+        let result = sqlx::query("DELETE FROM properties WHERE id = ?")
+            .bind(99999_i64)
+            .execute(&pool)
+            .await;
+        assert!(result.is_ok());
+    }
+
+    // ── DB: update property status ───────────────────────────────────
+
+    #[tokio::test]
+    async fn update_status_in_db() {
+        let pool = setup_test_db().await;
+
+        add_property_to_database(&pool, "Villa", "Athens", "NEW", "Villa", None)
+            .await
+            .unwrap();
+
+        let row = sqlx::query("SELECT id FROM properties WHERE name = 'Villa'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let id: i64 = row.get("id");
+
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::query("UPDATE properties SET status = ?, updated_at = ? WHERE id = ?")
+            .bind("DONE")
+            .bind(now)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let row = sqlx::query("SELECT status FROM properties WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<String, _>("status"), "DONE");
+    }
+
+    #[tokio::test]
+    async fn update_status_updates_timestamp() {
+        let pool = setup_test_db().await;
+
+        add_property_to_database(&pool, "Villa", "Athens", "NEW", "Villa", None)
+            .await
+            .unwrap();
+
+        let row = sqlx::query("SELECT id, updated_at FROM properties WHERE name = 'Villa'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let id: i64 = row.get("id");
+        let old_updated: i64 = row.get("updated_at");
+
+        // Small delay to ensure different timestamp
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::query("UPDATE properties SET status = ?, updated_at = ? WHERE id = ?")
+            .bind("ARCHIVE")
+            .bind(now)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let row = sqlx::query("SELECT updated_at FROM properties WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let new_updated: i64 = row.get("updated_at");
+        assert!(new_updated > old_updated);
+    }
+
+    // ── DB: set property code ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn set_code_updates_db() {
+        let pool = setup_test_db().await;
+
+        add_property_to_database(&pool, "Villa", "Athens", "NEW", "Villa", None)
+            .await
+            .unwrap();
+
+        let row = sqlx::query("SELECT id FROM properties WHERE name = 'Villa'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let id: i64 = row.get("id");
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let new_folder_path = format!("Athens/Villa (45164)");
+        sqlx::query("UPDATE properties SET code = ?, folder_path = ?, updated_at = ? WHERE id = ?")
+            .bind("45164")
+            .bind(&new_folder_path)
+            .bind(now)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let row = sqlx::query("SELECT code, folder_path FROM properties WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<Option<String>, _>("code"), Some("45164".to_string()));
+        assert_eq!(row.get::<String, _>("folder_path"), "Athens/Villa (45164)");
+    }
+
+    #[tokio::test]
+    async fn set_code_with_slash_produces_hyphenated_folder() {
+        // Verify the code.replace('/', "-") logic from set_property_code
+        let code = "204905/44538";
+        let folder_safe_code = code.replace('/', "-");
+        let new_folder_name = format!("Villa ({})", folder_safe_code);
+        assert_eq!(new_folder_name, "Villa (204905-44538)");
+
+        // And parse_folder_name can now read it back (after our earlier fix)
+        let (name, parsed_code) = parse_folder_name(&new_folder_name);
+        assert_eq!(name, "Villa");
+        assert_eq!(parsed_code.unwrap(), "204905-44538");
+    }
+
+    // ── scan_folder_for_properties (tempdir + in-memory SQLite) ──────
+
+    #[tokio::test]
+    async fn scan_finds_new_properties() {
+        let pool = setup_test_db().await;
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Create folder structure: base/CityA/PropertyX, base/CityA/PropertyY
+        let city_dir = tmp.path().join("CityA");
+        fs::create_dir_all(city_dir.join("PropertyX")).unwrap();
+        fs::create_dir_all(city_dir.join("PropertyY")).unwrap();
+
+        let existing = HashSet::new();
+        let result = scan_folder_for_properties(
+            &tmp.path().to_path_buf(),
+            "NEW",
+            &existing,
+            &pool,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.found_properties, 2);
+        assert_eq!(result.new_properties, 2);
+        assert_eq!(result.existing_properties, 0);
+        assert!(result.errors.is_empty());
+
+        // Verify DB has the properties
+        let set = get_existing_properties_set(&pool).await.unwrap();
+        assert!(set.contains("CityA/PropertyX"));
+        assert!(set.contains("CityA/PropertyY"));
+    }
+
+    #[tokio::test]
+    async fn scan_skips_existing_properties() {
+        let pool = setup_test_db().await;
+        let tmp = tempfile::tempdir().unwrap();
+
+        let city_dir = tmp.path().join("CityA");
+        fs::create_dir_all(city_dir.join("PropertyX")).unwrap();
+        fs::create_dir_all(city_dir.join("PropertyY")).unwrap();
+
+        // Mark PropertyX as already existing
+        let mut existing = HashSet::new();
+        existing.insert("CityA/PropertyX".to_string());
+
+        let result = scan_folder_for_properties(
+            &tmp.path().to_path_buf(),
+            "NEW",
+            &existing,
+            &pool,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.found_properties, 2);
+        assert_eq!(result.new_properties, 1); // Only PropertyY is new
+        assert_eq!(result.existing_properties, 1);
+    }
+
+    #[tokio::test]
+    async fn scan_parses_code_from_folder_name() {
+        let pool = setup_test_db().await;
+        let tmp = tempfile::tempdir().unwrap();
+
+        let city_dir = tmp.path().join("CityA");
+        fs::create_dir_all(city_dir.join("Villa Alpha (45164)")).unwrap();
+
+        let result = scan_folder_for_properties(
+            &tmp.path().to_path_buf(),
+            "DONE",
+            &HashSet::new(),
+            &pool,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.new_properties, 1);
+
+        // Verify code was parsed and stored
+        let row = sqlx::query("SELECT name, code, folder_path FROM properties")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<String, _>("name"), "Villa Alpha");
+        assert_eq!(row.get::<Option<String>, _>("code"), Some("45164".to_string()));
+        assert_eq!(row.get::<String, _>("folder_path"), "CityA/Villa Alpha (45164)");
+    }
+
+    #[tokio::test]
+    async fn scan_skips_non_directory_entries() {
+        let pool = setup_test_db().await;
+        let tmp = tempfile::tempdir().unwrap();
+
+        let city_dir = tmp.path().join("CityA");
+        fs::create_dir_all(&city_dir).unwrap();
+        // Create a file at city level (not a property folder)
+        fs::write(city_dir.join("notes.txt"), b"not a property").unwrap();
+        // Also create a file at root level (not a city)
+        fs::write(tmp.path().join("readme.txt"), b"not a city").unwrap();
+        // Create one real property
+        fs::create_dir_all(city_dir.join("RealProperty")).unwrap();
+
+        let result = scan_folder_for_properties(
+            &tmp.path().to_path_buf(),
+            "NEW",
+            &HashSet::new(),
+            &pool,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.found_properties, 1);
+        assert_eq!(result.new_properties, 1);
+    }
+
+    #[tokio::test]
+    async fn scan_empty_folder() {
+        let pool = setup_test_db().await;
+        let tmp = tempfile::tempdir().unwrap();
+
+        let result = scan_folder_for_properties(
+            &tmp.path().to_path_buf(),
+            "NEW",
+            &HashSet::new(),
+            &pool,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.found_properties, 0);
+        assert_eq!(result.new_properties, 0);
+    }
+
+    #[tokio::test]
+    async fn scan_multiple_cities() {
+        let pool = setup_test_db().await;
+        let tmp = tempfile::tempdir().unwrap();
+
+        fs::create_dir_all(tmp.path().join("Athens").join("Villa A")).unwrap();
+        fs::create_dir_all(tmp.path().join("Rome").join("Villa B")).unwrap();
+        fs::create_dir_all(tmp.path().join("Rome").join("Villa C")).unwrap();
+
+        let result = scan_folder_for_properties(
+            &tmp.path().to_path_buf(),
+            "NEW",
+            &HashSet::new(),
+            &pool,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.found_properties, 3);
+        assert_eq!(result.new_properties, 3);
+
+        // Verify cities were created with correct usage counts
+        let row = sqlx::query("SELECT usage_count FROM cities WHERE name = 'Rome'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<i32, _>("usage_count"), 2);
+    }
 }

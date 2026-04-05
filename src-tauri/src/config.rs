@@ -126,6 +126,14 @@ fn load_config_from_disk(app: &tauri::AppHandle) -> Result<Option<AppConfig>, St
     let mut config: AppConfig =
         serde_json::from_str(&content).map_err(|e| format!("Failed to parse config: {}", e))?;
 
+    migrate_config(&mut config);
+
+    Ok(Some(config))
+}
+
+/// Migrate legacy config fields to current format.
+/// Extracted from load_config_from_disk so it can be tested independently.
+fn migrate_config(config: &mut AppConfig) {
     // Migrate old watermark_opacity to new config if present
     if let Some(old_opacity) = config.watermark_opacity {
         config.watermark_config.opacity = old_opacity;
@@ -160,8 +168,6 @@ fn load_config_from_disk(app: &tauri::AppHandle) -> Result<Option<AppConfig>, St
         }
         config.root_path = None; // Clear legacy field after migration
     }
-
-    Ok(Some(config))
 }
 
 /// Get the config from the in-memory cache, loading from disk on first access.
@@ -352,4 +358,146 @@ pub async fn setup_folder_structure(root_path: String) -> Result<CommandResult, 
         success: true,
         error: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Default values ───────────────────────────────────────────────
+
+    #[test]
+    fn app_config_default_has_empty_paths() {
+        let config = AppConfig::default();
+        assert!(config.new_folder_path.is_empty());
+        assert!(config.done_folder_path.is_empty());
+        assert!(config.not_found_folder_path.is_empty());
+        assert!(config.archive_folder_path.is_empty());
+        assert!(config.sets_folder_path.is_empty());
+        assert!(!config.is_valid_path);
+        assert!(config.use_builtin_editor);
+        assert!(config.root_path.is_none());
+        assert!(config.watermark_opacity.is_none());
+    }
+
+    #[test]
+    fn watermark_config_default_values() {
+        let wc = WatermarkConfig::default();
+        assert_eq!(wc.size_mode, "proportional");
+        assert!((wc.size_percentage - 0.35).abs() < f32::EPSILON);
+        assert_eq!(wc.relative_to, "longest-side");
+        assert_eq!(wc.position_anchor, "center");
+        assert_eq!(wc.offset_x, 0);
+        assert_eq!(wc.offset_y, 0);
+        assert!((wc.opacity - 0.15).abs() < f32::EPSILON);
+        assert!(wc.use_alpha_channel);
+    }
+
+    // ── Serialization roundtrip ──────────────────────────────────────
+
+    #[test]
+    fn config_roundtrip_json() {
+        let original = AppConfig {
+            new_folder_path: "C:\\Photos\\NEW".to_string(),
+            done_folder_path: "C:\\Photos\\DONE".to_string(),
+            not_found_folder_path: "C:\\Photos\\NF".to_string(),
+            archive_folder_path: "C:\\Photos\\ARCHIVE".to_string(),
+            sets_folder_path: "C:\\Photos\\SETS".to_string(),
+            is_valid_path: true,
+            use_builtin_editor: false,
+            fast_editor_path: Some("C:\\editor.exe".to_string()),
+            ..AppConfig::default()
+        };
+
+        let json = serde_json::to_string_pretty(&original).unwrap();
+        let restored: AppConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.new_folder_path, original.new_folder_path);
+        assert_eq!(restored.done_folder_path, original.done_folder_path);
+        assert_eq!(restored.is_valid_path, original.is_valid_path);
+        assert_eq!(restored.use_builtin_editor, original.use_builtin_editor);
+        assert_eq!(restored.fast_editor_path, original.fast_editor_path);
+    }
+
+    #[test]
+    fn config_deserialize_missing_fields_uses_defaults() {
+        // Minimal JSON with only required fields
+        let json = r#"{"isValidPath": false}"#;
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+
+        assert!(config.new_folder_path.is_empty());
+        assert!(config.use_builtin_editor); // default_true
+        assert_eq!(config.watermark_config.size_mode, "proportional");
+    }
+
+    // ── Config migration ─────────────────────────────────────────────
+
+    #[test]
+    fn migrate_watermark_opacity() {
+        let mut config = AppConfig {
+            watermark_opacity: Some(0.5),
+            ..AppConfig::default()
+        };
+
+        migrate_config(&mut config);
+
+        assert!((config.watermark_config.opacity - 0.5).abs() < f32::EPSILON);
+        assert!(config.watermark_opacity.is_none());
+    }
+
+    #[test]
+    fn migrate_root_path_to_folder_paths() {
+        let mut config = AppConfig {
+            root_path: Some("C:\\Photos".to_string()),
+            ..AppConfig::default()
+        };
+
+        migrate_config(&mut config);
+
+        assert!(config.new_folder_path.contains("FOTOGRAFIES - NEW"));
+        assert!(config.done_folder_path.contains("FOTOGRAFIES - DONE"));
+        assert!(config.not_found_folder_path.contains("NOT FOUND"));
+        assert!(config.archive_folder_path.contains("ARCHIVE"));
+        assert!(config.root_path.is_none());
+    }
+
+    #[test]
+    fn migrate_root_path_does_not_overwrite_existing() {
+        let mut config = AppConfig {
+            root_path: Some("C:\\OldRoot".to_string()),
+            new_folder_path: "D:\\Custom\\NEW".to_string(),
+            done_folder_path: "D:\\Custom\\DONE".to_string(),
+            ..AppConfig::default()
+        };
+
+        migrate_config(&mut config);
+
+        // Existing paths should be preserved
+        assert_eq!(config.new_folder_path, "D:\\Custom\\NEW");
+        assert_eq!(config.done_folder_path, "D:\\Custom\\DONE");
+        // Empty paths should be migrated from root_path
+        assert!(config.not_found_folder_path.contains("NOT FOUND"));
+        assert!(config.archive_folder_path.contains("ARCHIVE"));
+        assert!(config.root_path.is_none());
+    }
+
+    #[test]
+    fn migrate_already_migrated_config_is_noop() {
+        let mut config = AppConfig {
+            new_folder_path: "D:\\A".to_string(),
+            done_folder_path: "D:\\B".to_string(),
+            not_found_folder_path: "D:\\C".to_string(),
+            archive_folder_path: "D:\\D".to_string(),
+            ..AppConfig::default()
+        };
+
+        migrate_config(&mut config);
+
+        assert_eq!(config.new_folder_path, "D:\\A");
+        assert_eq!(config.done_folder_path, "D:\\B");
+        assert_eq!(config.not_found_folder_path, "D:\\C");
+        assert_eq!(config.archive_folder_path, "D:\\D");
+        assert!(config.root_path.is_none());
+        assert!(config.watermark_opacity.is_none());
+    }
 }
