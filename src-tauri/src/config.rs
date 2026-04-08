@@ -4,6 +4,10 @@ use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::RwLock;
 
+use crate::folder_conventions::{
+    AGGELIA, ARCHIVE, FOTOGRAFIES_DONE, FOTOGRAFIES_NEW, INTERNET, NOT_FOUND, WATERMARK,
+};
+
 /// Cached config state managed by Tauri. Avoids re-reading config.json from disk
 /// on every single command invocation (dozens of times per user interaction).
 pub type ConfigCache = Arc<RwLock<Option<AppConfig>>>;
@@ -144,25 +148,25 @@ fn migrate_config(config: &mut AppConfig) {
     if let Some(old_root) = config.root_path.clone() {
         if config.new_folder_path.is_empty() {
             config.new_folder_path = PathBuf::from(&old_root)
-                .join("FOTOGRAFIES - NEW")
+                .join(FOTOGRAFIES_NEW)
                 .to_string_lossy()
                 .to_string();
         }
         if config.done_folder_path.is_empty() {
             config.done_folder_path = PathBuf::from(&old_root)
-                .join("FOTOGRAFIES - DONE")
+                .join(FOTOGRAFIES_DONE)
                 .to_string_lossy()
                 .to_string();
         }
         if config.not_found_folder_path.is_empty() {
             config.not_found_folder_path = PathBuf::from(&old_root)
-                .join("NOT FOUND")
+                .join(NOT_FOUND)
                 .to_string_lossy()
                 .to_string();
         }
         if config.archive_folder_path.is_empty() {
             config.archive_folder_path = PathBuf::from(&old_root)
-                .join("ARCHIVE")
+                .join(ARCHIVE)
                 .to_string_lossy()
                 .to_string();
         }
@@ -319,39 +323,39 @@ pub async fn setup_folder_structure(root_path: String) -> Result<CommandResult, 
     }
 
     // Create main folders
-    let fotografies_done = root.join("FOTOGRAFIES - DONE");
-    let fotografies_new = root.join("FOTOGRAFIES - NEW");
+    let fotografies_done = root.join(FOTOGRAFIES_DONE);
+    let fotografies_new = root.join(FOTOGRAFIES_NEW);
 
     std::fs::create_dir_all(&fotografies_done)
-        .map_err(|e| format!("Failed to create FOTOGRAFIES - DONE: {}", e))?;
+        .map_err(|e| format!("Failed to create {}: {}", FOTOGRAFIES_DONE, e))?;
 
     std::fs::create_dir_all(&fotografies_new)
-        .map_err(|e| format!("Failed to create FOTOGRAFIES - NEW: {}", e))?;
+        .map_err(|e| format!("Failed to create {}: {}", FOTOGRAFIES_NEW, e))?;
 
     // Create a test property structure to verify everything works
-    let test_property_done = fotografies_done.join("TEST/EXAMPLE-1");
-    let test_property_new = fotografies_new.join("TEST/EXAMPLE-1");
+    let test_property_done = fotografies_done.join("TEST").join("EXAMPLE-1");
+    let test_property_new = fotografies_new.join("TEST").join("EXAMPLE-1");
 
     for property_path in [&test_property_done, &test_property_new] {
         std::fs::create_dir_all(property_path)
             .map_err(|e| format!("Failed to create test property directory: {}", e))?;
 
         // Create internet and watermark folders
-        let internet_path = property_path.join("INTERNET");
-        let watermark_path = property_path.join("WATERMARK");
+        let internet_path = property_path.join(INTERNET);
+        let watermark_path = property_path.join(WATERMARK);
 
         std::fs::create_dir_all(&internet_path)
-            .map_err(|e| format!("Failed to create internet folder: {}", e))?;
+            .map_err(|e| format!("Failed to create {} folder: {}", INTERNET, e))?;
 
         std::fs::create_dir_all(&watermark_path)
-            .map_err(|e| format!("Failed to create watermark folder: {}", e))?;
+            .map_err(|e| format!("Failed to create {} folder: {}", WATERMARK, e))?;
 
         // Create AGGELIA folders inside both internet and watermark
-        std::fs::create_dir_all(internet_path.join("AGGELIA"))
-            .map_err(|e| format!("Failed to create internet/aggelia folder: {}", e))?;
+        std::fs::create_dir_all(internet_path.join(AGGELIA))
+            .map_err(|e| format!("Failed to create {}/{} folder: {}", INTERNET, AGGELIA, e))?;
 
-        std::fs::create_dir_all(watermark_path.join("AGGELIA"))
-            .map_err(|e| format!("Failed to create watermark/aggelia folder: {}", e))?;
+        std::fs::create_dir_all(watermark_path.join(AGGELIA))
+            .map_err(|e| format!("Failed to create {}/{} folder: {}", WATERMARK, AGGELIA, e))?;
     }
 
     Ok(CommandResult {

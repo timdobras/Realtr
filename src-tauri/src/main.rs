@@ -4,6 +4,7 @@ mod config;
 mod database;
 mod fast_resize;
 mod error;
+mod folder_conventions;
 mod gpu;
 mod image_editor;
 mod paths;
