@@ -495,6 +495,16 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), String> {
         .await
         .map_err(|e| format!("Failed to create cities name index: {}", e))?;
 
+    // Used by `SELECT * FROM properties ORDER BY created_at DESC` (property list)
+    // and `... WHERE status = ? ORDER BY created_at DESC`. The status index alone
+    // does not let SQLite avoid a sort.
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_properties_created_at ON properties(created_at DESC)",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to create properties created_at index: {}", e))?;
+
     // Migration: Add status column if it doesn't exist
     // First check if the column exists
     let column_check = sqlx::query("PRAGMA table_info(properties)")
