@@ -2252,6 +2252,9 @@ pub async fn open_images_in_folder(
     }
 }
 
+// Deprecated: frontend now uses get_gallery_thumbnail_path + convertFileSrc.
+// Kept for source-history hygiene; deleted when database.rs is split.
+#[allow(dead_code)]
 #[tauri::command]
 pub async fn get_image_as_base64(
     app: tauri::AppHandle,
@@ -2292,6 +2295,8 @@ pub async fn list_internet_images(
     .map_err(|e| format!("Task join error: {e}"))?
 }
 
+// Deprecated: frontend now uses get_gallery_thumbnail_path + convertFileSrc.
+#[allow(dead_code)]
 #[tauri::command]
 pub async fn get_internet_image_as_base64(
     app: tauri::AppHandle,
@@ -2395,6 +2400,8 @@ pub async fn list_thumbnails(
     .map_err(|e| format!("Task join error: {e}"))?
 }
 
+// Deprecated: frontend now uses get_gallery_thumbnail_path + convertFileSrc.
+#[allow(dead_code)]
 #[tauri::command]
 pub async fn get_thumbnail_as_base64(
     app: tauri::AppHandle,
@@ -2459,6 +2466,9 @@ pub async fn get_thumbnail_as_base64(
 /// Get a gallery-sized thumbnail for workflow step displays.
 /// This is larger than the property list thumbnails (400px vs 100px)
 /// and supports different subfolders (INTERNET, AGGELIA, WATERMARK, etc.)
+///
+/// Deprecated: frontend now uses get_gallery_thumbnail_path + convertFileSrc.
+#[allow(dead_code)]
 #[tauri::command]
 pub async fn get_gallery_thumbnail_as_base64(
     app: tauri::AppHandle,
@@ -3057,6 +3067,8 @@ pub async fn list_aggelia_images(
     .map_err(|e| format!("Task join error: {e}"))?
 }
 
+// Deprecated: frontend now uses get_gallery_thumbnail_path + convertFileSrc.
+#[allow(dead_code)]
 #[tauri::command]
 pub async fn get_aggelia_image_as_base64(
     app: tauri::AppHandle,
@@ -3982,6 +3994,8 @@ pub async fn list_watermark_aggelia_images(
     .map_err(|e| format!("Task join error: {e}"))?
 }
 
+// Deprecated: frontend now uses get_gallery_thumbnail_path + convertFileSrc.
+#[allow(dead_code)]
 #[tauri::command]
 pub async fn get_watermark_image_as_base64(
     app: tauri::AppHandle,

@@ -213,23 +213,6 @@ export class DatabaseService {
     });
   }
 
-  // Gallery thumbnail for workflow steps (400px by default, cached)
-  static async getGalleryThumbnail(
-    folderPath: string,
-    status: string,
-    subfolder: string,
-    filename: string,
-    maxDimension?: number
-  ): Promise<string> {
-    return await invoke<string>('get_gallery_thumbnail_as_base64', {
-      folderPath,
-      status,
-      subfolder,
-      filename,
-      maxDimension
-    });
-  }
-
   // Gallery thumbnail path for asset protocol serving (no base64 overhead)
   static async getGalleryThumbnailPath(
     folderPath: string,
