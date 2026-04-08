@@ -1893,6 +1893,7 @@ fn parse_folder_name(folder_name: &str) -> (String, Option<String>) {
     (folder_name.to_string(), None)
 }
 
+#[cfg(test)]
 async fn add_property_to_database(
     pool: &SqlitePool,
     property_name: &str,
@@ -3559,6 +3560,10 @@ fn apply_watermark_to_image_with_cached_wm(
     Ok(())
 }
 
+// Unused legacy entry point kept until database.rs is split into modules,
+// at which point it will be deleted. Marked dead_code rather than removed
+// in this commit to keep the diff focused.
+#[allow(dead_code)]
 fn apply_watermark_to_image_with_config(
     source_path: &PathBuf,
     dest_path: &PathBuf,
