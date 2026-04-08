@@ -9,6 +9,11 @@
 //! The check is purely lexical — it does not require the path to exist on
 //! disk, so it is safe to use for both read and write operations.
 
+// `safe_join`/`safe_join_all` are validated by tests but not yet routed
+// through the database.rs filesystem call sites — that migration lands
+// in a follow-up commit. Suppress dead-code warnings until then.
+#![allow(dead_code)]
+
 use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]

@@ -8,6 +8,11 @@
 //! - implements `Display` so legacy `Result<_, String>` commands can still
 //!   convert via `.to_string()` during the migration.
 
+// AppError is introduced ahead of the command-by-command migration
+// from `Result<_, String>`. Suppress dead-code warnings on the
+// unused-yet variants and the AppResult alias until call sites adopt them.
+#![allow(dead_code)]
+
 use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
