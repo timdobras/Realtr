@@ -3,6 +3,7 @@
 mod config;
 mod database;
 mod fast_resize;
+mod error;
 mod gpu;
 mod image_editor;
 mod paths;
