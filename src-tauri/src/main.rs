@@ -5,6 +5,7 @@ mod database;
 mod fast_resize;
 mod gpu;
 mod image_editor;
+mod paths;
 mod perspective;
 mod turbo;
 
