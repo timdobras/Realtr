@@ -328,7 +328,9 @@ fn generate_thumbnail(
     Ok(())
 }
 
-// Helper function to construct full property path from config and property data
+// Helper function to construct full property path from config and property data.
+// City and name are user-supplied; route them through safe_join_all so a
+// malicious property name like "../../etc" cannot escape the configured base.
 fn construct_property_path_from_parts(
     config: &crate::config::AppConfig,
     status: &str,
@@ -336,7 +338,8 @@ fn construct_property_path_from_parts(
     name: &str,
 ) -> Result<PathBuf, String> {
     let base_path = get_base_path_for_status(config, status)?;
-    Ok(base_path.join(city).join(name))
+    crate::paths::safe_join_all(&base_path, [city, name])
+        .map_err(|e| format!("Invalid property path components: {e}"))
 }
 
 // Helper function to construct relative folder_path for database storage
@@ -344,15 +347,20 @@ fn get_relative_folder_path(city: &str, name: &str) -> String {
     format!("{}/{}", city, name)
 }
 
-// Helper function to convert folder_path (stored with /) to a proper PathBuf
-// This is needed because on Windows, PathBuf::join doesn't convert / to \
+// Helper function to convert folder_path (stored with /) to a proper PathBuf.
+// On Windows, PathBuf::join does not convert / to \, so we split manually.
+//
+// As of the path-safety pass this delegates to
+// `crate::paths::validate_relative_folder_path`, which rejects any
+// component that could escape its containing root (e.g. `..`, absolute
+// paths, Windows drive prefixes). On validation failure we return a
+// sentinel filename that cannot exist on disk so the eventual
+// `.exists()` check fails closed — every caller already short-circuits
+// with a "folder not found" style error in that case, which is exactly
+// what we want when the input was unsafe.
 fn folder_path_to_pathbuf(folder_path: &str) -> PathBuf {
-    let parts: Vec<&str> = folder_path.split('/').collect();
-    let mut path = PathBuf::new();
-    for part in parts {
-        path.push(part);
-    }
-    path
+    crate::paths::validate_relative_folder_path(folder_path)
+        .unwrap_or_else(|_| PathBuf::from("__realtr_unsafe_path__\0"))
 }
 
 // Helper function to construct full property base path from config, folder_path and status

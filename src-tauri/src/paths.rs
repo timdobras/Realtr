@@ -9,11 +9,6 @@
 //! The check is purely lexical — it does not require the path to exist on
 //! disk, so it is safe to use for both read and write operations.
 
-// `safe_join`/`safe_join_all` are validated by tests but not yet routed
-// through the database.rs filesystem call sites — that migration lands
-// in a follow-up commit. Suppress dead-code warnings until then.
-#![allow(dead_code)]
-
 use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
@@ -41,6 +36,38 @@ pub fn safe_join(root: &Path, untrusted: impl AsRef<Path>) -> Result<PathBuf, Pa
             Component::CurDir => {}
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
                 return Err(PathError::UnsafeSegment(untrusted.to_path_buf()));
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Validates a stored relative folder path (e.g. `"Athens/Villa Alpha"`)
+/// and returns it as a [`PathBuf`]. Splits on `/` so the same database
+/// strings work on both Unix and Windows. Each component is checked
+/// against the same rules as [`safe_join`].
+///
+/// Use this for any path read out of the database before joining it
+/// onto a trusted base path.
+///
+/// # Errors
+/// Returns [`PathError::UnsafeSegment`] if any component would escape
+/// a containing root.
+pub fn validate_relative_folder_path(folder_path: &str) -> Result<PathBuf, PathError> {
+    let mut result = PathBuf::new();
+    for raw in folder_path.split('/') {
+        if raw.is_empty() {
+            // Skip empty segments from leading/trailing/double slashes.
+            continue;
+        }
+        let candidate = Path::new(raw);
+        for component in candidate.components() {
+            match component {
+                Component::Normal(seg) => result.push(seg),
+                Component::CurDir => {}
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    return Err(PathError::UnsafeSegment(folder_path.into()));
+                }
             }
         }
     }
@@ -130,6 +157,55 @@ mod tests {
     fn safe_join_all_rejects_any_bad_segment() {
         let r = root();
         assert!(safe_join_all(&r, ["Athens", "..", "INTERNET"]).is_err());
+    }
+
+    #[test]
+    fn validate_relative_accepts_typical_db_path() {
+        let p = validate_relative_folder_path("Athens/Villa Alpha").unwrap();
+        assert_eq!(p, PathBuf::from("Athens").join("Villa Alpha"));
+    }
+
+    #[test]
+    fn validate_relative_accepts_single_segment() {
+        let p = validate_relative_folder_path("OnlyCity").unwrap();
+        assert_eq!(p, PathBuf::from("OnlyCity"));
+    }
+
+    #[test]
+    fn validate_relative_accepts_empty_string() {
+        let p = validate_relative_folder_path("").unwrap();
+        assert_eq!(p, PathBuf::new());
+    }
+
+    #[test]
+    fn validate_relative_skips_double_slashes() {
+        let p = validate_relative_folder_path("Athens//Villa").unwrap();
+        assert_eq!(p, PathBuf::from("Athens").join("Villa"));
+    }
+
+    #[test]
+    fn validate_relative_rejects_parent_traversal() {
+        assert!(validate_relative_folder_path("Athens/../etc").is_err());
+        assert!(validate_relative_folder_path("../escape").is_err());
+        assert!(validate_relative_folder_path("..").is_err());
+    }
+
+    #[test]
+    fn validate_relative_normalizes_leading_slash_to_relative() {
+        // The split('/') design treats '/' purely as the DB segment separator,
+        // so a leading slash collapses into a leading empty segment that we
+        // skip. The result is a *relative* path that cannot escape the root
+        // it eventually gets joined onto, which is the security guarantee
+        // we care about here.
+        let p = validate_relative_folder_path("/etc/passwd").unwrap();
+        assert_eq!(p, PathBuf::from("etc").join("passwd"));
+        assert!(p.is_relative());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn validate_relative_rejects_drive_prefix() {
+        assert!(validate_relative_folder_path(r"C:\Windows").is_err());
     }
 
     #[test]
