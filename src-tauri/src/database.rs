@@ -749,7 +749,7 @@ pub async fn get_properties(app: tauri::AppHandle) -> Result<CommandResult, Stri
     Ok(CommandResult {
         success: true,
         error: None,
-        data: Some(serde_json::to_value(properties).unwrap()),
+        data: Some(serde_json::to_value(properties).map_err(|e| e.to_string())?),
     })
 }
 
@@ -796,7 +796,7 @@ pub async fn get_properties_by_status(
     Ok(CommandResult {
         success: true,
         error: None,
-        data: Some(serde_json::to_value(properties).unwrap()),
+        data: Some(serde_json::to_value(properties).map_err(|e| e.to_string())?),
     })
 }
 
@@ -1258,7 +1258,7 @@ pub async fn get_cities(app: tauri::AppHandle) -> Result<CommandResult, String> 
     Ok(CommandResult {
         success: true,
         error: None,
-        data: Some(serde_json::to_value(cities).unwrap()),
+        data: Some(serde_json::to_value(cities).map_err(|e| e.to_string())?),
     })
 }
 
@@ -1296,7 +1296,7 @@ pub async fn search_cities(app: tauri::AppHandle, query: String) -> Result<Comma
     Ok(CommandResult {
         success: true,
         error: None,
-        data: Some(serde_json::to_value(cities).unwrap()),
+        data: Some(serde_json::to_value(cities).map_err(|e| e.to_string())?),
     })
 }
 
@@ -1338,7 +1338,7 @@ pub async fn get_property_by_id(
             Ok(CommandResult {
                 success: true,
                 error: None,
-                data: Some(serde_json::to_value(property).unwrap()),
+                data: Some(serde_json::to_value(property).map_err(|e| e.to_string())?),
             })
         }
         Err(_) => Ok(CommandResult {
@@ -2906,28 +2906,24 @@ pub async fn open_image_in_editor(
             .await;
     }
 
-    // Use configured fast editor or system default
+    // Use configured fast editor or system default. PathBuf implements
+    // AsRef<OsStr> so we pass it directly and avoid lossy to_str() unwraps
+    // on non-UTF8 Windows paths.
     let result = if let Some(editor_path) = &config.fast_editor_path {
         // Use custom fast editor
-        Command::new(editor_path)
-            .arg(image_path.to_str().unwrap())
+        Command::new(editor_path).arg(&image_path).spawn()
+    } else if cfg!(target_os = "windows") {
+        Command::new("cmd")
+            .arg("/C")
+            .arg("start")
+            .arg("")
+            .arg(&image_path)
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg(&image_path).spawn()
     } else {
-        // Use system default
-        if cfg!(target_os = "windows") {
-            Command::new("cmd")
-                .args(["/C", "start", "", image_path.to_str().unwrap()])
-                .creation_flags(CREATE_NO_WINDOW)
-                .spawn()
-        } else if cfg!(target_os = "macos") {
-            Command::new("open")
-                .arg(image_path.to_str().unwrap())
-                .spawn()
-        } else {
-            Command::new("xdg-open")
-                .arg(image_path.to_str().unwrap())
-                .spawn()
-        }
+        Command::new("xdg-open").arg(&image_path).spawn()
     };
 
     match result {
@@ -3247,28 +3243,22 @@ pub async fn open_image_in_advanced_editor(
             .await;
     }
 
-    // Use configured complex editor or system default
+    // Use configured complex editor or system default. See note in
+    // open_image_in_editor — passing &PathBuf avoids to_str() unwraps.
     let result = if let Some(editor_path) = &config.complex_editor_path {
-        // Use custom complex editor
-        Command::new(editor_path)
-            .arg(image_path.to_str().unwrap())
+        Command::new(editor_path).arg(&image_path).spawn()
+    } else if cfg!(target_os = "windows") {
+        Command::new("cmd")
+            .arg("/C")
+            .arg("start")
+            .arg("")
+            .arg(&image_path)
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg(&image_path).spawn()
     } else {
-        // Use system default
-        if cfg!(target_os = "windows") {
-            Command::new("cmd")
-                .args(["/C", "start", "", image_path.to_str().unwrap()])
-                .creation_flags(CREATE_NO_WINDOW)
-                .spawn()
-        } else if cfg!(target_os = "macos") {
-            Command::new("open")
-                .arg(image_path.to_str().unwrap())
-                .spawn()
-        } else {
-            Command::new("xdg-open")
-                .arg(image_path.to_str().unwrap())
-                .spawn()
-        }
+        Command::new("xdg-open").arg(&image_path).spawn()
     };
 
     match result {
