@@ -155,7 +155,7 @@
 </script>
 
 <Dialog bind:open onOpenChange={handleOpenChange}>
-  <DialogContent class="flex w-[95vw] max-w-5xl max-h-[90vh] flex-col overflow-hidden rounded-xl">
+  <DialogContent class="flex max-h-[90vh] w-[95vw] max-w-5xl flex-col overflow-hidden rounded-xl">
     <!-- Modal Header -->
     <div class="border-background-200 flex items-center justify-between border-b px-5 py-4">
       <div>

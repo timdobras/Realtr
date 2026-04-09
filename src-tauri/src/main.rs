@@ -2,8 +2,8 @@
 
 mod config;
 mod database;
-mod fast_resize;
 mod error;
+mod fast_resize;
 mod folder_conventions;
 mod gpu;
 mod image_editor;
@@ -29,10 +29,9 @@ use database::{
     get_thumbnail_paths_batch, init_database, list_aggelia_images, list_internet_images,
     list_original_images, list_thumbnails, list_watermark_aggelia_images, list_watermark_images,
     open_image_in_advanced_editor, open_image_in_editor, open_images_in_folder,
-    open_property_folder, open_sets_folder, pregenerate_gallery_thumbnails,
-    rename_internet_images, repair_property_statuses, reset_database_with_proper_dates,
-    scan_and_import_properties, search_cities, set_property_code, update_property,
-    update_property_status,
+    open_property_folder, open_sets_folder, pregenerate_gallery_thumbnails, rename_internet_images,
+    repair_property_statuses, reset_database_with_proper_dates, scan_and_import_properties,
+    search_cities, set_property_code, update_property, update_property_status,
 };
 use image_editor::{
     batch_analyze_for_enhance, batch_apply_enhancements, editor_analyze_image,
@@ -41,8 +40,8 @@ use image_editor::{
 };
 
 use perspective::commands::{
-    accept_perspective_corrections, cleanup_perspective_temp,
-    get_original_image_for_comparison, process_images_for_perspective,
+    accept_perspective_corrections, cleanup_perspective_temp, get_original_image_for_comparison,
+    process_images_for_perspective,
 };
 
 use tauri::Manager;
@@ -76,8 +75,8 @@ pub fn run() {
             app_handle.manage(config::ConfigCache::default());
 
             // Initialize image editor cache state
-            app_handle.manage(std::sync::Mutex::new(None::<image_editor::ImageCache>)
-                as ImageCacheState);
+            app_handle
+                .manage(std::sync::Mutex::new(None::<image_editor::ImageCache>) as ImageCacheState);
 
             // Initialize GPU image processor (falls back to CPU if no GPU available)
             let processor = std::sync::Arc::new(gpu::ImageProcessor::new());

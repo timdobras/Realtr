@@ -22,7 +22,7 @@ use crate::gpu::ImageProcessor;
 /// and a pre-resized preview (for fast edits).
 pub struct ImageCache {
     pub path: String,
-    pub full_image: DynamicImage,    // Full-resolution cached image (~50-100MB, saves disk I/O on save)
+    pub full_image: DynamicImage, // Full-resolution cached image (~50-100MB, saves disk I/O on save)
     pub preview_image: DynamicImage, // Pre-resized to ~800px for fast processing
     pub preview_size: u32,
 }
@@ -115,7 +115,8 @@ pub struct AutoStraightenResult {
 /// Get the dimensions of an image
 #[tauri::command]
 pub async fn editor_get_dimensions(image_path: String) -> Result<(u32, u32), String> {
-    let img = crate::turbo::load_image(&image_path).map_err(|e| format!("Failed to open image: {e}"))?;
+    let img =
+        crate::turbo::load_image(&image_path).map_err(|e| format!("Failed to open image: {e}"))?;
     Ok(img.dimensions())
 }
 
@@ -152,7 +153,9 @@ pub async fn editor_load_image(
 
     // Store in cache (including full-resolution image to avoid re-decode on save)
     let cache = app.state::<ImageCacheState>();
-    let mut guard = cache.lock().map_err(|e| format!("Failed to lock cache: {e}"))?;
+    let mut guard = cache
+        .lock()
+        .map_err(|e| format!("Failed to lock cache: {e}"))?;
     *guard = Some(ImageCache {
         path: image_path,
         full_image: img,
@@ -170,16 +173,17 @@ pub async fn editor_load_image(
 /// Generate a preview of the edited image using the cached preview image.
 /// This is optimized for speed - processes the small preview image, not full resolution.
 #[tauri::command]
-pub async fn editor_generate_preview(
-    app: AppHandle,
-    params: EditParams,
-) -> Result<String, String> {
+pub async fn editor_generate_preview(app: AppHandle, params: EditParams) -> Result<String, String> {
     // Clone the preview image out of the lock quickly so we don't hold
     // the mutex during GPU work (which would block load/save).
     let preview_img = {
         let cache = app.state::<ImageCacheState>();
-        let guard = cache.lock().map_err(|e| format!("Failed to lock cache: {e}"))?;
-        let cached = guard.as_ref().ok_or("No image loaded. Call editor_load_image first.")?;
+        let guard = cache
+            .lock()
+            .map_err(|e| format!("Failed to lock cache: {e}"))?;
+        let cached = guard
+            .as_ref()
+            .ok_or("No image loaded. Call editor_load_image first.")?;
         cached.preview_image.clone()
     };
 
@@ -201,7 +205,8 @@ pub async fn editor_generate_preview_legacy(
     preview_size: u32,
 ) -> Result<String, String> {
     // Load the original image
-    let img = crate::turbo::load_image(&image_path).map_err(|e| format!("Failed to open image: {e}"))?;
+    let img =
+        crate::turbo::load_image(&image_path).map_err(|e| format!("Failed to open image: {e}"))?;
 
     // Apply all edits
     let edited = apply_all_edits(&img, &params)?;
@@ -225,15 +230,14 @@ pub async fn editor_save_image(
     // We take ownership so we don't hold the lock during the expensive GPU + save work.
     let img = {
         let cache = app.state::<ImageCacheState>();
-        let mut guard = cache.lock().map_err(|e| format!("Failed to lock cache: {e}"))?;
+        let mut guard = cache
+            .lock()
+            .map_err(|e| format!("Failed to lock cache: {e}"))?;
         if let Some(cached) = guard.as_mut() {
             if cached.path == image_path {
                 // Take the full image out of the cache (replace with a 1x1 placeholder).
                 // This avoids cloning ~80MB. The cache will be repopulated on next load.
-                std::mem::replace(
-                    &mut cached.full_image,
-                    DynamicImage::new_rgba8(1, 1),
-                )
+                std::mem::replace(&mut cached.full_image, DynamicImage::new_rgba8(1, 1))
             } else {
                 crate::turbo::load_image(&image_path)
                     .map_err(|e| format!("Failed to open image: {e}"))?
@@ -269,7 +273,9 @@ pub async fn editor_save_image(
     // Invalidate the cache since the image on disk has changed
     {
         let cache = app.state::<ImageCacheState>();
-        let mut guard = cache.lock().map_err(|e| format!("Failed to lock cache: {e}"))?;
+        let mut guard = cache
+            .lock()
+            .map_err(|e| format!("Failed to lock cache: {e}"))?;
         *guard = None;
     }
 
@@ -285,7 +291,9 @@ pub async fn editor_save_image(
 pub async fn editor_analyze_image(app: AppHandle) -> Result<AutoAdjustments, String> {
     // Get the cached preview image
     let cache = app.state::<ImageCacheState>();
-    let guard = cache.lock().map_err(|e| format!("Failed to lock cache: {e}"))?;
+    let guard = cache
+        .lock()
+        .map_err(|e| format!("Failed to lock cache: {e}"))?;
     let cached = guard
         .as_ref()
         .ok_or("No image loaded. Call editor_load_image first.")?;
@@ -414,7 +422,9 @@ pub async fn editor_auto_straighten(app: AppHandle) -> Result<AutoStraightenResu
 
     // Get the cached preview image
     let cache = app.state::<ImageCacheState>();
-    let guard = cache.lock().map_err(|e| format!("Failed to lock cache: {e}"))?;
+    let guard = cache
+        .lock()
+        .map_err(|e| format!("Failed to lock cache: {e}"))?;
     let cached = guard
         .as_ref()
         .ok_or("No image loaded. Call editor_load_image first.")?;
@@ -426,7 +436,10 @@ pub async fn editor_auto_straighten(app: AppHandle) -> Result<AutoStraightenResu
     // Pass the original path for EXIF focal length extraction
     let image_path = Path::new(&cached.path);
     let (pw, ph) = cached.preview_image.dimensions();
-    eprintln!("[auto-straighten] preview_image: {pw}x{ph}, path: {}", cached.path);
+    eprintln!(
+        "[auto-straighten] preview_image: {pw}x{ph}, path: {}",
+        cached.path
+    );
 
     let result = analyze_straighten(&cached.preview_image, Some(image_path), &processor);
 
@@ -456,10 +469,10 @@ use crate::perspective::{
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EnhanceProgressEvent {
-    phase: String,      // "analyze" or "apply"
-    current: usize,     // 1-based index of current image
-    total: usize,       // total images to process
-    filename: String,   // name of the image just completed
+    phase: String,    // "analyze" or "apply"
+    current: usize,   // 1-based index of current image
+    total: usize,     // total images to process
+    filename: String, // name of the image just completed
 }
 
 /// Simple counting semaphore to limit concurrent operations.
@@ -611,9 +624,7 @@ pub async fn batch_analyze_for_enhance(
     // ========================================================================
 
     let total_count = image_paths.len();
-    eprintln!(
-        "[batch-analyze] Starting throttled analysis of {total_count} images"
-    );
+    eprintln!("[batch-analyze] Starting throttled analysis of {total_count} images");
     let total_start = std::time::Instant::now();
 
     // Build a dedicated thread pool with reduced core count
@@ -660,8 +671,7 @@ pub async fn batch_analyze_for_enhance(
                     };
 
                     // GPU-accelerated straighten analysis on small preview
-                    let straighten_result =
-                        analyze_straighten(&preview_img, Some(path), &proc);
+                    let straighten_result = analyze_straighten(&preview_img, Some(path), &proc);
                     let adjustments = analyze_image_histogram(&preview_img);
 
                     // Calculate adjustment magnitude (normalized 0-1)
@@ -907,7 +917,11 @@ pub fn apply_all_edits_gpu(
     if needs_fine_rotation || needs_adjust {
         processor.rotate_and_adjust(
             &after_crop,
-            if needs_fine_rotation { params.fine_rotation } else { 0.0 },
+            if needs_fine_rotation {
+                params.fine_rotation
+            } else {
+                0.0
+            },
             params.brightness,
             params.exposure,
             params.contrast,
@@ -1014,11 +1028,11 @@ fn apply_adjustments(img: &DynamicImage, params: &EditParams) -> DynamicImage {
 
     // Pre-compute adjustment factors (calibrated to match Windows 11 Photo Editor)
     // These values match the WebGL shader exactly
-    let brightness_factor = params.brightness as f32 / 350.0;      // -0.29 to 0.29 (softer)
+    let brightness_factor = params.brightness as f32 / 350.0; // -0.29 to 0.29 (softer)
     let exposure_factor = 2.0_f32.powf(params.exposure as f32 / 130.0); // -0.77 to 0.77 f-stops
     let contrast_factor = (params.contrast as f32 + 170.0) / 170.0; // 0.41 to 1.59 (softer)
-    let highlight_adjust = params.highlights as f32 / 180.0;       // -0.56 to 0.56 (softer)
-    let shadow_adjust = params.shadows as f32 / 180.0;             // -0.56 to 0.56 (softer)
+    let highlight_adjust = params.highlights as f32 / 180.0; // -0.56 to 0.56 (softer)
+    let shadow_adjust = params.shadows as f32 / 180.0; // -0.56 to 0.56 (softer)
 
     for y in 0..height {
         for x in 0..width {
@@ -1084,11 +1098,11 @@ impl AdjustmentFactors {
         // Ranges calibrated to match Windows 11 Photo Editor behavior
         // These values match the WebGL shader exactly
         Self {
-            brightness: params.brightness as f32 / 350.0,      // -0.29 to 0.29 (softer)
+            brightness: params.brightness as f32 / 350.0, // -0.29 to 0.29 (softer)
             exposure: 2.0_f32.powf(params.exposure as f32 / 130.0), // -0.77 to 0.77 f-stops (~0.59x to 1.7x)
-            contrast: (params.contrast as f32 + 170.0) / 170.0, // 0.41 to 1.59 (softer)
-            highlights: params.highlights as f32 / 180.0,      // -0.56 to 0.56 (softer)
-            shadows: params.shadows as f32 / 180.0,            // -0.56 to 0.56 (softer)
+            contrast: (params.contrast as f32 + 170.0) / 170.0,     // 0.41 to 1.59 (softer)
+            highlights: params.highlights as f32 / 180.0,           // -0.56 to 0.56 (softer)
+            shadows: params.shadows as f32 / 180.0,                 // -0.56 to 0.56 (softer)
         }
     }
 

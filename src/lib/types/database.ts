@@ -6,19 +6,27 @@
 // We re-export them as `interface` extensions so the rest of the
 // codebase keeps using familiar type names like `Property` and the
 // PropertyStatus union still narrows the `status` field.
-import type { Property as GeneratedProperty } from './generated/Property';
 import type { City } from './generated/City';
-import type { ScanResult } from './generated/ScanResult';
 import type { CommandResult as GeneratedCommandResult } from './generated/CommandResult';
+import type { CompleteSetResult } from './generated/CompleteSetResult';
+import type { Property as GeneratedProperty } from './generated/Property';
+import type { RepairResult } from './generated/RepairResult';
+import type { ScanResult } from './generated/ScanResult';
 import type { Set } from './generated/Set';
 import type { SetProperty } from './generated/SetProperty';
-import type { CompleteSetResult } from './generated/CompleteSetResult';
-import type { RepairResult } from './generated/RepairResult';
 import type { ThumbnailBatchRequest } from './generated/ThumbnailBatchRequest';
 import type { ThumbnailBatchResult } from './generated/ThumbnailBatchResult';
 
-export type { City, ScanResult, Set, SetProperty, CompleteSetResult, RepairResult };
-export type { ThumbnailBatchRequest, ThumbnailBatchResult };
+export type {
+  City,
+  CompleteSetResult,
+  RepairResult,
+  ScanResult,
+  Set,
+  SetProperty,
+  ThumbnailBatchRequest,
+  ThumbnailBatchResult
+};
 
 export type PropertyStatus = 'NEW' | 'DONE' | 'NOT_FOUND' | 'ARCHIVE';
 

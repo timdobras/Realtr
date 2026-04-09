@@ -248,9 +248,24 @@
     const half = HANDLE_SIZE / 2;
     return [
       { mode: 'resize-nw' as DragMode, x: sc.x - half, y: sc.y - half, cursor: 'nwse-resize' },
-      { mode: 'resize-ne' as DragMode, x: sc.x + sc.width - half, y: sc.y - half, cursor: 'nesw-resize' },
-      { mode: 'resize-sw' as DragMode, x: sc.x - half, y: sc.y + sc.height - half, cursor: 'nesw-resize' },
-      { mode: 'resize-se' as DragMode, x: sc.x + sc.width - half, y: sc.y + sc.height - half, cursor: 'nwse-resize' }
+      {
+        mode: 'resize-ne' as DragMode,
+        x: sc.x + sc.width - half,
+        y: sc.y - half,
+        cursor: 'nesw-resize'
+      },
+      {
+        mode: 'resize-sw' as DragMode,
+        x: sc.x - half,
+        y: sc.y + sc.height - half,
+        cursor: 'nesw-resize'
+      },
+      {
+        mode: 'resize-se' as DragMode,
+        x: sc.x + sc.width - half,
+        y: sc.y + sc.height - half,
+        cursor: 'nwse-resize'
+      }
     ];
   });
 
@@ -479,7 +494,9 @@
       height="24"
       class="pointer-events-none"
     >
-      <div class="flex h-full w-full items-center justify-center rounded-sm bg-black/70 px-2 py-0.5 text-xs font-medium text-white">
+      <div
+        class="flex h-full w-full items-center justify-center rounded-sm bg-black/70 px-2 py-0.5 text-xs font-medium text-white"
+      >
         {aspectRatioLabel}
       </div>
     </foreignObject>

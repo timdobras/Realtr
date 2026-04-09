@@ -580,7 +580,19 @@
   // Reactive effect: re-render whenever adjustment props change (no resize needed)
   $effect(() => {
     // Access adjustment props to create dependency
-    const _ = [brightness, exposure, contrast, highlights, shadows, showRotatedBackground, cropEnabled, cropX, cropY, cropWidth, cropHeight];
+    const _ = [
+      brightness,
+      exposure,
+      contrast,
+      highlights,
+      shadows,
+      showRotatedBackground,
+      cropEnabled,
+      cropX,
+      cropY,
+      cropWidth,
+      cropHeight
+    ];
     render();
   });
 
@@ -754,8 +766,12 @@
   ></canvas>
 
   <!-- Zoom controls -->
-  <div class="absolute left-4 top-4 flex items-center gap-1 rounded-sm bg-black/70 p-1">
-    <button onclick={zoomOut} class="rounded-sm p-1.5 text-white hover:bg-white/20" title="Zoom out">
+  <div class="absolute top-4 left-4 flex items-center gap-1 rounded-sm bg-black/70 p-1">
+    <button
+      onclick={zoomOut}
+      class="rounded-sm p-1.5 text-white hover:bg-white/20"
+      title="Zoom out"
+    >
       <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" />
       </svg>

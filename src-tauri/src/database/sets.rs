@@ -71,7 +71,9 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
 
     // Validate sets folder path is configured
     if config.sets_folder_path.is_empty() {
-        return Err("Sets folder path is not configured. Please configure it in Settings.".to_string());
+        return Err(
+            "Sets folder path is not configured. Please configure it in Settings.".to_string(),
+        );
     }
 
     let sets_folder = PathBuf::from(&config.sets_folder_path);
@@ -87,38 +89,43 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
     .map_err(|e| format!("Task join error: {e}"))??;
 
     // Get all DONE properties
-    let done_properties: Vec<Property> = sqlx::query_as::<_, (
-        i64,
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        i64,
-        i64,
-    )>(
+    let done_properties: Vec<Property> = sqlx::query_as::<
+        _,
+        (
+            i64,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            i64,
+            i64,
+        ),
+    >(
         "SELECT id, name, city, status, folder_path, notes, code, created_at, updated_at
-         FROM properties WHERE status = 'DONE'"
+         FROM properties WHERE status = 'DONE'",
     )
     .fetch_all(pool)
     .await
     .map_err(|e| format!("Failed to fetch DONE properties: {}", e))?
     .into_iter()
-    .map(|(id, name, city, status, folder_path, notes, code, created_at, updated_at)| Property {
-        id: Some(id),
-        name,
-        city,
-        status,
-        folder_path,
-        notes,
-        code,
-        created_at: chrono::DateTime::from_timestamp_millis(created_at)
-            .unwrap_or_else(chrono::Utc::now),
-        updated_at: chrono::DateTime::from_timestamp_millis(updated_at)
-            .unwrap_or_else(chrono::Utc::now),
-        completed: None,
-    })
+    .map(
+        |(id, name, city, status, folder_path, notes, code, created_at, updated_at)| Property {
+            id: Some(id),
+            name,
+            city,
+            status,
+            folder_path,
+            notes,
+            code,
+            created_at: chrono::DateTime::from_timestamp_millis(created_at)
+                .unwrap_or_else(chrono::Utc::now),
+            updated_at: chrono::DateTime::from_timestamp_millis(updated_at)
+                .unwrap_or_else(chrono::Utc::now),
+            completed: None,
+        },
+    )
     .collect();
 
     // Separate properties by whether they have a code
@@ -140,7 +147,10 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
     {
         let zip_path = zip_path.clone();
         let done_base_path = done_base_path.clone();
-        let with_code_ref: Vec<_> = with_code.iter().map(|p| (p.folder_path.clone(), p.city.clone())).collect();
+        let with_code_ref: Vec<_> = with_code
+            .iter()
+            .map(|p| (p.folder_path.clone(), p.city.clone()))
+            .collect();
         tokio::task::spawn_blocking(move || {
             let file = std::fs::File::create(&zip_path)
                 .map_err(|e| format!("Failed to create ZIP file: {}", e))?;
@@ -160,12 +170,7 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
                     let city_folder = format!("{}/", city);
                     let _ = zip.add_directory(&city_folder, options);
 
-                    add_directory_to_zip(
-                        &mut zip,
-                        &property_path,
-                        &done_base_path,
-                        options,
-                    )?;
+                    add_directory_to_zip(&mut zip, &property_path, &done_base_path, options)?;
                 }
             }
 
@@ -182,7 +187,7 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
     let zip_path_str = zip_path.to_string_lossy().to_string();
 
     let set_id = sqlx::query(
-        "INSERT INTO sets (name, zip_path, property_count, created_at) VALUES (?, ?, ?, ?)"
+        "INSERT INTO sets (name, zip_path, property_count, created_at) VALUES (?, ?, ?, ?)",
     )
     .bind(&set_name)
     .bind(&zip_path_str)
@@ -242,7 +247,8 @@ pub async fn complete_set(app: tauri::AppHandle) -> Result<CompleteSetResult, St
     // Move folders on disk (blocking I/O on dedicated thread)
     {
         let with_code_paths: Vec<_> = with_code.iter().map(|p| p.folder_path.clone()).collect();
-        let without_code_paths: Vec<_> = without_code.iter().map(|p| p.folder_path.clone()).collect();
+        let without_code_paths: Vec<_> =
+            without_code.iter().map(|p| p.folder_path.clone()).collect();
         let done_base = done_base_path.clone();
         let archive_base = archive_base_path.clone();
         let not_found_base = not_found_base_path.clone();
@@ -301,7 +307,7 @@ pub async fn get_sets(app: tauri::AppHandle) -> Result<CommandResult, String> {
     let pool = get_database_pool(&app)?;
 
     let sets: Vec<Set> = sqlx::query_as::<_, (i64, String, String, i64, i64)>(
-        "SELECT id, name, zip_path, property_count, created_at FROM sets ORDER BY created_at DESC"
+        "SELECT id, name, zip_path, property_count, created_at FROM sets ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await
@@ -332,24 +338,27 @@ pub async fn get_set_properties(
 ) -> Result<CommandResult, String> {
     let pool = get_database_pool(&app)?;
 
-    let set_properties: Vec<SetProperty> = sqlx::query_as::<_, (i64, i64, Option<i64>, String, String, Option<String>)>(
-        "SELECT id, set_id, property_id, property_name, property_city, property_code
-         FROM set_properties WHERE set_id = ?"
-    )
-    .bind(set_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch set properties: {}", e))?
-    .into_iter()
-    .map(|(id, set_id, property_id, property_name, property_city, property_code)| SetProperty {
-        id: Some(id),
-        set_id,
-        property_id,
-        property_name,
-        property_city,
-        property_code,
-    })
-    .collect();
+    let set_properties: Vec<SetProperty> =
+        sqlx::query_as::<_, (i64, i64, Option<i64>, String, String, Option<String>)>(
+            "SELECT id, set_id, property_id, property_name, property_city, property_code
+         FROM set_properties WHERE set_id = ?",
+        )
+        .bind(set_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch set properties: {}", e))?
+        .into_iter()
+        .map(
+            |(id, set_id, property_id, property_name, property_city, property_code)| SetProperty {
+                id: Some(id),
+                set_id,
+                property_id,
+                property_name,
+                property_city,
+                property_code,
+            },
+        )
+        .collect();
 
     Ok(CommandResult {
         success: true,

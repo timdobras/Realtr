@@ -6,16 +6,14 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use rayon::prelude::*;
 use tauri::Manager;
 
-use crate::database::types::{
-    CommandResult, ThumbnailBatchRequest, ThumbnailBatchResult,
-};
 use crate::database::get_property_base_path;
+use crate::database::types::{CommandResult, ThumbnailBatchRequest, ThumbnailBatchResult};
 
 // generate_thumbnail is private to this module — only the thumbnail commands
 // in this file call it. Made pub(super) so the rest of the database module
@@ -44,8 +42,7 @@ fn generate_thumbnail(
         crate::turbo::load_jpeg_scaled(source_path.as_path(), max_size)
             .map_err(|e| format!("Failed to load JPEG thumbnail: {}", e))?
     } else {
-        crate::turbo::load_image(source_path)
-            .map_err(|e| format!("Failed to open image: {}", e))?
+        crate::turbo::load_image(source_path).map_err(|e| format!("Failed to open image: {}", e))?
     };
 
     // Resize to exact target using SIMD-accelerated fast_image_resize
@@ -77,7 +74,9 @@ pub async fn list_thumbnails(
             if path.is_file() {
                 if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
                     let ext_lc = ext.to_lowercase();
-                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
+                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"]
+                        .contains(&ext_lc.as_str())
+                    {
                         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                             thumbnails.push(format!("{}.jpg", stem));
                         }
@@ -118,14 +117,18 @@ pub async fn get_gallery_thumbnail_path(
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {e}"))?;
 
-    let thumbnails_base = app_data_dir.join("thumbnails").join(format!("gallery_{max_size}"));
+    let thumbnails_base = app_data_dir
+        .join("thumbnails")
+        .join(format!("gallery_{max_size}"));
     let safe_folder_name = folder_path.replace('/', "_").replace('\\', "_");
     let safe_subfolder = if subfolder.is_empty() {
         "root".to_string()
     } else {
         subfolder.replace('/', "_").replace('\\', "_")
     };
-    let thumbnails_dir = thumbnails_base.join(&safe_folder_name).join(&safe_subfolder);
+    let thumbnails_dir = thumbnails_base
+        .join(&safe_folder_name)
+        .join(&safe_subfolder);
     let thumbnail_path = thumbnails_dir.join(&filename).with_extension("jpg");
 
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
@@ -146,9 +149,7 @@ pub async fn get_gallery_thumbnail_path(
         let needs_regeneration = if !thumbnail_path.exists() {
             true
         } else {
-            let source_modified = fs::metadata(&source_path)
-                .and_then(|m| m.modified())
-                .ok();
+            let source_modified = fs::metadata(&source_path).and_then(|m| m.modified()).ok();
             let thumb_modified = fs::metadata(&thumbnail_path)
                 .and_then(|m| m.modified())
                 .ok();
@@ -303,7 +304,8 @@ pub async fn pregenerate_gallery_thumbnails(
             for entry in entries.filter_map(Result::ok) {
                 let path = entry.path();
                 if let Some(ext) = path.extension() {
-                    if supported_extensions.contains(&ext.to_string_lossy().to_lowercase().as_str()) {
+                    if supported_extensions.contains(&ext.to_string_lossy().to_lowercase().as_str())
+                    {
                         if let Some(name) = path.file_name() {
                             filenames.push(name.to_string_lossy().to_string());
                         }
@@ -321,14 +323,18 @@ pub async fn pregenerate_gallery_thumbnails(
         }
 
         // Setup thumbnail directory
-        let thumbnails_base = app_data_dir.join("thumbnails").join(format!("gallery_{}", max_size));
+        let thumbnails_base = app_data_dir
+            .join("thumbnails")
+            .join(format!("gallery_{}", max_size));
         let safe_folder_name = folder_path.replace('/', "_").replace('\\', "_");
         let safe_subfolder = if subfolder.is_empty() {
             "root".to_string()
         } else {
             subfolder.replace('/', "_").replace('\\', "_")
         };
-        let thumbnails_dir = thumbnails_base.join(&safe_folder_name).join(&safe_subfolder);
+        let thumbnails_dir = thumbnails_base
+            .join(&safe_folder_name)
+            .join(&safe_subfolder);
         fs::create_dir_all(&thumbnails_dir)
             .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
 
@@ -349,9 +355,7 @@ pub async fn pregenerate_gallery_thumbnails(
                 true
             } else {
                 // Compare modification times
-                let source_modified = fs::metadata(&source_path)
-                    .and_then(|m| m.modified())
-                    .ok();
+                let source_modified = fs::metadata(&source_path).and_then(|m| m.modified()).ok();
                 let thumb_modified = fs::metadata(&thumbnail_path)
                     .and_then(|m| m.modified())
                     .ok();
@@ -379,11 +383,13 @@ pub async fn pregenerate_gallery_thumbnails(
 
         // Generate thumbnails in parallel using rayon (already on blocking thread)
         let generated_count = AtomicUsize::new(0);
-        to_generate.par_iter().for_each(|(source_path, thumbnail_path)| {
-            if generate_thumbnail(source_path, thumbnail_path, max_size).is_ok() {
-                generated_count.fetch_add(1, Ordering::Relaxed);
-            }
-        });
+        to_generate
+            .par_iter()
+            .for_each(|(source_path, thumbnail_path)| {
+                if generate_thumbnail(source_path, thumbnail_path, max_size).is_ok() {
+                    generated_count.fetch_add(1, Ordering::Relaxed);
+                }
+            });
 
         let generated_count = generated_count.load(Ordering::Relaxed);
 

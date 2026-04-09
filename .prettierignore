@@ -17,6 +17,10 @@ src-tauri/Cargo.lock
 *.tsbuildinfo
 .DS_Store
 
+# ts-rs generated TypeScript bindings — regenerated from Rust by
+# `cargo test export_bindings`, do not let Prettier touch them.
+src/lib/types/generated/
+
 # IDE and editor files
 .vscode/
 .idea/

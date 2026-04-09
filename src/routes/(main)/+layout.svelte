@@ -77,7 +77,6 @@
       }
     }
     setTimeout(() => checkForUpdatesSilently(), 5000);
-
   });
 </script>
 
@@ -174,5 +173,3 @@
     </main>
   </div>
 </div>
-
-

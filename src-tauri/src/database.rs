@@ -3,13 +3,13 @@ use image::{DynamicImage, GenericImageView, ImageFormat, RgbaImage};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
-use ts_rs::TS;
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tauri::Manager;
+use ts_rs::TS;
 
 use crate::gpu::ImageProcessor;
 use tokio::process::Command;
@@ -47,7 +47,6 @@ pub use watermark::{
 // Imported for the test module that still lives in this file.
 #[cfg(test)]
 use migrations::run_migrations;
-
 
 /// Supported image file extensions (lowercase).
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"];
@@ -146,7 +145,10 @@ fn rename_files_two_pass(
         match fs::rename(&temp_path, &final_path) {
             Ok(()) => renamed += 1,
             Err(e) => {
-                errors.push(format!("Failed to rename {} to {}: {}", temp_name, final_name, e));
+                errors.push(format!(
+                    "Failed to rename {} to {}: {}",
+                    temp_name, final_name, e
+                ));
             }
         }
     }
@@ -156,7 +158,10 @@ fn rename_files_two_pass(
 
 /// Copy image files from `src_dir` to `dest_dir`, skipping files that already exist in dest.
 /// Returns (copied_count, errors).
-fn copy_new_images_to_dir(src_dir: &std::path::Path, dest_dir: &std::path::Path) -> (usize, Vec<String>) {
+fn copy_new_images_to_dir(
+    src_dir: &std::path::Path,
+    dest_dir: &std::path::Path,
+) -> (usize, Vec<String>) {
     let files_to_copy: Vec<(PathBuf, PathBuf)> = match fs::read_dir(src_dir) {
         Ok(entries) => entries
             .filter_map(|e| e.ok())
@@ -183,8 +188,9 @@ fn copy_new_images_to_dir(src_dir: &std::path::Path, dest_dir: &std::path::Path)
     let copied_count = AtomicUsize::new(0);
     let errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
-    files_to_copy.par_iter().for_each(|(src, dest)| {
-        match fs::copy(src, dest) {
+    files_to_copy
+        .par_iter()
+        .for_each(|(src, dest)| match fs::copy(src, dest) {
             Ok(_) => {
                 copied_count.fetch_add(1, Ordering::Relaxed);
             }
@@ -195,8 +201,7 @@ fn copy_new_images_to_dir(src_dir: &std::path::Path, dest_dir: &std::path::Path)
                     }
                 }
             }
-        }
-    });
+        });
 
     (
         copied_count.load(Ordering::Relaxed),
@@ -227,7 +232,10 @@ pub(super) fn get_base_path_for_status(
     };
 
     if path_str.is_empty() {
-        return Err(format!("Folder path for status '{}' is not configured", status));
+        return Err(format!(
+            "Folder path for status '{}' is not configured",
+            status
+        ));
     }
 
     Ok(PathBuf::from(path_str))
@@ -308,7 +316,6 @@ fn find_actual_folder_location(
     }
     None
 }
-
 
 // Property CRUD operations
 #[tauri::command]
@@ -564,8 +571,7 @@ pub async fn update_property_status(
                         Some(ref path) if path.exists() => Some(path.clone()),
                         _ => {
                             // Folder not at expected location, search all status folders
-                            find_actual_folder_location(&config, &folder_path)
-                                .map(|(path, _)| path)
+                            find_actual_folder_location(&config, &folder_path).map(|(path, _)| path)
                         }
                     };
 
@@ -682,11 +688,7 @@ pub async fn set_property_code(
 
     // Extract the actual folder name from the stored folder_path (format: "city/folder_name")
     // This ensures we use the real folder name on disk, not a reconstructed one
-    let old_folder_name = folder_path
-        .split('/')
-        .last()
-        .unwrap_or(&name)
-        .to_string();
+    let old_folder_name = folder_path.split('/').last().unwrap_or(&name).to_string();
 
     // For folder names, replace "/" with "-" since "/" is not allowed in folder names
     // This allows codes like "204905/44538" to be saved as "204905-44538" in the folder name
@@ -720,15 +722,14 @@ pub async fn set_property_code(
     }
 
     // Update database with new code and folder_path
-    let result = sqlx::query(
-        "UPDATE properties SET code = ?, folder_path = ?, updated_at = ? WHERE id = ?",
-    )
-    .bind(code)
-    .bind(&new_folder_path)
-    .bind(now_timestamp)
-    .bind(property_id)
-    .execute(pool)
-    .await;
+    let result =
+        sqlx::query("UPDATE properties SET code = ?, folder_path = ?, updated_at = ? WHERE id = ?")
+            .bind(code)
+            .bind(&new_folder_path)
+            .bind(now_timestamp)
+            .bind(property_id)
+            .execute(pool)
+            .await;
 
     match result {
         Ok(_) => Ok(CommandResult {
@@ -1117,9 +1118,7 @@ pub async fn scan_and_import_properties(app: tauri::AppHandle) -> Result<Command
             continue; // Skip if folder doesn't exist
         }
 
-        match scan_folder_for_properties(&folder_path, status, &existing_properties, pool)
-            .await
-        {
+        match scan_folder_for_properties(&folder_path, status, &existing_properties, pool).await {
             Ok(folder_result) => {
                 scan_result.found_properties += folder_result.found_properties;
                 scan_result.new_properties += folder_result.new_properties;
@@ -1195,102 +1194,141 @@ pub async fn repair_property_statuses(app: tauri::AppHandle) -> Result<CommandRe
     };
 
     // Get all properties from database
-    let properties: Vec<(i64, String, String, String)> = sqlx::query_as(
-        "SELECT id, folder_path, status, name FROM properties"
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch properties: {}", e))?;
+    let properties: Vec<(i64, String, String, String)> =
+        sqlx::query_as("SELECT id, folder_path, status, name FROM properties")
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("Failed to fetch properties: {}", e))?;
 
     // Get base paths for all statuses
     let status_paths: Vec<(String, Option<PathBuf>)> = vec![
-        ("NEW".to_string(), get_base_path_for_status(&config, "NEW").ok()),
-        ("DONE".to_string(), get_base_path_for_status(&config, "DONE").ok()),
-        ("NOT_FOUND".to_string(), get_base_path_for_status(&config, "NOT_FOUND").ok()),
-        ("ARCHIVE".to_string(), get_base_path_for_status(&config, "ARCHIVE").ok()),
+        (
+            "NEW".to_string(),
+            get_base_path_for_status(&config, "NEW").ok(),
+        ),
+        (
+            "DONE".to_string(),
+            get_base_path_for_status(&config, "DONE").ok(),
+        ),
+        (
+            "NOT_FOUND".to_string(),
+            get_base_path_for_status(&config, "NOT_FOUND").ok(),
+        ),
+        (
+            "ARCHIVE".to_string(),
+            get_base_path_for_status(&config, "ARCHIVE").ok(),
+        ),
     ];
 
     // Phase 1: Check filesystem locations on a blocking thread
     // Returns: Vec<(id, folder_path, db_status, name, found_status, new_folder_name)>
     let properties_clone = properties.clone();
     let status_paths_clone = status_paths.clone();
-    let scan_results: Vec<(i64, String, String, String, Option<String>, Option<String>, Vec<String>)> =
-        tokio::task::spawn_blocking(move || {
-            let mut results = Vec::new();
+    let scan_results: Vec<(
+        i64,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Vec<String>,
+    )> = tokio::task::spawn_blocking(move || {
+        let mut results = Vec::new();
 
-            for (id, folder_path, db_status, name) in properties_clone {
-                let parts: Vec<&str> = folder_path.split('/').collect();
-                if parts.len() != 2 {
-                    results.push((id, folder_path, db_status, name, None, None,
-                        vec![format!("Property has invalid folder_path format")]));
-                    continue;
+        for (id, folder_path, db_status, name) in properties_clone {
+            let parts: Vec<&str> = folder_path.split('/').collect();
+            if parts.len() != 2 {
+                results.push((
+                    id,
+                    folder_path,
+                    db_status,
+                    name,
+                    None,
+                    None,
+                    vec![format!("Property has invalid folder_path format")],
+                ));
+                continue;
+            }
+            let city = parts[0];
+            let property_folder_name = parts[1];
+            let folder_path_buf = folder_path_to_pathbuf(&folder_path);
+
+            let mut found_info: Option<(String, Option<String>)> = None;
+
+            // Try exact match
+            for (status, base_path_opt) in &status_paths_clone {
+                if let Some(base_path) = base_path_opt {
+                    let full_path = base_path.join(&folder_path_buf);
+                    if full_path.exists() {
+                        found_info = Some((status.clone(), None));
+                        break;
+                    }
                 }
-                let city = parts[0];
-                let property_folder_name = parts[1];
-                let folder_path_buf = folder_path_to_pathbuf(&folder_path);
+            }
 
-                let mut found_info: Option<(String, Option<String>)> = None;
-
-                // Try exact match
+            // Try prefix matching
+            if found_info.is_none() {
                 for (status, base_path_opt) in &status_paths_clone {
                     if let Some(base_path) = base_path_opt {
-                        let full_path = base_path.join(&folder_path_buf);
-                        if full_path.exists() {
-                            found_info = Some((status.clone(), None));
+                        let city_path = base_path.join(city);
+                        if let Some(actual_folder_name) =
+                            find_folder_by_prefix(&city_path, property_folder_name)
+                        {
+                            if actual_folder_name != property_folder_name {
+                                found_info = Some((status.clone(), Some(actual_folder_name)));
+                            } else {
+                                found_info = Some((status.clone(), None));
+                            }
                             break;
                         }
                     }
                 }
-
-                // Try prefix matching
-                if found_info.is_none() {
-                    for (status, base_path_opt) in &status_paths_clone {
-                        if let Some(base_path) = base_path_opt {
-                            let city_path = base_path.join(city);
-                            if let Some(actual_folder_name) = find_folder_by_prefix(&city_path, property_folder_name) {
-                                if actual_folder_name != property_folder_name {
-                                    found_info = Some((status.clone(), Some(actual_folder_name)));
-                                } else {
-                                    found_info = Some((status.clone(), None));
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                let (found_status, new_folder_name) = match found_info {
-                    Some((s, n)) => (Some(s), n),
-                    None => (None, None),
-                };
-
-                let errors = if found_status.is_none() {
-                    let checked_paths: Vec<String> = status_paths_clone
-                        .iter()
-                        .filter_map(|(status, base_path_opt)| {
-                            base_path_opt.as_ref().map(|bp| {
-                                format!("{}: {}", status, bp.join(&folder_path_buf).display())
-                            })
-                        })
-                        .collect();
-                    vec![format!(
-                        "Property '{}' folder not found. DB folder_path='{}'. Checked: [{}]",
-                        name, folder_path, checked_paths.join(", ")
-                    )]
-                } else {
-                    vec![]
-                };
-
-                results.push((id, folder_path, db_status, name, found_status, new_folder_name, errors));
             }
 
-            results
-        })
-        .await
-        .map_err(|e| format!("Task join error: {e}"))?;
+            let (found_status, new_folder_name) = match found_info {
+                Some((s, n)) => (Some(s), n),
+                None => (None, None),
+            };
+
+            let errors = if found_status.is_none() {
+                let checked_paths: Vec<String> = status_paths_clone
+                    .iter()
+                    .filter_map(|(status, base_path_opt)| {
+                        base_path_opt.as_ref().map(|bp| {
+                            format!("{}: {}", status, bp.join(&folder_path_buf).display())
+                        })
+                    })
+                    .collect();
+                vec![format!(
+                    "Property '{}' folder not found. DB folder_path='{}'. Checked: [{}]",
+                    name,
+                    folder_path,
+                    checked_paths.join(", ")
+                )]
+            } else {
+                vec![]
+            };
+
+            results.push((
+                id,
+                folder_path,
+                db_status,
+                name,
+                found_status,
+                new_folder_name,
+                errors,
+            ));
+        }
+
+        results
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?;
 
     // Phase 2: Update database based on scan results
-    for (id, folder_path, db_status, name, found_status, new_folder_name_opt, errors) in scan_results {
+    for (id, folder_path, db_status, name, found_status, new_folder_name_opt, errors) in
+        scan_results
+    {
         result.properties_checked += 1;
         result.errors.extend(errors);
 
@@ -1442,7 +1480,8 @@ async fn scan_folder_for_properties(
                     let folder_name = match property_path.file_name().and_then(|n| n.to_str()) {
                         Some(name) => name.to_string(),
                         None => {
-                            errors.push(format!("Invalid property folder name: {:?}", property_path));
+                            errors
+                                .push(format!("Invalid property folder name: {:?}", property_path));
                             continue;
                         }
                     };
@@ -1572,7 +1611,9 @@ fn parse_folder_name(folder_name: &str) -> (String, Option<String>) {
             // Check if the content in parentheses looks like a code (alphanumeric, not too long)
             if !potential_code.is_empty()
                 && potential_code.len() <= 20
-                && potential_code.chars().all(|c| c.is_alphanumeric() || c == '-')
+                && potential_code
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-')
             {
                 let property_name = folder_name[..open_paren].to_string();
                 return (property_name, Some(potential_code.to_string()));
@@ -1835,11 +1876,9 @@ pub async fn list_internet_images(
 ) -> Result<Vec<String>, String> {
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
-    tokio::task::spawn_blocking(move || {
-        list_image_filenames(&property_path.join("INTERNET"))
-    })
-    .await
-    .map_err(|e| format!("Task join error: {e}"))?
+    tokio::task::spawn_blocking(move || list_image_filenames(&property_path.join("INTERNET")))
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
@@ -2006,7 +2045,9 @@ pub async fn list_aggelia_images(
             if path.is_file() {
                 if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
                     let ext_lc = ext.to_lowercase();
-                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
+                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"]
+                        .contains(&ext_lc.as_str())
+                    {
                         if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
                             images.push(filename.to_string());
                         }
@@ -2261,8 +2302,13 @@ pub async fn fill_aggelia_to_25(
                         // Also create cropped version for WATERMARK/AGGELIA if source exists there
                         let watermark_source = watermark_aggelia_path.join(source_filename);
                         if watermark_source.exists() {
-                            if let Err(e) = crop_and_save_image(&watermark_source, &dest_watermark_path) {
-                                return Err(format!("Failed to create watermark copy for {}: {}", new_filename, e));
+                            if let Err(e) =
+                                crop_and_save_image(&watermark_source, &dest_watermark_path)
+                            {
+                                return Err(format!(
+                                    "Failed to create watermark copy for {}: {}",
+                                    new_filename, e
+                                ));
                             }
                         }
                         Ok(new_filename)
@@ -2295,7 +2341,11 @@ pub async fn fill_aggelia_to_25(
         } else {
             Ok(CommandResult {
                 success: added_count > 0,
-                error: Some(format!("Added {} images with some errors: {}", added_count, errors.join(", "))),
+                error: Some(format!(
+                    "Added {} images with some errors: {}",
+                    added_count,
+                    errors.join(", ")
+                )),
                 data: Some(serde_json::json!({
                     "added_count": added_count,
                     "errors": errors
@@ -2430,7 +2480,9 @@ mod tests {
         let config = test_config();
         let result =
             construct_property_path_from_parts(&config, "NEW", "Athens", "Villa Alpha").unwrap();
-        let expected = PathBuf::from("C:\\Photos\\NEW").join("Athens").join("Villa Alpha");
+        let expected = PathBuf::from("C:\\Photos\\NEW")
+            .join("Athens")
+            .join("Villa Alpha");
         assert_eq!(result, expected);
     }
 
@@ -2445,7 +2497,10 @@ mod tests {
 
     #[test]
     fn relative_folder_path_format() {
-        assert_eq!(get_relative_folder_path("Athens", "Villa Alpha"), "Athens/Villa Alpha");
+        assert_eq!(
+            get_relative_folder_path("Athens", "Villa Alpha"),
+            "Athens/Villa Alpha"
+        );
     }
 
     #[test]
@@ -2600,9 +2655,7 @@ mod tests {
         let pool = SqlitePool::connect("sqlite::memory:")
             .await
             .expect("Failed to create in-memory database");
-        run_migrations(&pool)
-            .await
-            .expect("Migrations failed");
+        run_migrations(&pool).await.expect("Migrations failed");
         pool
     }
 
@@ -2641,14 +2694,13 @@ mod tests {
         assert!(city_cols.contains(&"usage_count".to_string()));
 
         // Verify sets and set_properties tables exist
-        let tables: Vec<String> =
-            sqlx::query("SELECT name FROM sqlite_master WHERE type='table'")
-                .fetch_all(&pool)
-                .await
-                .unwrap()
-                .iter()
-                .map(|r| r.get::<String, _>("name"))
-                .collect();
+        let tables: Vec<String> = sqlx::query("SELECT name FROM sqlite_master WHERE type='table'")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.get::<String, _>("name"))
+            .collect();
 
         assert!(tables.contains(&"sets".to_string()));
         assert!(tables.contains(&"set_properties".to_string()));
@@ -2656,9 +2708,7 @@ mod tests {
 
     #[tokio::test]
     async fn migrations_are_idempotent() {
-        let pool = SqlitePool::connect("sqlite::memory:")
-            .await
-            .unwrap();
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         run_migrations(&pool).await.unwrap();
         // Run again - should not error
         run_migrations(&pool).await.unwrap();
@@ -2672,10 +2722,12 @@ mod tests {
             .await
             .unwrap();
 
-        let row = sqlx::query("SELECT name, city, status, folder_path FROM properties WHERE name = 'Villa Alpha'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let row = sqlx::query(
+            "SELECT name, city, status, folder_path FROM properties WHERE name = 'Villa Alpha'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
         assert_eq!(row.get::<String, _>("name"), "Villa Alpha");
         assert_eq!(row.get::<String, _>("city"), "Athens");
@@ -2733,13 +2785,20 @@ mod tests {
         .await
         .unwrap();
 
-        let row = sqlx::query("SELECT code, folder_path FROM properties WHERE name = 'Villa Alpha'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let row =
+            sqlx::query("SELECT code, folder_path FROM properties WHERE name = 'Villa Alpha'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
 
-        assert_eq!(row.get::<Option<String>, _>("code"), Some("45164".to_string()));
-        assert_eq!(row.get::<String, _>("folder_path"), "Athens/Villa Alpha (45164)");
+        assert_eq!(
+            row.get::<Option<String>, _>("code"),
+            Some("45164".to_string())
+        );
+        assert_eq!(
+            row.get::<String, _>("folder_path"),
+            "Athens/Villa Alpha (45164)"
+        );
     }
 
     #[tokio::test]
@@ -2942,7 +3001,11 @@ mod tests {
         // Verify no temp files remain
         for entry in fs::read_dir(tmp.path()).unwrap() {
             let name = entry.unwrap().file_name().to_string_lossy().to_string();
-            assert!(!name.contains("temp_rename_"), "Temp file left behind: {}", name);
+            assert!(
+                !name.contains("temp_rename_"),
+                "Temp file left behind: {}",
+                name
+            );
         }
     }
 
@@ -2977,7 +3040,10 @@ mod tests {
         assert_eq!(copied, 0);
         assert!(errors.is_empty());
         // Existing file not overwritten
-        assert_eq!(fs::read(dest.path().join("photo.jpg")).unwrap(), b"old_data");
+        assert_eq!(
+            fs::read(dest.path().join("photo.jpg")).unwrap(),
+            b"old_data"
+        );
     }
 
     #[test]
@@ -3015,12 +3081,11 @@ mod tests {
             .unwrap();
 
         // Verify gone
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM properties WHERE id = ?")
-                .bind(id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM properties WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(count, 0);
     }
 
@@ -3136,7 +3201,10 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(row.get::<Option<String>, _>("code"), Some("45164".to_string()));
+        assert_eq!(
+            row.get::<Option<String>, _>("code"),
+            Some("45164".to_string())
+        );
         assert_eq!(row.get::<String, _>("folder_path"), "Athens/Villa (45164)");
     }
 
@@ -3167,14 +3235,9 @@ mod tests {
         fs::create_dir_all(city_dir.join("PropertyY")).unwrap();
 
         let existing = HashSet::new();
-        let result = scan_folder_for_properties(
-            &tmp.path().to_path_buf(),
-            "NEW",
-            &existing,
-            &pool,
-        )
-        .await
-        .unwrap();
+        let result = scan_folder_for_properties(&tmp.path().to_path_buf(), "NEW", &existing, &pool)
+            .await
+            .unwrap();
 
         assert_eq!(result.found_properties, 2);
         assert_eq!(result.new_properties, 2);
@@ -3200,14 +3263,9 @@ mod tests {
         let mut existing = HashSet::new();
         existing.insert("CityA/PropertyX".to_string());
 
-        let result = scan_folder_for_properties(
-            &tmp.path().to_path_buf(),
-            "NEW",
-            &existing,
-            &pool,
-        )
-        .await
-        .unwrap();
+        let result = scan_folder_for_properties(&tmp.path().to_path_buf(), "NEW", &existing, &pool)
+            .await
+            .unwrap();
 
         assert_eq!(result.found_properties, 2);
         assert_eq!(result.new_properties, 1); // Only PropertyY is new
@@ -3222,14 +3280,10 @@ mod tests {
         let city_dir = tmp.path().join("CityA");
         fs::create_dir_all(city_dir.join("Villa Alpha (45164)")).unwrap();
 
-        let result = scan_folder_for_properties(
-            &tmp.path().to_path_buf(),
-            "DONE",
-            &HashSet::new(),
-            &pool,
-        )
-        .await
-        .unwrap();
+        let result =
+            scan_folder_for_properties(&tmp.path().to_path_buf(), "DONE", &HashSet::new(), &pool)
+                .await
+                .unwrap();
 
         assert_eq!(result.new_properties, 1);
 
@@ -3239,8 +3293,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(row.get::<String, _>("name"), "Villa Alpha");
-        assert_eq!(row.get::<Option<String>, _>("code"), Some("45164".to_string()));
-        assert_eq!(row.get::<String, _>("folder_path"), "CityA/Villa Alpha (45164)");
+        assert_eq!(
+            row.get::<Option<String>, _>("code"),
+            Some("45164".to_string())
+        );
+        assert_eq!(
+            row.get::<String, _>("folder_path"),
+            "CityA/Villa Alpha (45164)"
+        );
     }
 
     #[tokio::test]
@@ -3257,14 +3317,10 @@ mod tests {
         // Create one real property
         fs::create_dir_all(city_dir.join("RealProperty")).unwrap();
 
-        let result = scan_folder_for_properties(
-            &tmp.path().to_path_buf(),
-            "NEW",
-            &HashSet::new(),
-            &pool,
-        )
-        .await
-        .unwrap();
+        let result =
+            scan_folder_for_properties(&tmp.path().to_path_buf(), "NEW", &HashSet::new(), &pool)
+                .await
+                .unwrap();
 
         assert_eq!(result.found_properties, 1);
         assert_eq!(result.new_properties, 1);
@@ -3275,14 +3331,10 @@ mod tests {
         let pool = setup_test_db().await;
         let tmp = tempfile::tempdir().unwrap();
 
-        let result = scan_folder_for_properties(
-            &tmp.path().to_path_buf(),
-            "NEW",
-            &HashSet::new(),
-            &pool,
-        )
-        .await
-        .unwrap();
+        let result =
+            scan_folder_for_properties(&tmp.path().to_path_buf(), "NEW", &HashSet::new(), &pool)
+                .await
+                .unwrap();
 
         assert_eq!(result.found_properties, 0);
         assert_eq!(result.new_properties, 0);
@@ -3297,14 +3349,10 @@ mod tests {
         fs::create_dir_all(tmp.path().join("Rome").join("Villa B")).unwrap();
         fs::create_dir_all(tmp.path().join("Rome").join("Villa C")).unwrap();
 
-        let result = scan_folder_for_properties(
-            &tmp.path().to_path_buf(),
-            "NEW",
-            &HashSet::new(),
-            &pool,
-        )
-        .await
-        .unwrap();
+        let result =
+            scan_folder_for_properties(&tmp.path().to_path_buf(), "NEW", &HashSet::new(), &pool)
+                .await
+                .unwrap();
 
         assert_eq!(result.found_properties, 3);
         assert_eq!(result.new_properties, 3);

@@ -20,9 +20,9 @@ fn default_true() -> bool {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct WatermarkConfig {
-    pub size_mode: String, // "proportional", "fit", "stretch", "tile"
-    pub size_percentage: f32, // 0.0 to 1.0 (for proportional mode)
-    pub relative_to: String, // "longest-side", "shortest-side", "width", "height"
+    pub size_mode: String,       // "proportional", "fit", "stretch", "tile"
+    pub size_percentage: f32,    // 0.0 to 1.0 (for proportional mode)
+    pub relative_to: String,     // "longest-side", "shortest-side", "width", "height"
     pub position_anchor: String, // "center", "top-left", "top-center", etc.
     pub offset_x: i32,
     pub offset_y: i32,
@@ -294,18 +294,13 @@ pub async fn copy_watermark_to_app_data(
 }
 
 #[tauri::command]
-pub async fn get_watermark_from_app_data(
-    app: tauri::AppHandle,
-) -> Result<Option<String>, String> {
+pub async fn get_watermark_from_app_data(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let watermark_path = app_data_dir.join("watermark").join("watermark.png");
 
     if watermark_path.exists() {
         Ok(Some(
-            watermark_path
-                .to_str()
-                .ok_or("Invalid path")?
-                .to_string(),
+            watermark_path.to_str().ok_or("Invalid path")?.to_string(),
         ))
     } else {
         Ok(None)

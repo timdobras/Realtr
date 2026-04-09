@@ -11,16 +11,16 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use base64::{engine::general_purpose, Engine as _};
 use image::{DynamicImage, GenericImageView, ImageFormat, RgbaImage};
 use rayon::prelude::*;
 use tauri::Manager;
 
-use crate::database::types::CommandResult;
 use crate::database::get_property_base_path;
+use crate::database::types::CommandResult;
 use crate::gpu::ImageProcessor;
 
 /// Delete every image file (jpg/jpeg/png/bmp/gif/heic/webp) directly inside
@@ -203,8 +203,8 @@ fn copy_and_process_folder_with_config(
 
     // Process images in parallel using rayon
     let processor = processor.clone();
-    image_files.par_iter().for_each(|(source, dest)| {
-        match apply_watermark_to_image_with_cached_wm(
+    image_files.par_iter().for_each(
+        |(source, dest)| match apply_watermark_to_image_with_cached_wm(
             source,
             dest,
             watermark_img,
@@ -222,8 +222,8 @@ fn copy_and_process_folder_with_config(
                     }
                 }
             }
-        }
-    });
+        },
+    );
 
     // Check for errors
     if let Ok(errs) = errors.lock() {
@@ -275,8 +275,8 @@ fn apply_watermark_to_image_with_cached_wm(
         let (wm_width, wm_height) = watermark_img.dimensions();
         let (new_wm_width, new_wm_height) =
             compute_watermark_size(base_dims, (wm_width, wm_height), config);
-        let resized_wm = crate::fast_resize::resize_exact(watermark_img, new_wm_width, new_wm_height)
-            .to_rgba8();
+        let resized_wm =
+            crate::fast_resize::resize_exact(watermark_img, new_wm_width, new_wm_height).to_rgba8();
         let mut guard = wm_cache.lock().map_err(|e| format!("Lock error: {e}"))?;
         guard.entry(base_dims).or_insert(resized_wm);
     }
@@ -474,11 +474,22 @@ fn apply_single_watermark(
     };
 
     // Apply offsets
-    let pos_x = (base_x as i32 + config.offset_x).max(0).min(base_width as i32 - wm_width as i32) as u32;
-    let pos_y = (base_y as i32 + config.offset_y).max(0).min(base_height as i32 - wm_height as i32) as u32;
+    let pos_x = (base_x as i32 + config.offset_x)
+        .max(0)
+        .min(base_width as i32 - wm_width as i32) as u32;
+    let pos_y = (base_y as i32 + config.offset_y)
+        .max(0)
+        .min(base_height as i32 - wm_height as i32) as u32;
 
     // Apply watermark with opacity (GPU-accelerated)
-    processor.blend_watermark(base_img, watermark, pos_x, pos_y, config.opacity, config.use_alpha_channel);
+    processor.blend_watermark(
+        base_img,
+        watermark,
+        pos_x,
+        pos_y,
+        config.opacity,
+        config.use_alpha_channel,
+    );
 
     Ok(())
 }
@@ -496,7 +507,14 @@ fn apply_tiled_watermark(
     while y < base_height {
         let mut x = 0;
         while x < base_width {
-            processor.blend_watermark(base_img, watermark, x, y, config.opacity, config.use_alpha_channel);
+            processor.blend_watermark(
+                base_img,
+                watermark,
+                x,
+                y,
+                config.opacity,
+                config.use_alpha_channel,
+            );
             x += wm_width + config.offset_x.unsigned_abs();
         }
         y += wm_height + config.offset_y.unsigned_abs();
@@ -647,7 +665,9 @@ pub async fn list_watermark_images(
             if path.is_file() {
                 if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
                     let ext_lc = ext.to_lowercase();
-                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
+                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"]
+                        .contains(&ext_lc.as_str())
+                    {
                         if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
                             images.push(filename.to_string());
                         }
@@ -672,9 +692,7 @@ pub async fn list_watermark_aggelia_images(
     let property_path = get_property_base_path(&app, &folder_path, &status).await?;
 
     tokio::task::spawn_blocking(move || {
-        let watermark_aggelia_path = property_path
-            .join("WATERMARK")
-            .join("AGGELIA");
+        let watermark_aggelia_path = property_path.join("WATERMARK").join("AGGELIA");
 
         if !watermark_aggelia_path.exists() {
             return Ok(Vec::new());
@@ -688,7 +706,9 @@ pub async fn list_watermark_aggelia_images(
             if path.is_file() {
                 if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
                     let ext_lc = ext.to_lowercase();
-                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext_lc.as_str()) {
+                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"]
+                        .contains(&ext_lc.as_str())
+                    {
                         if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
                             images.push(filename.to_string());
                         }

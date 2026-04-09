@@ -301,7 +301,9 @@
           );
         }
       } else {
-        showSuccess(`Image appears level (${result.linesUsed} lines, ${Math.round(result.confidence * 100)}% conf)`);
+        showSuccess(
+          `Image appears level (${result.linesUsed} lines, ${Math.round(result.confidence * 100)}% conf)`
+        );
       }
     } catch (err) {
       console.error('Auto straighten failed:', err);
@@ -459,7 +461,9 @@
     }
 
     const fullPath = result.data.full_path;
-    imagePath = subfolder ? `${fullPath}\\${subfolder}\\${newFilename}` : `${fullPath}\\${newFilename}`;
+    imagePath = subfolder
+      ? `${fullPath}\\${subfolder}\\${newFilename}`
+      : `${fullPath}\\${newFilename}`;
 
     // Load the new image
     try {
@@ -650,8 +654,8 @@
             bind:panX={canvasPanX}
             bind:panY={canvasPanY}
             bind:fitScalePercent={canvasFitScale}
-            bind:canvasImageWidth={canvasImageWidth}
-            bind:canvasImageHeight={canvasImageHeight}
+            bind:canvasImageWidth
+            bind:canvasImageHeight
           />
           {#if isEditingCrop}
             <CropOverlay
@@ -677,32 +681,44 @@
             <button
               onclick={goToPrevious}
               disabled={!canGoPrevious}
-              class="absolute left-4 top-1/2 -translate-y-1/2 rounded-sm bg-black/70 p-3 text-white transition-opacity hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-30"
+              class="absolute top-1/2 left-4 -translate-y-1/2 rounded-sm bg-black/70 p-3 text-white transition-opacity hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-30"
               title="Previous image (Ctrl+Left)"
               aria-label="Previous image"
             >
               <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M15 19l-7-7 7-7"
+                />
               </svg>
             </button>
             <button
               onclick={goToNext}
               disabled={!canGoNext}
-              class="absolute right-4 top-1/2 -translate-y-1/2 rounded-sm bg-black/70 p-3 text-white transition-opacity hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-30"
+              class="absolute top-1/2 right-4 -translate-y-1/2 rounded-sm bg-black/70 p-3 text-white transition-opacity hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-30"
               title="Next image (Ctrl+Right)"
               aria-label="Next image"
             >
               <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M9 5l7 7-7 7"
+                />
               </svg>
             </button>
             <!-- Image counter -->
-            <div class="absolute right-4 top-4 rounded-sm bg-black/70 px-2 py-1 text-xs text-white">
+            <div class="absolute top-4 right-4 rounded-sm bg-black/70 px-2 py-1 text-xs text-white">
               {currentImageIndex + 1} / {folderImages.length}
             </div>
           {/if}
           <!-- Bottom controls overlay -->
-          <div class="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-sm bg-black/70 p-1.5">
+          <div
+            class="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-sm bg-black/70 p-1.5"
+          >
             <!-- Crop controls -->
             {#if isEditingCrop}
               <!-- Apply crop button -->
@@ -712,7 +728,12 @@
                 title="Apply crop (Enter)"
               >
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M5 13l4 4L19 7"
+                  />
                 </svg>
                 <span class="text-xs font-medium">Apply</span>
               </button>
@@ -723,7 +744,12 @@
                 title="Cancel crop (Esc)"
               >
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M6 18L18 6M6 6l12 12"
+                  />
                 </svg>
                 <span class="text-xs font-medium">Cancel</span>
               </button>
@@ -735,7 +761,12 @@
                 title="Enable crop"
               >
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v16h16M4 8h12v12" />
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M4 4v16h16M4 8h12v12"
+                  />
                 </svg>
                 <span class="text-xs font-medium">Crop</span>
               </button>
@@ -749,7 +780,12 @@
               title="Rotate 90° counter-clockwise"
             >
               <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 5l-7 7 7 7" />
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M15 5l-7 7 7 7"
+                />
               </svg>
               <span class="text-xs font-medium">90</span>
             </button>
@@ -768,7 +804,9 @@
                 onchange={handleRotationCommit}
                 class="h-2 w-80 cursor-pointer appearance-none rounded-full bg-white/30 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
               />
-              <span class="min-w-12 text-center text-sm text-white">{editorState.rotation.fine.toFixed(1)}°</span>
+              <span class="min-w-12 text-center text-sm text-white"
+                >{editorState.rotation.fine.toFixed(1)}°</span
+              >
             </div>
             <!-- Rotate CW button -->
             <button
@@ -778,7 +816,12 @@
             >
               <span class="text-xs font-medium">90</span>
               <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M9 5l7 7-7 7"
+                />
               </svg>
             </button>
             <!-- Separator -->
@@ -792,12 +835,28 @@
             >
               {#if isAutoStraightening}
                 <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                  <circle
+                    class="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    stroke-width="3"
+                  ></circle>
+                  <path
+                    class="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  ></path>
                 </svg>
               {:else}
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M4 6h16M4 12h16M4 18h16"
+                  />
                 </svg>
               {/if}
               <span class="text-xs font-medium">Auto</span>
@@ -898,13 +957,7 @@
                 Auto
               </button>
 
-              {#each [
-                { key: 'brightness', label: 'Brightness', icon: 'sun' },
-                { key: 'exposure', label: 'Exposure', icon: 'aperture' },
-                { key: 'contrast', label: 'Contrast', icon: 'contrast' },
-                { key: 'highlights', label: 'Highlights', icon: 'highlights' },
-                { key: 'shadows', label: 'Shadows', icon: 'shadows' }
-              ] as { key, label, icon } (key)}
+              {#each [{ key: 'brightness', label: 'Brightness', icon: 'sun' }, { key: 'exposure', label: 'Exposure', icon: 'aperture' }, { key: 'contrast', label: 'Contrast', icon: 'contrast' }, { key: 'highlights', label: 'Highlights', icon: 'highlights' }, { key: 'shadows', label: 'Shadows', icon: 'shadows' }] as { key, label, icon } (key)}
                 {@const adjustKey = key as keyof EditorState['adjustments']}
                 <div>
                   <div class="mb-1 flex items-center justify-between">
@@ -912,27 +965,52 @@
                       {#if icon === 'sun'}
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <circle cx="12" cy="12" r="4" stroke-width="2" />
-                          <path stroke-width="2" d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41m12.73-12.73l1.41-1.41" />
+                          <path
+                            stroke-width="2"
+                            d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41m12.73-12.73l1.41-1.41"
+                          />
                         </svg>
                       {:else if icon === 'aperture'}
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <circle cx="12" cy="12" r="10" stroke-width="2" />
-                          <path stroke-width="2" d="M14.31 8l5.74 9.94M9.69 8h11.48M7.38 12l5.74-9.94M9.69 16L3.95 6.06M14.31 16H2.83M16.62 12l-5.74 9.94" />
+                          <path
+                            stroke-width="2"
+                            d="M14.31 8l5.74 9.94M9.69 8h11.48M7.38 12l5.74-9.94M9.69 16L3.95 6.06M14.31 16H2.83M16.62 12l-5.74 9.94"
+                          />
                         </svg>
                       {:else if icon === 'contrast'}
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <circle cx="12" cy="12" r="10" stroke-width="2" />
-                          <path stroke-width="2" fill="currentColor" d="M12 2a10 10 0 0 1 0 20V2z" />
+                          <path
+                            stroke-width="2"
+                            fill="currentColor"
+                            d="M12 2a10 10 0 0 1 0 20V2z"
+                          />
                         </svg>
                       {:else if icon === 'highlights'}
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707" />
-                          <circle cx="12" cy="12" r="4" stroke-width="2" fill="currentColor" fill-opacity="0.3" />
+                          <path
+                            stroke-width="2"
+                            d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707"
+                          />
+                          <circle
+                            cx="12"
+                            cy="12"
+                            r="4"
+                            stroke-width="2"
+                            fill="currentColor"
+                            fill-opacity="0.3"
+                          />
                         </svg>
                       {:else if icon === 'shadows'}
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <circle cx="12" cy="12" r="10" stroke-width="2" />
-                          <path stroke-width="2" fill="currentColor" fill-opacity="0.5" d="M12 2a10 10 0 0 0 0 20 7 7 0 0 1 0-20z" />
+                          <path
+                            stroke-width="2"
+                            fill="currentColor"
+                            fill-opacity="0.5"
+                            d="M12 2a10 10 0 0 0 0 20 7 7 0 0 1 0-20z"
+                          />
                         </svg>
                       {/if}
                       {label}

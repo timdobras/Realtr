@@ -5753,7 +5753,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-app"
-version = "0.1.81-beta"
+version = "0.1.86-beta"
 dependencies = [
  "base64 0.21.7",
  "bytemuck",

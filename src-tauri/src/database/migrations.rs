@@ -146,7 +146,7 @@ pub(super) async fn run_migrations(pool: &SqlitePool) -> Result<(), String> {
                 ELSE 'NEW'
             END
             WHERE status IS NULL OR status = 'NEW'
-            "#
+            "#,
         )
         .execute(pool)
         .await

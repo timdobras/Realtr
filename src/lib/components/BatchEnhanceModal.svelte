@@ -23,13 +23,7 @@
     onComplete: () => void;
   }
 
-  let {
-    open = $bindable(true),
-    folderPath,
-    status,
-    onClose,
-    onComplete
-  }: Props = $props();
+  let { open = $bindable(true), folderPath, status, onClose, onComplete }: Props = $props();
 
   // Processing state
   let isAnalyzing = $state(false);
@@ -42,7 +36,9 @@
   // Progress tracking
   let progressCurrent = $state(0);
   let progressTotal = $state(0);
-  let progressPercent = $derived(progressTotal > 0 ? Math.round((progressCurrent / progressTotal) * 100) : 0);
+  let progressPercent = $derived(
+    progressTotal > 0 ? Math.round((progressCurrent / progressTotal) * 100) : 0
+  );
 
   // Event listener cleanup
   let unlistenProgress: UnlistenFn | null = null;
@@ -196,7 +192,9 @@
 </script>
 
 <Dialog bind:open onOpenChange={handleOpenChange}>
-  <DialogContent class="flex max-h-[95vh] w-[95vw] max-w-[1600px] flex-col overflow-hidden rounded-xl">
+  <DialogContent
+    class="flex max-h-[95vh] w-[95vw] max-w-[1600px] flex-col overflow-hidden rounded-xl"
+  >
     <!-- Modal Header -->
     <div class="border-background-200 flex items-center justify-between border-b px-5 py-4">
       <div>

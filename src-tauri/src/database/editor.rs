@@ -10,8 +10,8 @@ use tokio::process::Command;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x080_0000;
 
-use crate::database::types::CommandResult;
 use crate::database::get_property_base_path;
+use crate::database::types::CommandResult;
 
 #[tauri::command]
 pub async fn open_images_in_folder(
@@ -40,7 +40,8 @@ pub async fn open_images_in_folder(
             if path.is_file() {
                 if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
                     let ext = ext.to_lowercase();
-                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext.as_str()) {
+                    if ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"].contains(&ext.as_str())
+                    {
                         paths.push(path);
                     }
                 }
@@ -171,7 +172,10 @@ pub async fn open_image_in_editor(
     #[cfg(target_os = "windows")]
     {
         let _ = Command::new("powershell")
-            .args(["-Command", &format!("Unblock-File -Path \"{}\"", image_path.display())])
+            .args([
+                "-Command",
+                &format!("Unblock-File -Path \"{}\"", image_path.display()),
+            ])
             .creation_flags(CREATE_NO_WINDOW)
             .output()
             .await;
@@ -234,9 +238,7 @@ pub async fn open_image_in_advanced_editor(
             .join("AGGELIA")
             .join(&filename)
     } else {
-        property_path
-            .join("INTERNET")
-            .join(&filename)
+        property_path.join("INTERNET").join(&filename)
     };
 
     let img_path = image_path.clone();
@@ -256,7 +258,10 @@ pub async fn open_image_in_advanced_editor(
     #[cfg(target_os = "windows")]
     {
         let _ = Command::new("powershell")
-            .args(["-Command", &format!("Unblock-File -Path \"{}\"", image_path.display())])
+            .args([
+                "-Command",
+                &format!("Unblock-File -Path \"{}\"", image_path.display()),
+            ])
             .creation_flags(CREATE_NO_WINDOW)
             .output()
             .await;
@@ -304,21 +309,19 @@ pub async fn open_property_folder(
 
     println!("Attempting to open: {}", full_path.display());
 
-    tokio::task::spawn_blocking(move || {
-        match opener::open(&full_path) {
-            Ok(_) => Ok(CommandResult {
-                success: true,
-                error: None,
-                data: Some(serde_json::json!({
-                    "opened_path": full_path.to_string_lossy()
-                })),
-            }),
-            Err(e) => Ok(CommandResult {
-                success: false,
-                error: Some(format!("Failed to open folder: {}", e)),
-                data: None,
-            }),
-        }
+    tokio::task::spawn_blocking(move || match opener::open(&full_path) {
+        Ok(_) => Ok(CommandResult {
+            success: true,
+            error: None,
+            data: Some(serde_json::json!({
+                "opened_path": full_path.to_string_lossy()
+            })),
+        }),
+        Err(e) => Ok(CommandResult {
+            success: false,
+            error: Some(format!("Failed to open folder: {}", e)),
+            data: None,
+        }),
     })
     .await
     .map_err(|e| format!("Task join error: {e}"))?

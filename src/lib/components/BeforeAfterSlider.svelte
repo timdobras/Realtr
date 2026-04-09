@@ -144,22 +144,30 @@
     <div class="absolute right-2 bottom-2 z-20 flex flex-wrap justify-end gap-1">
       {#if Math.abs(brightness) >= 1}
         <div class="rounded bg-amber-500/80 px-1.5 py-0.5">
-          <span class="text-[10px] font-medium text-white">B{brightness > 0 ? '+' : ''}{brightness}</span>
+          <span class="text-[10px] font-medium text-white"
+            >B{brightness > 0 ? '+' : ''}{brightness}</span
+          >
         </div>
       {/if}
       {#if Math.abs(exposure) >= 1}
         <div class="rounded bg-blue-500/80 px-1.5 py-0.5">
-          <span class="text-[10px] font-medium text-white">E{exposure > 0 ? '+' : ''}{exposure}</span>
+          <span class="text-[10px] font-medium text-white"
+            >E{exposure > 0 ? '+' : ''}{exposure}</span
+          >
         </div>
       {/if}
       {#if Math.abs(contrast) >= 1}
         <div class="rounded bg-purple-500/80 px-1.5 py-0.5">
-          <span class="text-[10px] font-medium text-white">C{contrast > 0 ? '+' : ''}{contrast}</span>
+          <span class="text-[10px] font-medium text-white"
+            >C{contrast > 0 ? '+' : ''}{contrast}</span
+          >
         </div>
       {/if}
       {#if Math.abs(highlights) >= 1}
         <div class="rounded bg-orange-500/80 px-1.5 py-0.5">
-          <span class="text-[10px] font-medium text-white">H{highlights > 0 ? '+' : ''}{highlights}</span>
+          <span class="text-[10px] font-medium text-white"
+            >H{highlights > 0 ? '+' : ''}{highlights}</span
+          >
         </div>
       {/if}
       {#if Math.abs(shadows) >= 1}

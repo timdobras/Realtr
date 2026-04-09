@@ -53,7 +53,7 @@ async fn get_property_base_path(
         }
         "NOT_FOUND" => {
             if config.not_found_folder_path.is_empty() {
-                return Err("NOT_FOUND folder path not configured in Settings".to_string())
+                return Err("NOT_FOUND folder path not configured in Settings".to_string());
             }
             &config.not_found_folder_path
         }
@@ -85,7 +85,9 @@ pub async fn process_images_for_perspective(
 
     // List all images in INTERNET folder
     let mut images: Vec<PathBuf> = Vec::new();
-    for entry in fs::read_dir(&internet_path).map_err(|e| format!("Failed to read INTERNET folder: {e}"))? {
+    for entry in
+        fs::read_dir(&internet_path).map_err(|e| format!("Failed to read INTERNET folder: {e}"))?
+    {
         let entry = entry.map_err(|e| format!("Failed to read entry: {e}"))?;
         let path = entry.path();
 
@@ -107,7 +109,11 @@ pub async fn process_images_for_perspective(
         .build()
         .map_err(|e| format!("Failed to create thread pool: {e}"))?;
 
-    println!("Processing {} images from: {} (parallel, 4 threads)", images.len(), internet_path.display());
+    println!(
+        "Processing {} images from: {} (parallel, 4 threads)",
+        images.len(),
+        internet_path.display()
+    );
 
     // Get GPU image processor from Tauri state
     let processor = app.state::<Arc<ImageProcessor>>();
@@ -124,7 +130,12 @@ pub async fn process_images_for_perspective(
                     .unwrap_or("unknown")
                     .to_string();
 
-                println!("Processing image {}/{}: {}", idx + 1, images.len(), filename);
+                println!(
+                    "Processing image {}/{}: {}",
+                    idx + 1,
+                    images.len(),
+                    filename
+                );
 
                 match process_single_image(image_path, &temp_dir, &processor_ref) {
                     Ok(result) => {
@@ -166,8 +177,8 @@ fn process_single_image(
     processor: &ImageProcessor,
 ) -> Result<CorrectionResult, String> {
     // Load the image using turbojpeg for JPEG files
-    let img = crate::turbo::load_image(image_path)
-        .map_err(|e| format!("Failed to open image: {e}"))?;
+    let img =
+        crate::turbo::load_image(image_path).map_err(|e| format!("Failed to open image: {e}"))?;
 
     // Analyze for perspective distortion using gradient histogram + RANSAC
     let analysis = analyze_perspective(&img, processor)?;
@@ -239,10 +250,7 @@ pub async fn accept_perspective_corrections(
                 let _ = fs::remove_file(&temp_path);
             }
             Err(e) => {
-                errors.push(format!(
-                    "Failed to save {}: {e}",
-                    original_path.display()
-                ));
+                errors.push(format!("Failed to save {}: {e}", original_path.display()));
             }
         }
     }
@@ -274,17 +282,14 @@ pub async fn cleanup_perspective_temp(app: tauri::AppHandle) -> Result<(), Strin
 
 /// Get the original image as base64 for before/after comparison
 #[tauri::command]
-pub async fn get_original_image_for_comparison(
-    image_path: String,
-) -> Result<String, String> {
+pub async fn get_original_image_for_comparison(image_path: String) -> Result<String, String> {
     let path = PathBuf::from(&image_path);
 
     if !path.exists() {
         return Err(format!("Image not found: {image_path}"));
     }
 
-    let img = crate::turbo::load_image(&path)
-        .map_err(|e| format!("Failed to open image: {e}"))?;
+    let img = crate::turbo::load_image(&path).map_err(|e| format!("Failed to open image: {e}"))?;
 
     // Resize for preview
     let (width, height) = img.dimensions();

@@ -632,9 +632,7 @@ fn dedup_vertical_lines(lines: &mut Vec<HoughLine>, min_dim: u32) {
 
             let r_180 = lines[idx_180].r;
             let distance = (r_0 + r_180).abs();
-            if distance < r_threshold
-                && best_match.map_or(true, |(_, best_d)| distance < best_d)
-            {
+            if distance < r_threshold && best_match.map_or(true, |(_, best_d)| distance < best_d) {
                 best_match = Some((j, distance));
             }
         }
