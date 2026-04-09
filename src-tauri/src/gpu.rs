@@ -150,6 +150,10 @@ impl ImageProcessor {
     /// Uploads the image once, dispatches rotation, feeds output directly
     /// into adjustments, downloads final result once.
     /// Saves ~20-30ms per full-res image by eliminating 2 redundant PCIe transfers.
+    ///
+    /// Each adjustment parameter is independent — bundling them into a struct
+    /// would just shift the complexity, so we silence the lint here.
+    #[allow(clippy::too_many_arguments)]
     pub fn rotate_and_adjust(
         &self,
         img: &DynamicImage,
@@ -1074,6 +1078,9 @@ fn gpu_watermark_blend(
 // GPU Fused Rotation + Adjustments (single round-trip)
 // ============================================================================
 
+// Mirrors `ImageProcessor::rotate_and_adjust` — independent params, struct
+// bundling would just push complexity around.
+#[allow(clippy::too_many_arguments)]
 fn gpu_rotate_and_adjust(
     ctx: &GpuContext,
     img: &DynamicImage,
@@ -1948,7 +1955,7 @@ fn cpu_gradient_histogram(
 
     let w = width as usize;
     let h = height as usize;
-    let num_bins = GRADIENT_HISTOGRAM_BINS as usize;
+    let num_bins = GRADIENT_HISTOGRAM_BINS;
 
     // Each thread accumulates a local histogram, then we reduce
     let local_hists: Vec<Vec<f64>> = (1..h - 1)
@@ -2083,6 +2090,11 @@ fn cpu_bilateral(gray_pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
 
 /// CPU fallback for CLAHE on grayscale data.
 /// Uses 8x8 grid, clip limit 2.0 (matching the GPU shader defaults).
+//
+// Multi-axis indexing into `tile_mappings[ty][tx][i]` and the
+// `cdf[i] = cdf[i-1] + hist[i]` accumulation don't translate
+// cleanly into iterator chains, so silence needless_range_loop.
+#[allow(clippy::needless_range_loop)]
 fn cpu_clahe(gray_pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
     let w = width as usize;
     let h = height as usize;

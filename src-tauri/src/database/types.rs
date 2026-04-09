@@ -42,7 +42,10 @@ pub struct Property {
     #[ts(type = "number")]
     pub updated_at: chrono::DateTime<chrono::Utc>,
     // Legacy field for backward compatibility during migration. Skipped in
-    // both serde output and the generated TS types.
+    // both serde output and the generated TS types. The field is read by
+    // serde::Deserialize when ingesting old config blobs but never accessed
+    // from Rust code, so suppress the dead-code warning.
+    #[allow(dead_code)]
     #[serde(skip_serializing)]
     #[serde(default)]
     #[ts(skip)]

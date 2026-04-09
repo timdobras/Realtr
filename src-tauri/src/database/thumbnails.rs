@@ -7,7 +7,6 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use rayon::prelude::*;
 use tauri::Manager;
@@ -120,11 +119,11 @@ pub async fn get_gallery_thumbnail_path(
     let thumbnails_base = app_data_dir
         .join("thumbnails")
         .join(format!("gallery_{max_size}"));
-    let safe_folder_name = folder_path.replace('/', "_").replace('\\', "_");
+    let safe_folder_name = folder_path.replace(['/', '\\'], "_");
     let safe_subfolder = if subfolder.is_empty() {
         "root".to_string()
     } else {
-        subfolder.replace('/', "_").replace('\\', "_")
+        subfolder.replace(['/', '\\'], "_")
     };
     let thumbnails_dir = thumbnails_base
         .join(&safe_folder_name)
@@ -208,7 +207,7 @@ pub async fn get_thumbnail_paths_batch(
             .into_iter()
             .map(|(prop, property_path)| {
                 let limit = prop.limit.unwrap_or(6);
-                let safe_folder_name = prop.folder_path.replace('/', "_").replace('\\', "_");
+                let safe_folder_name = prop.folder_path.replace(['/', '\\'], "_");
                 let thumb_dir = thumbnails_base.join(&safe_folder_name);
 
                 // List original images
@@ -326,11 +325,11 @@ pub async fn pregenerate_gallery_thumbnails(
         let thumbnails_base = app_data_dir
             .join("thumbnails")
             .join(format!("gallery_{}", max_size));
-        let safe_folder_name = folder_path.replace('/', "_").replace('\\', "_");
+        let safe_folder_name = folder_path.replace(['/', '\\'], "_");
         let safe_subfolder = if subfolder.is_empty() {
             "root".to_string()
         } else {
-            subfolder.replace('/', "_").replace('\\', "_")
+            subfolder.replace(['/', '\\'], "_")
         };
         let thumbnails_dir = thumbnails_base
             .join(&safe_folder_name)

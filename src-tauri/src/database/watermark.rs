@@ -10,7 +10,7 @@
 //! nothing outside this module ever called them.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -164,8 +164,8 @@ pub async fn copy_and_watermark_images(
 }
 
 fn copy_and_process_folder_with_config(
-    source_path: &PathBuf,
-    dest_path: &PathBuf,
+    source_path: &Path,
+    dest_path: &Path,
     watermark_img: &DynamicImage,
     config: &crate::config::WatermarkConfig,
     processor: &Arc<ImageProcessor>,
@@ -290,7 +290,7 @@ fn apply_watermark_to_image_with_cached_wm(
 
     if ext == "jpg" || ext == "jpeg" {
         // Use turbojpeg for fast JPEG encoding
-        let rgb_img: image::RgbImage = image::DynamicImage::ImageRgba8(base_img).to_rgb8();
+        let rgb_img: image::RgbImage = DynamicImage::ImageRgba8(base_img).to_rgb8();
         crate::turbo::save_jpeg(&rgb_img, dest_path, 92)?;
     } else {
         base_img
@@ -590,7 +590,7 @@ fn apply_watermark_to_image(
 
     // Resize watermark using SIMD-accelerated fast_image_resize
     let resized_watermark =
-        crate::fast_resize::resize_exact(&watermark_img, new_wm_width, new_wm_height).to_rgba8();
+        crate::fast_resize::resize_exact(watermark_img, new_wm_width, new_wm_height).to_rgba8();
 
     // Calculate center position
     let pos_x = (base_width - new_wm_width) / 2;
@@ -629,7 +629,7 @@ fn apply_watermark_to_image(
 
     if ext == "jpg" || ext == "jpeg" {
         // Convert RGBA to RGB for JPEG format
-        let rgb_img: image::RgbImage = image::DynamicImage::ImageRgba8(base_img).to_rgb8();
+        let rgb_img: image::RgbImage = DynamicImage::ImageRgba8(base_img).to_rgb8();
         rgb_img
             .save(dest_path)
             .map_err(|e| format!("Failed to save watermarked image: {}", e))?;

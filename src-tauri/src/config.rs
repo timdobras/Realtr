@@ -273,15 +273,9 @@ pub async fn copy_watermark_to_app_data(
     std::fs::create_dir_all(&watermark_dir)
         .map_err(|e| format!("Failed to create watermark directory: {}", e))?;
 
-    // Get the filename from source path
+    // The watermark is always saved with a fixed name in app data,
+    // regardless of the source filename, so we don't extract it.
     let source = PathBuf::from(&source_path);
-    let filename = source
-        .file_name()
-        .ok_or("Invalid source file path")?
-        .to_str()
-        .ok_or("Invalid filename")?;
-
-    // Copy to app data with a fixed name
     let dest_path = watermark_dir.join("watermark.png");
 
     std::fs::copy(&source, &dest_path)

@@ -4,10 +4,8 @@
 //!
 //! Extracted from database.rs in the database-module split.
 
-use std::fs;
 use std::path::PathBuf;
 
-use serde_json::json;
 use sqlx::Row;
 
 use crate::database::types::{CommandResult, CompleteSetResult, Property, Set, SetProperty};

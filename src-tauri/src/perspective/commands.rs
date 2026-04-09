@@ -10,7 +10,7 @@ use crate::perspective::{AcceptedCorrection, CorrectionResult, PerspectiveComman
 use image::{DynamicImage, GenericImageView};
 use rayon::prelude::*;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Manager;
 
@@ -26,7 +26,7 @@ async fn get_property_base_path(
     folder_path: &str,
     status: &str,
 ) -> Result<PathBuf, String> {
-    let config = crate::config::get_cached_config(&app)
+    let config = crate::config::get_cached_config(app)
         .await
         .map_err(|e| e.to_string())?;
     let config = config.ok_or("App configuration not found")?;
@@ -172,8 +172,8 @@ pub async fn process_images_for_perspective(
 
 /// Process a single image for perspective correction
 fn process_single_image(
-    image_path: &PathBuf,
-    temp_dir: &PathBuf,
+    image_path: &Path,
+    temp_dir: &Path,
     processor: &ImageProcessor,
 ) -> Result<CorrectionResult, String> {
     // Load the image using turbojpeg for JPEG files

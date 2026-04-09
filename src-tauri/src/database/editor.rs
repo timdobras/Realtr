@@ -4,7 +4,6 @@
 //!
 //! Extracted from database.rs in the database-module split.
 
-use tauri::Manager;
 use tokio::process::Command;
 
 #[cfg(target_os = "windows")]

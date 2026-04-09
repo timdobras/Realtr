@@ -24,6 +24,9 @@ pub struct ImageCache {
     pub path: String,
     pub full_image: DynamicImage, // Full-resolution cached image (~50-100MB, saves disk I/O on save)
     pub preview_image: DynamicImage, // Pre-resized to ~800px for fast processing
+    /// Recorded for diagnostics — the actual preview dimensions live on
+    /// `preview_image`. Kept for future cache-invalidation logic.
+    #[allow(dead_code)]
     pub preview_size: u32,
 }
 
@@ -574,7 +577,7 @@ pub async fn batch_analyze_for_enhance(
         ));
     }
 
-    let internet_path = std::path::Path::new(base_folder_path)
+    let internet_path = Path::new(base_folder_path)
         .join(&folder_path)
         .join("INTERNET");
 

@@ -30,14 +30,10 @@ jobs:
 
       # The pedantic / nursery groups are configured at warn level in
       # Cargo.toml as aspirational style guidance and currently produce
-      # ~900 warnings on the image-processing modules. After silencing
-      # the noisiest pedantic lints below, ~76 actionable findings remain
-      # (unnecessary_qualification, &PathBuf vs &Path, dead_code, etc.).
-      # These are tech debt, not bugs — the step is informational for now
-      # so CI is green from day one. To enforce strictly, drop
-      # `continue-on-error` once those are cleaned up.
-      - name: cargo clippy (informational)
-        continue-on-error: true
+      # ~900 warnings on the image-processing modules — most are noise.
+      # We silence the noisiest pedantic lints below and run clippy
+      # strictly so any *new* actionable finding fails CI.
+      - name: cargo clippy (deny warnings)
         run: >
           cargo clippy --no-deps --
           -D warnings

@@ -86,7 +86,11 @@ pub struct StraightenResult {
     pub vh_agreement: bool,
 }
 
-/// A real line segment detected in the image (from Hough transform)
+/// A real line segment detected in the image (from Hough transform).
+/// Both angle_from_vertical and angle_from_horizontal are populated for
+/// Debug output and external diagnostics; the straighten pipeline
+/// itself only consumes the endpoints + length.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct LineSegment {
     pub x1: f64,
@@ -585,7 +589,8 @@ fn dedup_vertical_lines(lines: &mut Vec<HoughLine>, min_dim: u32) {
     let r_threshold = min_dim as f32 * 0.06;
 
     // Separate into angle-near-0 and angle-near-180 groups
-    let (near_0, near_180): (Vec<(usize, &HoughLine)>, Vec<(usize, &HoughLine)>) = lines
+    type IndexedLine<'a> = (usize, &'a HoughLine);
+    let (near_0, near_180): (Vec<IndexedLine<'_>>, Vec<IndexedLine<'_>>) = lines
         .iter()
         .enumerate()
         .filter(|(_, l)| l.line_type == LineType::Vertical)
@@ -1339,7 +1344,7 @@ mod tests {
     #[test]
     #[ignore] // Only run manually
     fn test_real_images() {
-        let test_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test_images");
+        let test_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_images");
         if !test_dir.exists() {
             eprintln!("No test_images directory found, skipping");
             return;
@@ -1351,7 +1356,7 @@ mod tests {
             .filter(|e| {
                 e.path()
                     .extension()
-                    .map_or(false, |ext| ext == "jpeg" || ext == "jpg" || ext == "png")
+                    .is_some_and(|ext| ext == "jpeg" || ext == "jpg" || ext == "png")
             })
             .collect();
         entries.sort_by_key(|e| e.file_name());
@@ -1403,8 +1408,8 @@ mod tests {
             );
 
             // Run analysis WITH preprocessing (CPU bilateral + CLAHE)
-            let processor = crate::gpu::ImageProcessor::Cpu;
-            let preprocessed = crate::perspective::preprocessing::preprocess_for_detection_no_exif(
+            let processor = ImageProcessor::Cpu;
+            let preprocessed = preprocess_for_detection_no_exif(
                 &scaled, &processor,
             );
             eprintln!("  [PREPROCESSED - bilateral + CLAHE]");
@@ -1426,9 +1431,9 @@ mod tests {
     #[test]
     #[ignore]
     fn test_visual_verify() {
-        let test_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test_images");
+        let test_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_images");
         let output_dir =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test_images_rotated");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("test_images_rotated");
 
         if !test_dir.exists() {
             eprintln!("No test_images directory, skipping");
@@ -1709,7 +1714,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_ground_truth() {
-        let test_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test_images");
+        let test_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_images");
         if !test_dir.exists() {
             eprintln!("No test_images directory found, skipping");
             return;
@@ -1793,7 +1798,7 @@ mod tests {
                     }
                 }
 
-                let rotated_gray = image::DynamicImage::ImageRgb8(rotated_rgb).to_luma8();
+                let rotated_gray = DynamicImage::ImageRgb8(rotated_rgb).to_luma8();
                 let (result, _) = analyze_at_resolution(&rotated_gray);
 
                 // The rotation applies a CCW rotation of `applied_tilt` degrees.
@@ -1851,7 +1856,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_line_diagnostic() {
-        let test_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test_images");
+        let test_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_images");
         if !test_dir.exists() {
             eprintln!("No test_images directory found, skipping");
             return;
@@ -1899,7 +1904,7 @@ mod tests {
                 }
             }
         }
-        let gray_rotated = image::DynamicImage::ImageRgb8(rotated_rgb).to_luma8();
+        let gray_rotated = DynamicImage::ImageRgb8(rotated_rgb).to_luma8();
 
         for (label, g) in [("ORIGINAL", &gray), ("ROTATED +1.5°", &gray_rotated)] {
             eprintln!("\n{}", "=".repeat(80));

@@ -22,7 +22,10 @@ const PEAK_PROMINENCE_RATIO: f64 = 0.05;
 /// Peak detection window half-width in bins (0.1 degree per bin)
 const PEAK_WINDOW_HALF: usize = 20; // +/- 2 degrees
 
-/// A detected line segment (synthesized from gradient histogram peaks)
+/// A detected line segment (synthesized from gradient histogram peaks).
+/// The x1/y1/x2/y2 endpoint fields are populated for diagnostic Debug output
+/// but the analysis pipeline only reads `angle_from_vertical` and `length`.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct LineSegment {
     /// Start X coordinate
@@ -135,7 +138,10 @@ fn detect_vertical_lines_from_histogram(
     Ok(segments)
 }
 
-/// A detected peak in the gradient histogram
+/// A detected peak in the gradient histogram.
+/// `angle_deg` is populated for Debug output; the analysis path uses
+/// the radian-encoded `deviation_from_vertical_rad` instead.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct HistogramPeak {
     /// Center angle in degrees
@@ -222,13 +228,12 @@ fn find_histogram_peaks(histogram: &[f32]) -> Vec<HistogramPeak> {
 
         let is_vertical = min_v_dev <= VERTICAL_TOLERANCE_DEG;
 
-        // Signed deviation: gradient slightly above 0 -> line tilts right (positive)
+        // Signed deviation: gradient slightly above 0 -> line tilts right (positive).
+        // Both 90<angle<=180 and 180<angle<270 collapse to `angle - 180`.
         let signed_dev_deg = if angle <= 90.0 {
             angle
         } else if angle >= 270.0 {
             angle - 360.0
-        } else if angle <= 180.0 {
-            angle - 180.0
         } else {
             angle - 180.0
         };

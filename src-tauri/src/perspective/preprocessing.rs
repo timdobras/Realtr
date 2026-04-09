@@ -142,7 +142,7 @@ fn downscale_to_target(img: &DynamicImage, target_size: u32) -> DynamicImage {
     let new_width = (f64::from(width) * scale).round() as u32;
     let new_height = (f64::from(height) * scale).round() as u32;
 
-    crate::fast_resize::resize_exact(&img, new_width, new_height)
+    crate::fast_resize::resize_exact(img, new_width, new_height)
 }
 
 #[cfg(test)]

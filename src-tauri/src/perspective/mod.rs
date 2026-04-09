@@ -97,13 +97,6 @@ impl PerspectiveCommandResult {
         }
     }
 
-    pub fn error(error: &str) -> Self {
-        Self {
-            success: false,
-            error: Some(error.to_string()),
-            message: None,
-        }
-    }
 }
 
 // ============================================================================

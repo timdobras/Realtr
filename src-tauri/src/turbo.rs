@@ -29,7 +29,7 @@ fn load_jpeg(path: &Path) -> Result<DynamicImage, String> {
     let jpeg_data =
         std::fs::read(path).map_err(|e| format!("Failed to read file {}: {e}", path.display()))?;
 
-    let rgb: image::RgbImage = turbojpeg::decompress_image(&jpeg_data)
+    let rgb: RgbImage = turbojpeg::decompress_image(&jpeg_data)
         .map_err(|e| format!("turbojpeg decode failed for {}: {e}", path.display()))?;
 
     Ok(DynamicImage::ImageRgb8(rgb))
@@ -117,7 +117,7 @@ pub fn load_jpeg_scaled(path: &Path, max_size: u32) -> Result<DynamicImage, Stri
         .map_err(|e| format!("turbojpeg scaled decode failed: {e}"))?;
 
     // Convert to image::RgbImage
-    let rgb = image::RgbImage::from_raw(scaled.width as u32, scaled.height as u32, image.pixels)
+    let rgb = RgbImage::from_raw(scaled.width as u32, scaled.height as u32, image.pixels)
         .ok_or_else(|| "Failed to construct RgbImage from turbojpeg output".to_string())?;
 
     Ok(DynamicImage::ImageRgb8(rgb))

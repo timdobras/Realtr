@@ -1,21 +1,12 @@
-use base64::{engine::general_purpose, Engine as _};
-use image::{DynamicImage, GenericImageView, ImageFormat, RgbaImage};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use tauri::Manager;
 use ts_rs::TS;
-
-use crate::gpu::ImageProcessor;
-use tokio::process::Command;
-
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 // ── Submodules (extracted from this file) ──────────────────────────
 mod editor;
@@ -36,8 +27,7 @@ pub use thumbnails::{
     pregenerate_gallery_thumbnails,
 };
 pub use types::{
-    City, CommandResult, CompleteSetResult, Property, ScanResult, Set, SetProperty,
-    ThumbnailBatchRequest, ThumbnailBatchResult,
+    City, CommandResult, Property, ScanResult,
 };
 pub use watermark::{
     clear_watermark_folders, copy_and_watermark_images, generate_watermark_preview,
@@ -58,7 +48,7 @@ fn is_image_extension(ext: &str) -> bool {
 
 /// List image filenames in `dir`, sorted alphabetically.
 /// Returns an empty vec if `dir` does not exist.
-fn list_image_filenames(dir: &std::path::Path) -> Result<Vec<String>, String> {
+fn list_image_filenames(dir: &Path) -> Result<Vec<String>, String> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -82,7 +72,7 @@ fn list_image_filenames(dir: &std::path::Path) -> Result<Vec<String>, String> {
 
 /// Delete all files (not subdirectories) in `dir`.
 /// Returns (deleted_count, errors). If `dir` does not exist, returns (0, []).
-fn clear_files_in_dir(dir: &std::path::Path) -> (usize, Vec<String>) {
+fn clear_files_in_dir(dir: &Path) -> (usize, Vec<String>) {
     if !dir.exists() {
         return (0, Vec::new());
     }
@@ -110,7 +100,7 @@ fn clear_files_in_dir(dir: &std::path::Path) -> (usize, Vec<String>) {
 /// Avoids name conflicts when files swap positions (e.g. A→B, B→A).
 /// Returns (renamed_count, errors).
 fn rename_files_two_pass(
-    dir: &std::path::Path,
+    dir: &Path,
     rename_map: &[(String, String)],
 ) -> (usize, Vec<String>) {
     let mut renamed = 0;
@@ -159,8 +149,8 @@ fn rename_files_two_pass(
 /// Copy image files from `src_dir` to `dest_dir`, skipping files that already exist in dest.
 /// Returns (copied_count, errors).
 fn copy_new_images_to_dir(
-    src_dir: &std::path::Path,
-    dest_dir: &std::path::Path,
+    src_dir: &Path,
+    dest_dir: &Path,
 ) -> (usize, Vec<String>) {
     let files_to_copy: Vec<(PathBuf, PathBuf)> = match fs::read_dir(src_dir) {
         Ok(entries) => entries
@@ -282,7 +272,7 @@ pub(super) async fn get_property_base_path(
     folder_path: &str,
     status: &str,
 ) -> Result<PathBuf, String> {
-    let config = crate::config::get_cached_config(&app)
+    let config = crate::config::get_cached_config(app)
         .await
         .map_err(|e| e.to_string())?;
     let config = config.ok_or("App configuration not found")?;
@@ -438,9 +428,9 @@ pub async fn get_properties(app: tauri::AppHandle) -> Result<CommandResult, Stri
         let updated_at_timestamp: i64 = row.get("updated_at");
 
         let created_at = chrono::DateTime::from_timestamp_millis(created_at_timestamp)
-            .unwrap_or_else(|| chrono::Utc::now());
+            .unwrap_or_else(chrono::Utc::now);
         let updated_at = chrono::DateTime::from_timestamp_millis(updated_at_timestamp)
-            .unwrap_or_else(|| chrono::Utc::now());
+            .unwrap_or_else(chrono::Utc::now);
 
         let property = Property {
             id: Some(row.get("id")),
@@ -485,9 +475,9 @@ pub async fn get_properties_by_status(
         let updated_at_timestamp: i64 = row.get("updated_at");
 
         let created_at = chrono::DateTime::from_timestamp_millis(created_at_timestamp)
-            .unwrap_or_else(|| chrono::Utc::now());
+            .unwrap_or_else(chrono::Utc::now);
         let updated_at = chrono::DateTime::from_timestamp_millis(updated_at_timestamp)
-            .unwrap_or_else(|| chrono::Utc::now());
+            .unwrap_or_else(chrono::Utc::now);
 
         let property = Property {
             id: Some(row.get("id")),
@@ -688,7 +678,7 @@ pub async fn set_property_code(
 
     // Extract the actual folder name from the stored folder_path (format: "city/folder_name")
     // This ensures we use the real folder name on disk, not a reconstructed one
-    let old_folder_name = folder_path.split('/').last().unwrap_or(&name).to_string();
+    let old_folder_name = folder_path.split('/').next_back().unwrap_or(&name).to_string();
 
     // For folder names, replace "/" with "-" since "/" is not allowed in folder names
     // This allows codes like "204905/44538" to be saved as "204905-44538" in the folder name
@@ -712,7 +702,7 @@ pub async fn set_property_code(
     if old_absolute_path != new_absolute_path {
         tokio::task::spawn_blocking(move || {
             if old_absolute_path.exists() {
-                std::fs::rename(&old_absolute_path, &new_absolute_path)
+                fs::rename(&old_absolute_path, &new_absolute_path)
                     .map_err(|e| format!("Failed to rename folder: {}", e))?;
             }
             Ok::<_, String>(())
@@ -795,7 +785,7 @@ pub async fn update_property(
     // Extract current folder name from folder_path (format: "city/folder_name")
     let old_folder_name = folder_path
         .split('/')
-        .last()
+        .next_back()
         .unwrap_or(&old_name)
         .to_string();
 
@@ -844,24 +834,20 @@ pub async fn update_property(
                 if city_changed_flag {
                     let new_city_path = base_path_clone.join(&city_clone);
                     if !new_city_path.exists() {
-                        std::fs::create_dir_all(&new_city_path)
+                        fs::create_dir_all(&new_city_path)
                             .map_err(|e| format!("Failed to create city folder: {}", e))?;
                     }
                 }
 
                 if old_absolute_path != new_absolute_path {
-                    std::fs::rename(&old_absolute_path, &new_absolute_path)
+                    fs::rename(&old_absolute_path, &new_absolute_path)
                         .map_err(|e| format!("Failed to move/rename folder: {}", e))?;
                 }
             }
             Ok::<_, String>(())
         })
         .await
-        .map_err(|e| format!("Task join error: {e}"))?
-        .map_err(|e| {
-            // Return as CommandResult error, not String error
-            e
-        })?;
+        .map_err(|e| format!("Task join error: {e}"))??;
     }
 
     // Update database
@@ -949,7 +935,7 @@ pub async fn get_cities(app: tauri::AppHandle) -> Result<CommandResult, String> 
     for row in rows {
         let created_at_timestamp: i64 = row.get("created_at");
         let created_at = chrono::DateTime::from_timestamp_millis(created_at_timestamp)
-            .unwrap_or_else(|| chrono::Utc::now());
+            .unwrap_or_else(chrono::Utc::now);
 
         let city = City {
             id: Some(row.get("id")),
@@ -987,7 +973,7 @@ pub async fn search_cities(app: tauri::AppHandle, query: String) -> Result<Comma
     for row in rows {
         let created_at_timestamp: i64 = row.get("created_at");
         let created_at = chrono::DateTime::from_timestamp_millis(created_at_timestamp)
-            .unwrap_or_else(|| chrono::Utc::now());
+            .unwrap_or_else(chrono::Utc::now);
 
         let city = City {
             id: Some(row.get("id")),
@@ -1024,9 +1010,9 @@ pub async fn get_property_by_id(
             let updated_at_timestamp: i64 = row.get("updated_at");
 
             let created_at = chrono::DateTime::from_timestamp_millis(created_at_timestamp)
-                .unwrap_or_else(|| chrono::Utc::now());
+                .unwrap_or_else(chrono::Utc::now);
             let updated_at = chrono::DateTime::from_timestamp_millis(updated_at_timestamp)
-                .unwrap_or_else(|| chrono::Utc::now());
+                .unwrap_or_else(chrono::Utc::now);
 
             let property = Property {
                 id: Some(row.get("id")),
@@ -1220,11 +1206,11 @@ pub async fn repair_property_statuses(app: tauri::AppHandle) -> Result<CommandRe
         ),
     ];
 
-    // Phase 1: Check filesystem locations on a blocking thread
-    // Returns: Vec<(id, folder_path, db_status, name, found_status, new_folder_name)>
-    let properties_clone = properties.clone();
-    let status_paths_clone = status_paths.clone();
-    let scan_results: Vec<(
+    // Phase 1: Check filesystem locations on a blocking thread.
+    // Each row: (id, folder_path, db_status, name, found_full_path,
+    // found_status, errors). Hoisted to a type alias to satisfy the
+    // clippy::type_complexity lint.
+    type ScanRow = (
         i64,
         String,
         String,
@@ -1232,7 +1218,10 @@ pub async fn repair_property_statuses(app: tauri::AppHandle) -> Result<CommandRe
         Option<String>,
         Option<String>,
         Vec<String>,
-    )> = tokio::task::spawn_blocking(move || {
+    );
+    let properties_clone = properties.clone();
+    let status_paths_clone = status_paths.clone();
+    let scan_results: Vec<ScanRow> = tokio::task::spawn_blocking(move || {
         let mut results = Vec::new();
 
         for (id, folder_path, db_status, name) in properties_clone {
@@ -1400,7 +1389,7 @@ async fn get_existing_properties_set(pool: &SqlitePool) -> Result<HashSet<String
 }
 
 async fn scan_folder_for_properties(
-    folder_path: &PathBuf,
+    folder_path: &Path,
     status: &str,
     existing_properties: &HashSet<String>,
     pool: &SqlitePool,
@@ -1413,7 +1402,7 @@ async fn scan_folder_for_properties(
     };
 
     // Filesystem scan runs on a blocking thread to avoid stalling the Tokio runtime
-    let folder_path_clone = folder_path.clone();
+    let folder_path_clone = folder_path.to_path_buf();
     let status_clone = status.to_string();
     let existing_clone = existing_properties.clone();
 
@@ -1425,7 +1414,7 @@ async fn scan_folder_for_properties(
             let mut existing = 0usize;
             let mut errors = Vec::new();
 
-            let entries = match std::fs::read_dir(&folder_path_clone) {
+            let entries = match fs::read_dir(&folder_path_clone) {
                 Ok(e) => e,
                 Err(e) => return Err(format!("Failed to read directory: {}", e)),
             };
@@ -1452,7 +1441,7 @@ async fn scan_folder_for_properties(
                     }
                 };
 
-                let city_entries = match std::fs::read_dir(&city_path) {
+                let city_entries = match fs::read_dir(&city_path) {
                     Ok(entries) => entries,
                     Err(e) => {
                         errors.push(format!("Failed to read city folder {}: {}", city_name, e));
@@ -1593,7 +1582,7 @@ async fn scan_folder_for_properties(
     Ok(result)
 }
 
-fn is_valid_property_folder(property_path: &PathBuf) -> bool {
+fn is_valid_property_folder(property_path: &Path) -> bool {
     // A valid property folder just needs to be a directory
     // INTERNET and WATERMARK folders will be created when user starts working on it
     property_path.is_dir()
@@ -1683,25 +1672,25 @@ async fn add_property_to_database(
 }
 
 // Helper functions
-async fn create_property_folder_structure(property_path: &PathBuf) -> Result<(), String> {
-    let property_path = property_path.clone();
+async fn create_property_folder_structure(property_path: &Path) -> Result<(), String> {
+    let property_path = property_path.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&property_path)
+        fs::create_dir_all(&property_path)
             .map_err(|e| format!("Failed to create property directory: {}", e))?;
 
         let internet_path = property_path.join("INTERNET");
         let watermark_path = property_path.join("WATERMARK");
 
-        std::fs::create_dir_all(&internet_path)
+        fs::create_dir_all(&internet_path)
             .map_err(|e| format!("Failed to create INTERNET folder: {}", e))?;
 
-        std::fs::create_dir_all(&watermark_path)
+        fs::create_dir_all(&watermark_path)
             .map_err(|e| format!("Failed to create WATERMARK folder: {}", e))?;
 
-        std::fs::create_dir_all(internet_path.join("AGGELIA"))
+        fs::create_dir_all(internet_path.join("AGGELIA"))
             .map_err(|e| format!("Failed to create INTERNET/AGGELIA folder: {}", e))?;
 
-        std::fs::create_dir_all(watermark_path.join("AGGELIA"))
+        fs::create_dir_all(watermark_path.join("AGGELIA"))
             .map_err(|e| format!("Failed to create WATERMARK/AGGELIA folder: {}", e))?;
 
         Ok(())
@@ -2583,7 +2572,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let done_path = tmp.path().join("DONE");
         let property_dir = done_path.join("Athens").join("Villa");
-        std::fs::create_dir_all(&property_dir).unwrap();
+        fs::create_dir_all(&property_dir).unwrap();
 
         let config = AppConfig {
             new_folder_path: tmp.path().join("NEW").to_string_lossy().to_string(),
@@ -3186,7 +3175,7 @@ mod tests {
         let id: i64 = row.get("id");
 
         let now = chrono::Utc::now().timestamp_millis();
-        let new_folder_path = format!("Athens/Villa (45164)");
+        let new_folder_path = "Athens/Villa (45164)".to_string();
         sqlx::query("UPDATE properties SET code = ?, folder_path = ?, updated_at = ? WHERE id = ?")
             .bind("45164")
             .bind(&new_folder_path)
