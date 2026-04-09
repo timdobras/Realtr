@@ -17,6 +17,9 @@ mod thumbnails;
 mod types;
 mod watermark;
 
+#[cfg(test)]
+mod test_support;
+
 pub use cities::{get_cities, search_cities};
 pub use editor::{
     get_full_property_path, open_image_in_advanced_editor, open_image_in_editor,
@@ -40,9 +43,7 @@ pub use watermark::{
 #[cfg(test)]
 use migrations::run_migrations;
 #[cfg(test)]
-use scan::{get_existing_properties_set, scan_folder_for_properties};
-#[cfg(test)]
-use std::collections::HashSet;
+use test_support::{add_property_to_database, setup_test_db};
 
 /// Supported image file extensions (lowercase).
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"];
@@ -1004,64 +1005,6 @@ pub(super) fn parse_folder_name(folder_name: &str) -> (String, Option<String>) {
     }
     // No code found, return the folder name as-is
     (folder_name.to_string(), None)
-}
-
-#[cfg(test)]
-async fn add_property_to_database(
-    pool: &SqlitePool,
-    property_name: &str,
-    city_name: &str,
-    status: &str,
-    folder_name: &str,
-    code: Option<&str>,
-) -> Result<(), String> {
-    // Use the folder_name for the path (keeps the code in the path if present)
-    let folder_path = get_relative_folder_path(city_name, folder_name);
-
-    let now = chrono::Utc::now();
-    let now_timestamp = now.timestamp_millis();
-
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|e| format!("Failed to start transaction: {}", e))?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO cities (name, usage_count, created_at)
-        VALUES (?, 1, ?)
-        ON CONFLICT(name) DO UPDATE SET usage_count = usage_count + 1
-        "#,
-    )
-    .bind(city_name)
-    .bind(now_timestamp)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| format!("Failed to update city: {}", e))?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO properties (name, city, status, folder_path, notes, code, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        "#,
-    )
-    .bind(property_name)
-    .bind(city_name)
-    .bind(status)
-    .bind(&folder_path)
-    .bind("Imported from existing folder")
-    .bind(code)
-    .bind(now_timestamp)
-    .bind(now_timestamp)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| format!("Failed to insert property: {}", e))?;
-
-    tx.commit()
-        .await
-        .map_err(|e| format!("Failed to commit transaction: {}", e))?;
-
-    Ok(())
 }
 
 // Helper functions
@@ -2033,14 +1976,6 @@ mod tests {
 
     // ── Database tests (in-memory SQLite) ────────────────────────────
 
-    async fn setup_test_db() -> SqlitePool {
-        let pool = SqlitePool::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create in-memory database");
-        run_migrations(&pool).await.expect("Migrations failed");
-        pool
-    }
-
     #[tokio::test]
     async fn migrations_create_all_tables() {
         let pool = setup_test_db().await;
@@ -2181,30 +2116,6 @@ mod tests {
             row.get::<String, _>("folder_path"),
             "Athens/Villa Alpha (45164)"
         );
-    }
-
-    #[tokio::test]
-    async fn get_existing_properties_set_empty_db() {
-        let pool = setup_test_db().await;
-        let set = get_existing_properties_set(&pool).await.unwrap();
-        assert!(set.is_empty());
-    }
-
-    #[tokio::test]
-    async fn get_existing_properties_set_returns_folder_paths() {
-        let pool = setup_test_db().await;
-
-        add_property_to_database(&pool, "Villa A", "Athens", "NEW", "Villa A", None)
-            .await
-            .unwrap();
-        add_property_to_database(&pool, "Villa B", "Rome", "DONE", "Villa B", None)
-            .await
-            .unwrap();
-
-        let set = get_existing_properties_set(&pool).await.unwrap();
-        assert_eq!(set.len(), 2);
-        assert!(set.contains("Athens/Villa A"));
-        assert!(set.contains("Rome/Villa B"));
     }
 
     // ── is_image_extension ───────────────────────────────────────────
@@ -2605,147 +2516,6 @@ mod tests {
     }
 
     // ── scan_folder_for_properties (tempdir + in-memory SQLite) ──────
-
-    #[tokio::test]
-    async fn scan_finds_new_properties() {
-        let pool = setup_test_db().await;
-        let tmp = tempfile::tempdir().unwrap();
-
-        // Create folder structure: base/CityA/PropertyX, base/CityA/PropertyY
-        let city_dir = tmp.path().join("CityA");
-        fs::create_dir_all(city_dir.join("PropertyX")).unwrap();
-        fs::create_dir_all(city_dir.join("PropertyY")).unwrap();
-
-        let existing = HashSet::new();
-        let result = scan_folder_for_properties(&tmp.path().to_path_buf(), "NEW", &existing, &pool)
-            .await
-            .unwrap();
-
-        assert_eq!(result.found_properties, 2);
-        assert_eq!(result.new_properties, 2);
-        assert_eq!(result.existing_properties, 0);
-        assert!(result.errors.is_empty());
-
-        // Verify DB has the properties
-        let set = get_existing_properties_set(&pool).await.unwrap();
-        assert!(set.contains("CityA/PropertyX"));
-        assert!(set.contains("CityA/PropertyY"));
-    }
-
-    #[tokio::test]
-    async fn scan_skips_existing_properties() {
-        let pool = setup_test_db().await;
-        let tmp = tempfile::tempdir().unwrap();
-
-        let city_dir = tmp.path().join("CityA");
-        fs::create_dir_all(city_dir.join("PropertyX")).unwrap();
-        fs::create_dir_all(city_dir.join("PropertyY")).unwrap();
-
-        // Mark PropertyX as already existing
-        let mut existing = HashSet::new();
-        existing.insert("CityA/PropertyX".to_string());
-
-        let result = scan_folder_for_properties(&tmp.path().to_path_buf(), "NEW", &existing, &pool)
-            .await
-            .unwrap();
-
-        assert_eq!(result.found_properties, 2);
-        assert_eq!(result.new_properties, 1); // Only PropertyY is new
-        assert_eq!(result.existing_properties, 1);
-    }
-
-    #[tokio::test]
-    async fn scan_parses_code_from_folder_name() {
-        let pool = setup_test_db().await;
-        let tmp = tempfile::tempdir().unwrap();
-
-        let city_dir = tmp.path().join("CityA");
-        fs::create_dir_all(city_dir.join("Villa Alpha (45164)")).unwrap();
-
-        let result =
-            scan_folder_for_properties(&tmp.path().to_path_buf(), "DONE", &HashSet::new(), &pool)
-                .await
-                .unwrap();
-
-        assert_eq!(result.new_properties, 1);
-
-        // Verify code was parsed and stored
-        let row = sqlx::query("SELECT name, code, folder_path FROM properties")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(row.get::<String, _>("name"), "Villa Alpha");
-        assert_eq!(
-            row.get::<Option<String>, _>("code"),
-            Some("45164".to_string())
-        );
-        assert_eq!(
-            row.get::<String, _>("folder_path"),
-            "CityA/Villa Alpha (45164)"
-        );
-    }
-
-    #[tokio::test]
-    async fn scan_skips_non_directory_entries() {
-        let pool = setup_test_db().await;
-        let tmp = tempfile::tempdir().unwrap();
-
-        let city_dir = tmp.path().join("CityA");
-        fs::create_dir_all(&city_dir).unwrap();
-        // Create a file at city level (not a property folder)
-        fs::write(city_dir.join("notes.txt"), b"not a property").unwrap();
-        // Also create a file at root level (not a city)
-        fs::write(tmp.path().join("readme.txt"), b"not a city").unwrap();
-        // Create one real property
-        fs::create_dir_all(city_dir.join("RealProperty")).unwrap();
-
-        let result =
-            scan_folder_for_properties(&tmp.path().to_path_buf(), "NEW", &HashSet::new(), &pool)
-                .await
-                .unwrap();
-
-        assert_eq!(result.found_properties, 1);
-        assert_eq!(result.new_properties, 1);
-    }
-
-    #[tokio::test]
-    async fn scan_empty_folder() {
-        let pool = setup_test_db().await;
-        let tmp = tempfile::tempdir().unwrap();
-
-        let result =
-            scan_folder_for_properties(&tmp.path().to_path_buf(), "NEW", &HashSet::new(), &pool)
-                .await
-                .unwrap();
-
-        assert_eq!(result.found_properties, 0);
-        assert_eq!(result.new_properties, 0);
-    }
-
-    #[tokio::test]
-    async fn scan_multiple_cities() {
-        let pool = setup_test_db().await;
-        let tmp = tempfile::tempdir().unwrap();
-
-        fs::create_dir_all(tmp.path().join("Athens").join("Villa A")).unwrap();
-        fs::create_dir_all(tmp.path().join("Rome").join("Villa B")).unwrap();
-        fs::create_dir_all(tmp.path().join("Rome").join("Villa C")).unwrap();
-
-        let result =
-            scan_folder_for_properties(&tmp.path().to_path_buf(), "NEW", &HashSet::new(), &pool)
-                .await
-                .unwrap();
-
-        assert_eq!(result.found_properties, 3);
-        assert_eq!(result.new_properties, 3);
-
-        // Verify cities were created with correct usage counts
-        let row = sqlx::query("SELECT usage_count FROM cities WHERE name = 'Rome'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(row.get::<i32, _>("usage_count"), 2);
-    }
 
     // ── Path-safety integration ──────────────────────────────────────
     //
