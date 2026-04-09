@@ -531,7 +531,7 @@ impl Drop for SemaphoreGuard<'_> {
 /// the system responsive during batch processing.
 fn build_background_pool() -> Result<rayon::ThreadPool, String> {
     let available = std::thread::available_parallelism()
-        .map(std::num::NonZero::get)
+        .map(|n| n.get())
         .unwrap_or(4);
     // Use half the cores, minimum 2, to leave headroom for UI + OS
     let num_threads = (available / 2).max(2);

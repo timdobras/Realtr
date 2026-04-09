@@ -258,7 +258,7 @@ fn find_histogram_peaks(histogram: &[f32]) -> Vec<HistogramPeak> {
 
 /// Compute circular distance between two bin indices
 fn circular_bin_distance(a: usize, b: usize, total: usize) -> usize {
-    let diff = if a > b { a - b } else { b - a };
+    let diff = a.abs_diff(b);
     diff.min(total - diff)
 }
 
