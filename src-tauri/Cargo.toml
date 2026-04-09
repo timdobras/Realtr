@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.1.81-beta"
+version = "0.1.82-beta"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -58,6 +58,12 @@ bytemuck = { version = "1.22", features = ["derive"] }
 pollster = "0.4"
 log = "0.4"
 thiserror = "1"
+
+# Compile-time TypeScript type generation from Rust structs.
+# Run `cargo test export_bindings` (or `cargo test`) to regenerate
+# src/lib/types/generated/*.ts. The chrono-impl feature lets us derive
+# TS for structs containing DateTime<Utc>.
+ts-rs = { version = "10", features = ["chrono-impl", "serde-compat", "no-serde-warnings"] }
 
 # SIMD-accelerated image resizing (14-23x faster than image crate)
 fast_image_resize = { version = "5.1", features = ["image"] }

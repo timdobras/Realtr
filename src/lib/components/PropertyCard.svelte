@@ -290,7 +290,7 @@
   bind:open={showCodeModal}
   propertyId={property.id!}
   propertyName={property.name}
-  currentCode={property.code}
+  currentCode={property.code ?? undefined}
   onClose={() => (showCodeModal = false)}
   onCodeSet={() => {
     showCodeModal = false;

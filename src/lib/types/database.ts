@@ -1,36 +1,36 @@
+// ─── Generated types ─────────────────────────────────────────────────
+// These come from src-tauri/src/database.rs via ts-rs. Do NOT edit them
+// here — change the Rust struct and run `cargo test export_bindings`.
+// The generated files live under ./generated/.
+//
+// We re-export them as `interface` extensions so the rest of the
+// codebase keeps using familiar type names like `Property` and the
+// PropertyStatus union still narrows the `status` field.
+import type { Property as GeneratedProperty } from './generated/Property';
+import type { City } from './generated/City';
+import type { ScanResult } from './generated/ScanResult';
+import type { CommandResult as GeneratedCommandResult } from './generated/CommandResult';
+import type { Set } from './generated/Set';
+import type { SetProperty } from './generated/SetProperty';
+import type { CompleteSetResult } from './generated/CompleteSetResult';
+import type { RepairResult } from './generated/RepairResult';
+import type { ThumbnailBatchRequest } from './generated/ThumbnailBatchRequest';
+import type { ThumbnailBatchResult } from './generated/ThumbnailBatchResult';
+
+export type { City, ScanResult, Set, SetProperty, CompleteSetResult, RepairResult };
+export type { ThumbnailBatchRequest, ThumbnailBatchResult };
+
 export type PropertyStatus = 'NEW' | 'DONE' | 'NOT_FOUND' | 'ARCHIVE';
 
-export interface Property {
-  id?: number;
-  name: string;
-  city: string;
-  status: PropertyStatus;
-  folder_path: string;
-  notes?: string;
-  code?: string; // Website listing code (e.g., "45164")
-  created_at: number; // Milliseconds since epoch
-  updated_at: number; // Milliseconds since epoch
-}
+// Property is generated with `status: string`; narrow it to the literal
+// union here so call sites get exhaustiveness checking.
+export type Property = Omit<GeneratedProperty, 'status'> & { status: PropertyStatus };
 
-export interface City {
-  id?: number;
-  name: string;
-  usageCount: number;
-  created_at: number; // Milliseconds since epoch
-}
-
-export interface ScanResult {
-  foundProperties: number;
-  newProperties: number;
-  existingProperties: number;
-  errors: string[];
-}
-
-export interface CommandResult {
-  success: boolean;
-  error?: string;
-  data?: any;
-}
+// CommandResult is generated with `data: unknown`; widen back to `any`
+// for the legacy call sites that pass a serde_json::Value through and
+// dot-access arbitrary fields. The Rust source of truth is still strict.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type CommandResult = Omit<GeneratedCommandResult, 'data'> & { data?: any };
 
 export interface WatermarkConfig {
   sizeMode: 'proportional' | 'fit' | 'stretch' | 'tile';
@@ -112,38 +112,8 @@ export interface SetupProgress {
   error?: string;
 }
 
-// Sets Types
-export interface Set {
-  id?: number;
-  name: string;
-  zip_path: string;
-  property_count: number;
-  created_at: number; // Milliseconds since epoch
-}
-
-export interface SetProperty {
-  id?: number;
-  setId: number;
-  propertyId?: number;
-  propertyName: string;
-  propertyCity: string;
-  propertyCode?: string;
-}
-
-export interface CompleteSetResult {
-  setId: number;
-  setName: string;
-  zipPath: string;
-  propertiesArchived: number;
-  propertiesMovedToNotFound: number;
-}
-
-// Repair Types
-export interface RepairResult {
-  propertiesChecked: number;
-  propertiesFixed: number;
-  errors: string[];
-}
+// Sets / Repair types are now generated from Rust — see the
+// re-exports at the top of this file.
 
 // Batch Auto-Enhance Types
 export interface StraightenAnalysis {
@@ -190,14 +160,5 @@ export interface EnhanceApplyResult {
   error?: string;
 }
 
-export interface ThumbnailBatchRequest {
-  folderPath: string;
-  status: string;
-  limit?: number;
-}
-
-export interface ThumbnailBatchResult {
-  folderPath: string;
-  totalCount: number;
-  paths: string[];
-}
+// ThumbnailBatchRequest / ThumbnailBatchResult are now generated from
+// Rust — see the re-exports at the top of this file.

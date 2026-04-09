@@ -110,7 +110,7 @@
             {#snippet children({ selected })}
               <span class="text-foreground-900 font-medium">{city.name}</span>
               <div class="flex items-center gap-2">
-                <span class="text-foreground-500 text-xs">{city.usageCount}</span>
+                <span class="text-foreground-500 text-xs">{city.usage_count}</span>
                 {#if selected}
                   <svg
                     class="text-accent-500 h-4 w-4"

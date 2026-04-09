@@ -79,6 +79,20 @@ jobs:
       - name: cargo test
         run: cargo test --all-targets
 
+      # ts-rs writes generated TS files into ../src/lib/types/generated/
+      # at test time. Fail CI if anyone forgot to commit the regenerated
+      # output after changing a #[derive(TS)] struct.
+      - name: Verify generated TS bindings are committed
+        shell: bash
+        working-directory: .
+        run: |
+          if [[ -n "$(git status --porcelain src/lib/types/generated/)" ]]; then
+            echo "::error::Generated TS bindings are out of date. Run 'cargo test' in src-tauri/ and commit the result."
+            git status src/lib/types/generated/
+            git diff src/lib/types/generated/
+            exit 1
+          fi
+
   frontend:
     runs-on: ubuntu-latest
     steps:
