@@ -15,153 +15,22 @@ use crate::gpu::ImageProcessor;
 use tokio::process::Command;
 
 #[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
-#[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-// All TS-derived structs export to src/lib/types/generated/. Run
-// `cargo test export_bindings` (or just `cargo test`) to regenerate.
-// chrono::DateTime<Utc> is serialized to JSON as a millisecond number via
-// the ts_milliseconds serde adapter, so we override the TS type to `number`.
+// ── Submodules (extracted from this file) ──────────────────────────
+mod migrations;
+mod types;
 
-// All TS-derived structs export to src/lib/types/generated/. Run
-// `cargo test export_bindings` (or just `cargo test`) to regenerate.
-//
-// Notes on type mappings:
-// - chrono::DateTime<Utc> serializes as a JSON millisecond number via the
-//   ts_milliseconds adapter, so we override the TS type to `number`.
-// - i64 and usize default to `bigint` in ts-rs but the JSON wire format
-//   emits them as plain numbers, and every value here fits comfortably in
-//   Number.MAX_SAFE_INTEGER (row IDs, counts, epoch ms). We override each
-//   integer field to `number` to match runtime reality.
+pub use migrations::init_database;
+pub use types::{
+    City, CommandResult, CompleteSetResult, Property, ScanResult, Set, SetProperty,
+    ThumbnailBatchRequest, ThumbnailBatchResult,
+};
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/lib/types/generated/")]
-pub struct Property {
-    #[ts(type = "number | null")]
-    pub id: Option<i64>,
-    pub name: String,
-    pub city: String,
-    pub status: String, // "NEW", "DONE", "NOT_FOUND", "ARCHIVE"
-    pub folder_path: String,
-    pub notes: Option<String>,
-    pub code: Option<String>, // Website listing code (e.g., "45164")
-    #[serde(with = "chrono::serde::ts_milliseconds")]
-    #[ts(type = "number")]
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    #[serde(with = "chrono::serde::ts_milliseconds")]
-    #[ts(type = "number")]
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-    // Legacy field for backward compatibility during migration. Skipped in
-    // both serde output and the generated TS types.
-    #[serde(skip_serializing)]
-    #[serde(default)]
-    #[ts(skip)]
-    pub completed: Option<bool>,
-}
+// Imported for the test module that still lives in this file.
+#[cfg(test)]
+use migrations::run_migrations;
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/lib/types/generated/")]
-pub struct City {
-    #[ts(type = "number | null")]
-    pub id: Option<i64>,
-    pub name: String,
-    #[ts(type = "number")]
-    pub usage_count: i64,
-    #[serde(with = "chrono::serde::ts_milliseconds")]
-    #[ts(type = "number")]
-    pub created_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Debug, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/lib/types/generated/")]
-pub struct ScanResult {
-    #[ts(type = "number")]
-    pub found_properties: usize,
-    #[ts(type = "number")]
-    pub new_properties: usize,
-    #[ts(type = "number")]
-    pub existing_properties: usize,
-    pub errors: Vec<String>,
-}
-
-#[derive(Debug, Serialize, TS)]
-#[ts(export, export_to = "../../src/lib/types/generated/")]
-pub struct CommandResult {
-    pub success: bool,
-    pub error: Option<String>,
-    // serde_json::Value serializes as arbitrary JSON; mirror that with
-    // unknown on the TS side and let call sites narrow it.
-    #[ts(type = "unknown")]
-    pub data: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/lib/types/generated/")]
-pub struct Set {
-    #[ts(type = "number | null")]
-    pub id: Option<i64>,
-    pub name: String,
-    pub zip_path: String,
-    #[ts(type = "number")]
-    pub property_count: i64,
-    #[serde(with = "chrono::serde::ts_milliseconds")]
-    #[ts(type = "number")]
-    pub created_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/lib/types/generated/")]
-pub struct SetProperty {
-    #[ts(type = "number | null")]
-    pub id: Option<i64>,
-    #[ts(type = "number")]
-    pub set_id: i64,
-    #[ts(type = "number | null")]
-    pub property_id: Option<i64>,
-    pub property_name: String,
-    pub property_city: String,
-    pub property_code: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/lib/types/generated/")]
-pub struct CompleteSetResult {
-    #[ts(type = "number")]
-    pub set_id: i64,
-    pub set_name: String,
-    pub zip_path: String,
-    #[ts(type = "number")]
-    pub properties_archived: usize,
-    #[ts(type = "number")]
-    pub properties_moved_to_not_found: usize,
-}
-
-/// Request item for batch thumbnail path resolution.
-#[derive(Debug, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/lib/types/generated/")]
-pub struct ThumbnailBatchRequest {
-    pub folder_path: String,
-    pub status: String,
-    #[ts(type = "number | null")]
-    pub limit: Option<usize>,
-}
-
-/// Result item from batch thumbnail path resolution.
-#[derive(Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/lib/types/generated/")]
-pub struct ThumbnailBatchResult {
-    pub folder_path: String,
-    #[ts(type = "number")]
-    pub total_count: usize,
-    pub paths: Vec<String>,
-}
 
 /// Supported image file extensions (lowercase).
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"];
@@ -455,224 +324,6 @@ fn find_actual_folder_location(
     None
 }
 
-// Database initialization
-pub async fn init_database(app: &tauri::AppHandle) -> Result<SqlitePool, String> {
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-
-    // Ensure the directory exists with proper error handling
-    if !app_data_dir.exists() {
-        std::fs::create_dir_all(&app_data_dir).map_err(|e| {
-            format!(
-                "Failed to create app data directory {}: {}",
-                app_data_dir.display(),
-                e
-            )
-        })?;
-    }
-
-    let database_path = app_data_dir.join("properties.db");
-
-    println!(
-        "Attempting to connect to database at: {}",
-        database_path.display()
-    );
-
-    // Set connection options for SQLite
-    let pool = SqlitePool::connect_with(
-        sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(&database_path)
-            .create_if_missing(true)
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal),
-    )
-    .await
-    .map_err(|e| {
-        format!(
-            "Failed to connect to database at {}: {}",
-            database_path.display(),
-            e
-        )
-    })?;
-
-    println!("Database connection established successfully");
-
-    // Run migrations
-    run_migrations(&pool).await?;
-
-    println!("Database migrations completed successfully");
-
-    Ok(pool)
-}
-
-async fn run_migrations(pool: &SqlitePool) -> Result<(), String> {
-    // Create properties table with TIMESTAMP columns
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS properties (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            city TEXT NOT NULL,
-            completed BOOLEAN NOT NULL DEFAULT 0,
-            folder_path TEXT NOT NULL,
-            notes TEXT,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        )
-        "#,
-    )
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to create properties table: {}", e))?;
-
-    // Create cities table for autocomplete
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS cities (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            usage_count INTEGER NOT NULL DEFAULT 1,
-            created_at INTEGER NOT NULL
-        )
-        "#,
-    )
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to create cities table: {}", e))?;
-
-    // Create indexes
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_properties_completed ON properties(completed)")
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to create completed index: {}", e))?;
-
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_properties_city ON properties(city)")
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to create city index: {}", e))?;
-
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_cities_name ON cities(name)")
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to create cities name index: {}", e))?;
-
-    // Used by `SELECT * FROM properties ORDER BY created_at DESC` (property list)
-    // and `... WHERE status = ? ORDER BY created_at DESC`. The status index alone
-    // does not let SQLite avoid a sort.
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_properties_created_at ON properties(created_at DESC)",
-    )
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to create properties created_at index: {}", e))?;
-
-    // Migration: Add status column if it doesn't exist
-    // First check if the column exists
-    let column_check = sqlx::query("PRAGMA table_info(properties)")
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("Failed to check table info: {}", e))?;
-
-    let has_status_column = column_check.iter().any(|row| {
-        row.try_get::<String, _>("name")
-            .map(|name| name == "status")
-            .unwrap_or(false)
-    });
-
-    if !has_status_column {
-        // Add status column with default value 'NEW'
-        sqlx::query("ALTER TABLE properties ADD COLUMN status TEXT DEFAULT 'NEW'")
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to add status column: {}", e))?;
-
-        // Migrate existing data from completed boolean to status
-        sqlx::query(
-            r#"
-            UPDATE properties
-            SET status = CASE
-                WHEN completed = 1 THEN 'DONE'
-                ELSE 'NEW'
-            END
-            WHERE status IS NULL OR status = 'NEW'
-            "#
-        )
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to migrate completed to status: {}", e))?;
-
-        // Create index for status column
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_properties_status ON properties(status)")
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to create status index: {}", e))?;
-    }
-
-    // Migration: Add code column if it doesn't exist
-    let has_code_column = column_check.iter().any(|row| {
-        row.try_get::<String, _>("name")
-            .map(|name| name == "code")
-            .unwrap_or(false)
-    });
-
-    if !has_code_column {
-        sqlx::query("ALTER TABLE properties ADD COLUMN code TEXT")
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to add code column: {}", e))?;
-
-        // Create index for code column to enable fast searches
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_properties_code ON properties(code)")
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to create code index: {}", e))?;
-    }
-
-    // Create sets table for tracking completed property sets
-    sqlx::query(
-        r"
-        CREATE TABLE IF NOT EXISTS sets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            zip_path TEXT NOT NULL,
-            property_count INTEGER NOT NULL,
-            created_at INTEGER NOT NULL
-        )
-        ",
-    )
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to create sets table: {}", e))?;
-
-    // Create set_properties junction table for tracking which properties were in each set
-    sqlx::query(
-        r"
-        CREATE TABLE IF NOT EXISTS set_properties (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            set_id INTEGER NOT NULL,
-            property_id INTEGER,
-            property_name TEXT NOT NULL,
-            property_city TEXT NOT NULL,
-            property_code TEXT,
-            FOREIGN KEY (set_id) REFERENCES sets(id) ON DELETE CASCADE
-        )
-        ",
-    )
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to create set_properties table: {}", e))?;
-
-    // Create indexes for sets tables
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_sets_created_at ON sets(created_at)")
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to create sets created_at index: {}", e))?;
-
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_set_properties_set_id ON set_properties(set_id)")
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to create set_properties set_id index: {}", e))?;
-
-    Ok(())
-}
 
 // Property CRUD operations
 #[tauri::command]
@@ -2309,32 +1960,6 @@ pub async fn open_images_in_folder(
 
 // Deprecated: frontend now uses get_gallery_thumbnail_path + convertFileSrc.
 // Kept for source-history hygiene; deleted when database.rs is split.
-#[allow(dead_code)]
-#[tauri::command]
-pub async fn get_image_as_base64(
-    app: tauri::AppHandle,
-    folder_path: String,
-    status: String,
-    filename: String,
-) -> Result<String, String> {
-    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-
-    tokio::task::spawn_blocking(move || {
-        let full_path = property_path.join(&filename);
-
-        if !full_path.exists() {
-            return Err(format!("Image file not found: {}", full_path.display()));
-        }
-
-        let image_bytes =
-            fs::read(&full_path).map_err(|e| format!("Failed to read image file: {}", e))?;
-
-        Ok(general_purpose::STANDARD.encode(&image_bytes))
-    })
-    .await
-    .map_err(|e| format!("Task join error: {e}"))?
-}
-
 #[tauri::command]
 pub async fn list_internet_images(
     app: tauri::AppHandle,
@@ -2345,33 +1970,6 @@ pub async fn list_internet_images(
 
     tokio::task::spawn_blocking(move || {
         list_image_filenames(&property_path.join("INTERNET"))
-    })
-    .await
-    .map_err(|e| format!("Task join error: {e}"))?
-}
-
-// Deprecated: frontend now uses get_gallery_thumbnail_path + convertFileSrc.
-#[allow(dead_code)]
-#[tauri::command]
-pub async fn get_internet_image_as_base64(
-    app: tauri::AppHandle,
-    folder_path: String,
-    status: String,
-    filename: String,
-) -> Result<String, String> {
-    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-
-    tokio::task::spawn_blocking(move || {
-        let full_path = property_path.join("INTERNET").join(&filename);
-
-        if !full_path.exists() {
-            return Err(format!("Image file not found: {}", full_path.display()));
-        }
-
-        let image_bytes =
-            fs::read(&full_path).map_err(|e| format!("Failed to read image file: {}", e))?;
-
-        Ok(general_purpose::STANDARD.encode(&image_bytes))
     })
     .await
     .map_err(|e| format!("Task join error: {e}"))?
@@ -2455,153 +2053,11 @@ pub async fn list_thumbnails(
     .map_err(|e| format!("Task join error: {e}"))?
 }
 
-// Deprecated: frontend now uses get_gallery_thumbnail_path + convertFileSrc.
-#[allow(dead_code)]
-#[tauri::command]
-pub async fn get_thumbnail_as_base64(
-    app: tauri::AppHandle,
-    folder_path: String,
-    status: String,
-    filename: String,
-) -> Result<String, String> {
-    // Get app data directory for thumbnails
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    let thumbnails_base = app_data_dir.join("thumbnails");
-    let safe_folder_name = folder_path.replace('/', "_").replace('\\', "_");
-    let thumbnails_dir = thumbnails_base.join(&safe_folder_name);
-    let thumbnail_path = thumbnails_dir.join(&filename);
-
-    // Get the original image path (needs async config)
-    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-
-    // All filesystem + thumbnail generation runs on a blocking thread
-    tokio::task::spawn_blocking(move || {
-        // If thumbnail doesn't exist, generate it on-demand
-        if !thumbnail_path.exists() {
-            // Create thumbnails directory if it doesn't exist
-            fs::create_dir_all(&thumbnails_dir)
-                .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
-
-            // Remove .jpg extension from filename to get original stem
-            let original_stem = filename.trim_end_matches(".jpg");
-
-            // Try to find the original image file with any supported extension
-            let supported_exts = ["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"];
-            let mut original_path = None;
-
-            for ext in &supported_exts {
-                let potential_path = property_path.join(format!("{}.{}", original_stem, ext));
-                if potential_path.exists() {
-                    original_path = Some(potential_path);
-                    break;
-                }
-            }
-
-            if let Some(source_path) = original_path {
-                // Generate thumbnail (100x100 for fast generation)
-                generate_thumbnail(&source_path, &thumbnail_path, 100)
-                    .map_err(|e| format!("Failed to generate thumbnail: {}", e))?;
-            } else {
-                return Err(format!("Original image not found for thumbnail: {}", original_stem));
-            }
-        }
-
-        let image_bytes =
-            fs::read(&thumbnail_path).map_err(|e| format!("Failed to read thumbnail file: {}", e))?;
-
-        Ok(general_purpose::STANDARD.encode(&image_bytes))
-    })
-    .await
-    .map_err(|e| format!("Task join error: {e}"))?
-}
-
 /// Get a gallery-sized thumbnail for workflow step displays.
 /// This is larger than the property list thumbnails (400px vs 100px)
 /// and supports different subfolders (INTERNET, AGGELIA, WATERMARK, etc.)
 ///
 /// Deprecated: frontend now uses get_gallery_thumbnail_path + convertFileSrc.
-#[allow(dead_code)]
-#[tauri::command]
-pub async fn get_gallery_thumbnail_as_base64(
-    app: tauri::AppHandle,
-    folder_path: String,
-    status: String,
-    subfolder: String,
-    filename: String,
-    max_dimension: Option<u32>,
-) -> Result<String, String> {
-    let max_size = max_dimension.unwrap_or(400);
-
-    // Get app data directory for gallery thumbnails
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-
-    // Use separate directory for gallery thumbnails with size in path
-    let thumbnails_base = app_data_dir.join("thumbnails").join(format!("gallery_{}", max_size));
-    let safe_folder_name = folder_path.replace('/', "_").replace('\\', "_");
-    let safe_subfolder = if subfolder.is_empty() {
-        "root".to_string()
-    } else {
-        subfolder.replace('/', "_").replace('\\', "_")
-    };
-    let thumbnails_dir = thumbnails_base.join(&safe_folder_name).join(&safe_subfolder);
-    let thumbnail_path = thumbnails_dir.join(&filename).with_extension("jpg");
-
-    // Get the original image path (needs async config)
-    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-
-    // All filesystem + thumbnail generation runs on a blocking thread
-    tokio::task::spawn_blocking(move || {
-        let source_dir = if subfolder.is_empty() {
-            property_path
-        } else {
-            property_path.join(&subfolder)
-        };
-        let source_path = source_dir.join(&filename);
-
-        if !source_path.exists() {
-            return Err(format!("Source image not found: {}", source_path.display()));
-        }
-
-        // Check if we need to regenerate the thumbnail
-        let needs_regeneration = if !thumbnail_path.exists() {
-            true
-        } else {
-            let source_modified = fs::metadata(&source_path)
-                .and_then(|m| m.modified())
-                .ok();
-            let thumb_modified = fs::metadata(&thumbnail_path)
-                .and_then(|m| m.modified())
-                .ok();
-
-            match (source_modified, thumb_modified) {
-                (Some(src_time), Some(thumb_time)) => src_time > thumb_time,
-                _ => true,
-            }
-        };
-
-        if needs_regeneration {
-            fs::create_dir_all(&thumbnails_dir)
-                .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
-
-            generate_thumbnail(&source_path, &thumbnail_path, max_size)
-                .map_err(|e| format!("Failed to generate gallery thumbnail: {}", e))?;
-        }
-
-        let image_bytes = fs::read(&thumbnail_path)
-            .map_err(|e| format!("Failed to read gallery thumbnail file: {}", e))?;
-
-        Ok(general_purpose::STANDARD.encode(&image_bytes))
-    })
-    .await
-    .map_err(|e| format!("Task join error: {e}"))?
-}
-
 /// Get the filesystem path to a gallery-sized thumbnail (generating it if needed).
 /// Returns the absolute path string instead of base64 data — the frontend uses
 /// `convertFileSrc(path)` to serve the file directly via Tauri's asset protocol,
@@ -3122,36 +2578,6 @@ pub async fn list_aggelia_images(
     .map_err(|e| format!("Task join error: {e}"))?
 }
 
-// Deprecated: frontend now uses get_gallery_thumbnail_path + convertFileSrc.
-#[allow(dead_code)]
-#[tauri::command]
-pub async fn get_aggelia_image_as_base64(
-    app: tauri::AppHandle,
-    folder_path: String,
-    status: String,
-    filename: String,
-) -> Result<String, String> {
-    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-
-    tokio::task::spawn_blocking(move || {
-        let full_path = property_path
-            .join("INTERNET")
-            .join("AGGELIA")
-            .join(&filename);
-
-        if !full_path.exists() {
-            return Err(format!("Image file not found: {}", full_path.display()));
-        }
-
-        let image_bytes =
-            fs::read(&full_path).map_err(|e| format!("Failed to read image file: {}", e))?;
-
-        Ok(general_purpose::STANDARD.encode(&image_bytes))
-    })
-    .await
-    .map_err(|e| format!("Task join error: {e}"))?
-}
-
 #[tauri::command]
 pub async fn copy_images_to_aggelia(
     app: tauri::AppHandle,
@@ -3617,42 +3043,6 @@ fn apply_watermark_to_image_with_cached_wm(
 // Unused legacy entry point kept until database.rs is split into modules,
 // at which point it will be deleted. Marked dead_code rather than removed
 // in this commit to keep the diff focused.
-#[allow(dead_code)]
-fn apply_watermark_to_image_with_config(
-    source_path: &PathBuf,
-    dest_path: &PathBuf,
-    watermark_img: &DynamicImage,
-    config: &crate::config::WatermarkConfig,
-    processor: &Arc<ImageProcessor>,
-) -> Result<(), String> {
-    // Load source image using turbojpeg
-    let mut base_img = crate::turbo::load_image(source_path)
-        .map_err(|e| format!("Failed to open source image: {}", e))?
-        .to_rgba8();
-
-    // Apply watermark using config (GPU-accelerated)
-    apply_watermark_with_config(&mut base_img, watermark_img, config, processor)?;
-
-    // Save watermarked image
-    let ext = dest_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
-
-    if ext == "jpg" || ext == "jpeg" {
-        // Use turbojpeg for fast JPEG encoding
-        let rgb_img: image::RgbImage = image::DynamicImage::ImageRgba8(base_img).to_rgb8();
-        crate::turbo::save_jpeg(&rgb_img, dest_path, 92)?;
-    } else {
-        base_img
-            .save(dest_path)
-            .map_err(|e| format!("Failed to save watermarked image: {}", e))?;
-    }
-
-    Ok(())
-}
-
 #[tauri::command]
 pub async fn generate_watermark_preview(
     app: tauri::AppHandle,
@@ -4048,43 +3438,6 @@ pub async fn list_watermark_aggelia_images(
 
         images.sort();
         Ok(images)
-    })
-    .await
-    .map_err(|e| format!("Task join error: {e}"))?
-}
-
-// Deprecated: frontend now uses get_gallery_thumbnail_path + convertFileSrc.
-#[allow(dead_code)]
-#[tauri::command]
-pub async fn get_watermark_image_as_base64(
-    app: tauri::AppHandle,
-    folder_path: String,
-    status: String,
-    filename: String,
-    from_aggelia: bool,
-) -> Result<String, String> {
-    let property_path = get_property_base_path(&app, &folder_path, &status).await?;
-
-    tokio::task::spawn_blocking(move || {
-        let full_path = if from_aggelia {
-            property_path
-                .join("WATERMARK")
-                .join("AGGELIA")
-                .join(&filename)
-        } else {
-            property_path
-                .join("WATERMARK")
-                .join(&filename)
-        };
-
-        if !full_path.exists() {
-            return Err(format!("Image file not found: {}", full_path.display()));
-        }
-
-        let image_bytes =
-            fs::read(&full_path).map_err(|e| format!("Failed to read image file: {}", e))?;
-
-        Ok(general_purpose::STANDARD.encode(&image_bytes))
     })
     .await
     .map_err(|e| format!("Task join error: {e}"))?
