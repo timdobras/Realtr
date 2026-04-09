@@ -6,7 +6,8 @@
   import type { Property, AppConfig } from '$lib/types/database';
   import { showSuccess, showError } from '$lib/stores/notification';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
-  import LazyImage from '$lib/components/LazyImage.svelte';
+  import ImageGrid from '$lib/components/ImageGrid.svelte';
+  import ImageTile from '$lib/components/ImageTile.svelte';
   import { openEditorWindow } from '$lib/utils/editorWindow';
   export const prerender = false;
 
@@ -432,20 +433,20 @@
           </button>
         </div>
       {:else}
-        <div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-          {#each internetImageFilenames as filename}
-            <LazyImage
-              folderPath={property.folder_path}
-              status={property.status}
+        {@const folderPath = property.folder_path}
+        {@const status = property.status}
+        <ImageGrid items={internetImageFilenames}>
+          {#snippet children(filename)}
+            <ImageTile
+              {folderPath}
+              {status}
               subfolder="INTERNET"
               {filename}
-              alt={filename}
-              class="border-background-200 hover:border-background-300 aspect-square cursor-pointer border transition-colors"
-              onclick={() => openImageInEditor(filename, true)}
               refreshKey={imageRefreshKey}
+              onclick={() => openImageInEditor(filename, true)}
             />
-          {/each}
-        </div>
+          {/snippet}
+        </ImageGrid>
       {/if}
     </section>
 

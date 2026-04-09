@@ -6,7 +6,8 @@
   import { onMount, onDestroy } from 'svelte';
   import { showSuccess, showError } from '$lib/stores/notification';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
-  import LazyImage from '$lib/components/LazyImage.svelte';
+  import ImageGrid from '$lib/components/ImageGrid.svelte';
+  import ImageTile from '$lib/components/ImageTile.svelte';
   export const prerender = false;
 
   interface ImageItem {
@@ -469,55 +470,27 @@
             </a>
           </div>
         {:else}
-          <div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {#each internetImages as image, index}
-              <button
-                class="group relative aspect-square w-full overflow-hidden border transition-opacity hover:opacity-75 {image.selected
-                  ? 'border-accent-500'
-                  : 'border-background-200'} {image.inAggelia ? 'opacity-50' : ''}"
+          {@const folderPath = property.folder_path}
+          {@const status = property.status}
+          <ImageGrid items={internetImages}>
+            {#snippet children(image, index)}
+              <ImageTile
+                {folderPath}
+                {status}
+                subfolder="INTERNET"
+                filename={image.filename}
+                selected={image.selected}
+                dimmed={image.inAggelia}
+                badge={image.inAggelia ? '(In AGGELIA)' : undefined}
+                disabled={copyingImages}
+                refreshKey={imageRefreshKey}
                 onclick={() =>
                   image.inAggelia
                     ? openImageInAdvancedEditor(image.filename, false)
                     : toggleImageSelection(index)}
-                disabled={copyingImages}
-              >
-                <LazyImage
-                  folderPath={property.folder_path}
-                  status={property.status}
-                  subfolder="INTERNET"
-                  filename={image.filename}
-                  alt={image.filename}
-                  class="h-full w-full"
-                  refreshKey={imageRefreshKey}
-                />
-
-                <!-- Selected indicator -->
-                {#if image.selected}
-                  <div class="bg-accent-500 absolute top-2 left-2 h-5 w-5">
-                    <svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20">
-                      <path
-                        fill-rule="evenodd"
-                        d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                        clip-rule="evenodd"
-                      />
-                    </svg>
-                  </div>
-                {/if}
-
-                <!-- Filename on hover -->
-                <div
-                  class="bg-foreground-900/75 absolute inset-x-0 bottom-0 p-2 opacity-0 transition-opacity group-hover:opacity-100"
-                >
-                  <p class="truncate text-xs text-white" title={image.filename}>
-                    {image.filename}
-                    {#if image.inAggelia}
-                      <span class="text-foreground-300 text-xs"> (In AGGELIA)</span>
-                    {/if}
-                  </p>
-                </div>
-              </button>
-            {/each}
-          </div>
+              />
+            {/snippet}
+          </ImageGrid>
         {/if}
       </div>
     </section>
@@ -540,34 +513,21 @@
             </p>
           </div>
         {:else}
-          <div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {#each aggeliaImages as image}
-              <button
-                class="border-background-200 group relative aspect-square w-full overflow-hidden border transition-opacity hover:opacity-75"
-                onclick={() => openImageInAdvancedEditor(image.filename, true)}
+          {@const folderPath = property.folder_path}
+          {@const status = property.status}
+          <ImageGrid items={aggeliaImages}>
+            {#snippet children(image)}
+              <ImageTile
+                {folderPath}
+                {status}
+                subfolder="INTERNET/AGGELIA"
+                filename={image.filename}
                 disabled={copyingImages}
-              >
-                <LazyImage
-                  folderPath={property.folder_path}
-                  status={property.status}
-                  subfolder="INTERNET/AGGELIA"
-                  filename={image.filename}
-                  alt={image.filename}
-                  class="h-full w-full"
-                  refreshKey={imageRefreshKey}
-                />
-
-                <!-- Filename on hover -->
-                <div
-                  class="bg-foreground-900/75 absolute inset-x-0 bottom-0 p-2 opacity-0 transition-opacity group-hover:opacity-100"
-                >
-                  <p class="truncate text-xs text-white" title={image.filename}>
-                    {image.filename}
-                  </p>
-                </div>
-              </button>
-            {/each}
-          </div>
+                refreshKey={imageRefreshKey}
+                onclick={() => openImageInAdvancedEditor(image.filename, true)}
+              />
+            {/snippet}
+          </ImageGrid>
         {/if}
       </div>
     </section>

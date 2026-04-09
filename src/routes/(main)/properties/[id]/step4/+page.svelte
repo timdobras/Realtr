@@ -7,7 +7,8 @@
   import type { Property } from '$lib/types/database';
   import { showSuccess, showError } from '$lib/stores/notification';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
-  import LazyImage from '$lib/components/LazyImage.svelte';
+  import ImageGrid from '$lib/components/ImageGrid.svelte';
+  import ImageTile from '$lib/components/ImageTile.svelte';
 
   // Just store filenames - LazyImage handles loading
   let property: Property | null = $state(null);
@@ -577,34 +578,21 @@
             </p>
           </div>
         {:else}
-          <div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {#each watermarkFilenames as filename}
-              <button
-                class="border-background-200 group relative aspect-square w-full overflow-hidden border transition-opacity hover:opacity-75"
-                onclick={() => openWatermarkedImage(filename, false)}
+          {@const folderPath = property.folder_path}
+          {@const status = property.status}
+          <ImageGrid items={watermarkFilenames}>
+            {#snippet children(filename)}
+              <ImageTile
+                {folderPath}
+                {status}
+                subfolder="WATERMARK"
+                {filename}
                 disabled={processingWatermarksVar}
-              >
-                <LazyImage
-                  folderPath={property.folder_path}
-                  status={property.status}
-                  subfolder="WATERMARK"
-                  {filename}
-                  alt={filename}
-                  class="h-full w-full"
-                  refreshKey={imageRefreshKey}
-                />
-
-                <!-- Filename on hover -->
-                <div
-                  class="bg-foreground-900/75 absolute inset-x-0 bottom-0 p-2 opacity-0 transition-opacity group-hover:opacity-100"
-                >
-                  <p class="truncate text-xs text-white" title={filename}>
-                    {filename}
-                  </p>
-                </div>
-              </button>
-            {/each}
-          </div>
+                refreshKey={imageRefreshKey}
+                onclick={() => openWatermarkedImage(filename, false)}
+              />
+            {/snippet}
+          </ImageGrid>
         {/if}
       </div>
     </section>
@@ -627,34 +615,21 @@
             </p>
           </div>
         {:else}
-          <div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {#each watermarkAggeliaFilenames as filename}
-              <button
-                class="border-background-200 group relative aspect-square w-full overflow-hidden border transition-opacity hover:opacity-75"
-                onclick={() => openWatermarkedImage(filename, true)}
+          {@const folderPath = property.folder_path}
+          {@const status = property.status}
+          <ImageGrid items={watermarkAggeliaFilenames}>
+            {#snippet children(filename)}
+              <ImageTile
+                {folderPath}
+                {status}
+                subfolder="WATERMARK/AGGELIA"
+                {filename}
                 disabled={processingWatermarksVar}
-              >
-                <LazyImage
-                  folderPath={property.folder_path}
-                  status={property.status}
-                  subfolder="WATERMARK/AGGELIA"
-                  {filename}
-                  alt={filename}
-                  class="h-full w-full"
-                  refreshKey={imageRefreshKey}
-                />
-
-                <!-- Filename on hover -->
-                <div
-                  class="bg-foreground-900/75 absolute inset-x-0 bottom-0 p-2 opacity-0 transition-opacity group-hover:opacity-100"
-                >
-                  <p class="truncate text-xs text-white" title={filename}>
-                    {filename}
-                  </p>
-                </div>
-              </button>
-            {/each}
-          </div>
+                refreshKey={imageRefreshKey}
+                onclick={() => openWatermarkedImage(filename, true)}
+              />
+            {/snippet}
+          </ImageGrid>
         {/if}
       </div>
     </section>

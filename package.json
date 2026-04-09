@@ -1,6 +1,6 @@
 {
 	"name": "tauri-app",
-	"version": "0.1.80-beta",
+	"version": "0.1.81-beta",
 	"description": "",
 	"type": "module",
 	"scripts": {
