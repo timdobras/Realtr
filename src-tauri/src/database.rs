@@ -1,32 +1,36 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tauri::Manager;
-use ts_rs::TS;
 
 // ── Submodules (extracted from this file) ──────────────────────────
+mod cities;
 mod editor;
 mod migrations;
+mod repair;
+mod scan;
 mod sets;
 mod thumbnails;
 mod types;
 mod watermark;
 
+pub use cities::{get_cities, search_cities};
 pub use editor::{
     get_full_property_path, open_image_in_advanced_editor, open_image_in_editor,
     open_images_in_folder, open_property_folder,
 };
 pub use migrations::init_database;
+pub use repair::repair_property_statuses;
+pub use scan::scan_and_import_properties;
 pub use sets::{complete_set, delete_set, get_set_properties, get_sets, open_sets_folder};
 pub use thumbnails::{
     get_gallery_thumbnail_path, get_thumbnail_paths_batch, list_thumbnails,
     pregenerate_gallery_thumbnails,
 };
-pub use types::{City, CommandResult, Property, ScanResult};
+pub use types::{CommandResult, Property};
 pub use watermark::{
     clear_watermark_folders, copy_and_watermark_images, generate_watermark_preview,
     list_watermark_aggelia_images, list_watermark_images,
@@ -35,6 +39,10 @@ pub use watermark::{
 // Imported for the test module that still lives in this file.
 #[cfg(test)]
 use migrations::run_migrations;
+#[cfg(test)]
+use scan::{get_existing_properties_set, scan_folder_for_properties};
+#[cfg(test)]
+use std::collections::HashSet;
 
 /// Supported image file extensions (lowercase).
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "gif", "heic", "webp"];
@@ -238,7 +246,7 @@ fn construct_property_path_from_parts(
 }
 
 // Helper function to construct relative folder_path for database storage
-fn get_relative_folder_path(city: &str, name: &str) -> String {
+pub(super) fn get_relative_folder_path(city: &str, name: &str) -> String {
     format!("{}/{}", city, name)
 }
 
@@ -916,78 +924,7 @@ pub async fn delete_property(
     }
 }
 
-// City operations for autocomplete
-#[tauri::command]
-pub async fn get_cities(app: tauri::AppHandle) -> Result<CommandResult, String> {
-    let pool = get_database_pool(&app)?;
-
-    let rows = sqlx::query("SELECT * FROM cities ORDER BY usage_count DESC, name ASC")
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("Failed to fetch cities: {}", e))?;
-
-    let mut cities = Vec::new();
-
-    for row in rows {
-        let created_at_timestamp: i64 = row.get("created_at");
-        let created_at = chrono::DateTime::from_timestamp_millis(created_at_timestamp)
-            .unwrap_or_else(chrono::Utc::now);
-
-        let city = City {
-            id: Some(row.get("id")),
-            name: row.get("name"),
-            usage_count: row.get("usage_count"),
-            created_at,
-        };
-
-        cities.push(city);
-    }
-
-    Ok(CommandResult {
-        success: true,
-        error: None,
-        data: Some(serde_json::to_value(cities).map_err(|e| e.to_string())?),
-    })
-}
-
-#[tauri::command]
-pub async fn search_cities(app: tauri::AppHandle, query: String) -> Result<CommandResult, String> {
-    let pool = get_database_pool(&app)?;
-
-    let search_pattern = format!("%{}%", query);
-
-    let rows = sqlx::query(
-        "SELECT * FROM cities WHERE name LIKE ? ORDER BY usage_count DESC, name ASC LIMIT 10",
-    )
-    .bind(&search_pattern)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to search cities: {}", e))?;
-
-    let mut cities = Vec::new();
-
-    for row in rows {
-        let created_at_timestamp: i64 = row.get("created_at");
-        let created_at = chrono::DateTime::from_timestamp_millis(created_at_timestamp)
-            .unwrap_or_else(chrono::Utc::now);
-
-        let city = City {
-            id: Some(row.get("id")),
-            name: row.get("name"),
-            usage_count: row.get("usage_count"),
-            created_at,
-        };
-
-        cities.push(city);
-    }
-
-    Ok(CommandResult {
-        success: true,
-        error: None,
-        data: Some(serde_json::to_value(cities).map_err(|e| e.to_string())?),
-    })
-}
-
+// City commands moved to database/cities.rs
 #[tauri::command]
 pub async fn get_property_by_id(
     app: tauri::AppHandle,
@@ -1037,548 +974,8 @@ pub async fn get_property_by_id(
     }
 }
 
-// Scan and import properties function
-#[tauri::command]
-pub async fn scan_and_import_properties(app: tauri::AppHandle) -> Result<CommandResult, String> {
-    let pool = get_database_pool(&app)?;
-
-    let config_result = crate::config::get_cached_config(&app).await;
-    let config = match config_result {
-        Ok(Some(config)) => config,
-        Ok(None) => {
-            return Ok(CommandResult {
-                success: false,
-                error: Some(
-                    "No configuration found. Please set up the root folder first.".to_string(),
-                ),
-                data: None,
-            });
-        }
-        Err(e) => {
-            return Ok(CommandResult {
-                success: false,
-                error: Some(format!("Failed to load configuration: {}", e)),
-                data: None,
-            });
-        }
-    };
-
-    let mut scan_result = ScanResult {
-        found_properties: 0,
-        new_properties: 0,
-        existing_properties: 0,
-        errors: Vec::new(),
-    };
-
-    let existing_properties = match get_existing_properties_set(pool).await {
-        Ok(props) => props,
-        Err(e) => {
-            return Ok(CommandResult {
-                success: false,
-                error: Some(e),
-                data: None,
-            });
-        }
-    };
-
-    // Scan all 4 status folders
-    let folders_to_scan = [
-        (&config.new_folder_path, "NEW"),
-        (&config.done_folder_path, "DONE"),
-        (&config.not_found_folder_path, "NOT_FOUND"),
-        (&config.archive_folder_path, "ARCHIVE"),
-    ];
-
-    for (folder_path_str, status) in folders_to_scan {
-        if folder_path_str.is_empty() {
-            continue; // Skip if folder path not configured
-        }
-
-        let folder_path = PathBuf::from(folder_path_str);
-
-        if !folder_path.exists() {
-            continue; // Skip if folder doesn't exist
-        }
-
-        match scan_folder_for_properties(&folder_path, status, &existing_properties, pool).await {
-            Ok(folder_result) => {
-                scan_result.found_properties += folder_result.found_properties;
-                scan_result.new_properties += folder_result.new_properties;
-                scan_result.existing_properties += folder_result.existing_properties;
-                scan_result.errors.extend(folder_result.errors);
-            }
-            Err(e) => {
-                scan_result
-                    .errors
-                    .push(format!("Error scanning {} folder: {}", status, e));
-            }
-        }
-    }
-
-    Ok(CommandResult {
-        success: true,
-        error: None,
-        data: Some(serde_json::to_value(scan_result).map_err(|e| e.to_string())?),
-    })
-}
-
-/// Repair result structure
-#[derive(Debug, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/lib/types/generated/")]
-pub struct RepairResult {
-    #[ts(type = "number")]
-    pub properties_checked: usize,
-    #[ts(type = "number")]
-    pub properties_fixed: usize,
-    pub errors: Vec<String>,
-}
-
-/// Helper function to find a folder by prefix match within a city directory
-/// This handles cases where folder has a code suffix like "PROPERTY NAME (12345)"
-fn find_folder_by_prefix(city_path: &PathBuf, property_name: &str) -> Option<String> {
-    if !city_path.exists() || !city_path.is_dir() {
-        return None;
-    }
-
-    if let Ok(entries) = fs::read_dir(city_path) {
-        for entry in entries.flatten() {
-            if let Some(folder_name) = entry.file_name().to_str() {
-                // Check if folder starts with property name
-                // Match "PROPERTY NAME" or "PROPERTY NAME (code)" or "PROPERTY NAME (code-code)"
-                if folder_name == property_name
-                    || folder_name.starts_with(&format!("{} (", property_name))
-                {
-                    return Some(folder_name.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Repair property statuses by checking actual folder locations
-/// This fixes properties where the database status doesn't match where the folder actually exists
-/// Also handles folder name mismatches (e.g., when folder has code suffix but DB doesn't)
-#[tauri::command]
-pub async fn repair_property_statuses(app: tauri::AppHandle) -> Result<CommandResult, String> {
-    let pool = get_database_pool(&app)?;
-
-    let config = crate::config::get_cached_config(&app)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or("App configuration not found")?;
-
-    let mut result = RepairResult {
-        properties_checked: 0,
-        properties_fixed: 0,
-        errors: Vec::new(),
-    };
-
-    // Get all properties from database
-    let properties: Vec<(i64, String, String, String)> =
-        sqlx::query_as("SELECT id, folder_path, status, name FROM properties")
-            .fetch_all(pool)
-            .await
-            .map_err(|e| format!("Failed to fetch properties: {}", e))?;
-
-    // Get base paths for all statuses
-    let status_paths: Vec<(String, Option<PathBuf>)> = vec![
-        (
-            "NEW".to_string(),
-            get_base_path_for_status(&config, "NEW").ok(),
-        ),
-        (
-            "DONE".to_string(),
-            get_base_path_for_status(&config, "DONE").ok(),
-        ),
-        (
-            "NOT_FOUND".to_string(),
-            get_base_path_for_status(&config, "NOT_FOUND").ok(),
-        ),
-        (
-            "ARCHIVE".to_string(),
-            get_base_path_for_status(&config, "ARCHIVE").ok(),
-        ),
-    ];
-
-    // Phase 1: Check filesystem locations on a blocking thread.
-    // Each row: (id, folder_path, db_status, name, found_full_path,
-    // found_status, errors). Hoisted to a type alias to satisfy the
-    // clippy::type_complexity lint.
-    type ScanRow = (
-        i64,
-        String,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        Vec<String>,
-    );
-    let properties_clone = properties.clone();
-    let status_paths_clone = status_paths.clone();
-    let scan_results: Vec<ScanRow> = tokio::task::spawn_blocking(move || {
-        let mut results = Vec::new();
-
-        for (id, folder_path, db_status, name) in properties_clone {
-            let parts: Vec<&str> = folder_path.split('/').collect();
-            if parts.len() != 2 {
-                results.push((
-                    id,
-                    folder_path,
-                    db_status,
-                    name,
-                    None,
-                    None,
-                    vec![format!("Property has invalid folder_path format")],
-                ));
-                continue;
-            }
-            let city = parts[0];
-            let property_folder_name = parts[1];
-            let folder_path_buf = folder_path_to_pathbuf(&folder_path);
-
-            let mut found_info: Option<(String, Option<String>)> = None;
-
-            // Try exact match
-            for (status, base_path_opt) in &status_paths_clone {
-                if let Some(base_path) = base_path_opt {
-                    let full_path = base_path.join(&folder_path_buf);
-                    if full_path.exists() {
-                        found_info = Some((status.clone(), None));
-                        break;
-                    }
-                }
-            }
-
-            // Try prefix matching
-            if found_info.is_none() {
-                for (status, base_path_opt) in &status_paths_clone {
-                    if let Some(base_path) = base_path_opt {
-                        let city_path = base_path.join(city);
-                        if let Some(actual_folder_name) =
-                            find_folder_by_prefix(&city_path, property_folder_name)
-                        {
-                            if actual_folder_name != property_folder_name {
-                                found_info = Some((status.clone(), Some(actual_folder_name)));
-                            } else {
-                                found_info = Some((status.clone(), None));
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-
-            let (found_status, new_folder_name) = match found_info {
-                Some((s, n)) => (Some(s), n),
-                None => (None, None),
-            };
-
-            let errors = if found_status.is_none() {
-                let checked_paths: Vec<String> = status_paths_clone
-                    .iter()
-                    .filter_map(|(status, base_path_opt)| {
-                        base_path_opt.as_ref().map(|bp| {
-                            format!("{}: {}", status, bp.join(&folder_path_buf).display())
-                        })
-                    })
-                    .collect();
-                vec![format!(
-                    "Property '{}' folder not found. DB folder_path='{}'. Checked: [{}]",
-                    name,
-                    folder_path,
-                    checked_paths.join(", ")
-                )]
-            } else {
-                vec![]
-            };
-
-            results.push((
-                id,
-                folder_path,
-                db_status,
-                name,
-                found_status,
-                new_folder_name,
-                errors,
-            ));
-        }
-
-        results
-    })
-    .await
-    .map_err(|e| format!("Task join error: {e}"))?;
-
-    // Phase 2: Update database based on scan results
-    for (id, folder_path, db_status, name, found_status, new_folder_name_opt, errors) in
-        scan_results
-    {
-        result.properties_checked += 1;
-        result.errors.extend(errors);
-
-        if let Some(found_status) = found_status {
-            let status_changed = found_status != db_status;
-            let folder_path_changed = new_folder_name_opt.is_some();
-
-            if status_changed || folder_path_changed {
-                let parts: Vec<&str> = folder_path.split('/').collect();
-                let city = parts[0];
-                let now_ts = chrono::Utc::now().timestamp_millis();
-                let new_folder_path = if let Some(ref new_name) = new_folder_name_opt {
-                    format!("{}/{}", city, new_name)
-                } else {
-                    folder_path.clone()
-                };
-
-                match sqlx::query("UPDATE properties SET status = ?, folder_path = ?, updated_at = ? WHERE id = ?")
-                    .bind(&found_status)
-                    .bind(&new_folder_path)
-                    .bind(now_ts)
-                    .bind(id)
-                    .execute(pool)
-                    .await
-                {
-                    Ok(_) => {
-                        result.properties_fixed += 1;
-                        if folder_path_changed {
-                            if let Some(new_name) = new_folder_name_opt {
-                                result.errors.push(format!(
-                                    "Fixed '{}': folder_path updated from '{}' to '{}/{}'",
-                                    name, folder_path, city, new_name
-                                ));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        result.errors.push(format!(
-                            "Failed to update status for '{}': {}",
-                            name, e
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(CommandResult {
-        success: true,
-        error: None,
-        data: Some(serde_json::to_value(result).map_err(|e| e.to_string())?),
-    })
-}
-
-async fn get_existing_properties_set(pool: &SqlitePool) -> Result<HashSet<String>, String> {
-    // Use folder_path which contains the actual folder name on disk (including code if present)
-    let rows = sqlx::query("SELECT folder_path FROM properties")
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("Failed to fetch existing properties: {}", e))?;
-
-    let mut existing = HashSet::new();
-    for row in rows {
-        let folder_path: String = row.get("folder_path");
-        existing.insert(folder_path);
-    }
-
-    Ok(existing)
-}
-
-async fn scan_folder_for_properties(
-    folder_path: &Path,
-    status: &str,
-    existing_properties: &HashSet<String>,
-    pool: &SqlitePool,
-) -> Result<ScanResult, String> {
-    let mut result = ScanResult {
-        found_properties: 0,
-        new_properties: 0,
-        existing_properties: 0,
-        errors: Vec::new(),
-    };
-
-    // Filesystem scan runs on a blocking thread to avoid stalling the Tokio runtime
-    let folder_path_clone = folder_path.to_path_buf();
-    let status_clone = status.to_string();
-    let existing_clone = existing_properties.clone();
-
-    let (new_properties_to_insert, scan_found, scan_existing, scan_errors) =
-        tokio::task::spawn_blocking(move || {
-            let mut new_props: Vec<(String, String, String, String, Option<String>, String)> =
-                Vec::new();
-            let mut found = 0usize;
-            let mut existing = 0usize;
-            let mut errors = Vec::new();
-
-            let entries = match fs::read_dir(&folder_path_clone) {
-                Ok(e) => e,
-                Err(e) => return Err(format!("Failed to read directory: {}", e)),
-            };
-
-            for entry in entries {
-                let entry = match entry {
-                    Ok(entry) => entry,
-                    Err(e) => {
-                        errors.push(format!("Error reading directory entry: {}", e));
-                        continue;
-                    }
-                };
-
-                let city_path = entry.path();
-                if !city_path.is_dir() {
-                    continue;
-                }
-
-                let city_name = match city_path.file_name().and_then(|n| n.to_str()) {
-                    Some(name) => name.to_string(),
-                    None => {
-                        errors.push(format!("Invalid city folder name: {:?}", city_path));
-                        continue;
-                    }
-                };
-
-                let city_entries = match fs::read_dir(&city_path) {
-                    Ok(entries) => entries,
-                    Err(e) => {
-                        errors.push(format!("Failed to read city folder {}: {}", city_name, e));
-                        continue;
-                    }
-                };
-
-                for property_entry in city_entries {
-                    let property_entry = match property_entry {
-                        Ok(entry) => entry,
-                        Err(e) => {
-                            errors.push(format!(
-                                "Error reading property entry in {}: {}",
-                                city_name, e
-                            ));
-                            continue;
-                        }
-                    };
-
-                    let property_path = property_entry.path();
-                    if !property_path.is_dir() {
-                        continue;
-                    }
-
-                    let folder_name = match property_path.file_name().and_then(|n| n.to_str()) {
-                        Some(name) => name.to_string(),
-                        None => {
-                            errors
-                                .push(format!("Invalid property folder name: {:?}", property_path));
-                            continue;
-                        }
-                    };
-
-                    let (property_name, code) = parse_folder_name(&folder_name);
-
-                    found += 1;
-
-                    let property_key = format!("{}/{}", city_name, folder_name);
-
-                    if existing_clone.contains(&property_key) {
-                        existing += 1;
-                        continue;
-                    }
-
-                    if !is_valid_property_folder(&property_path) {
-                        errors.push(format!("Invalid property structure: {}", property_key));
-                        continue;
-                    }
-
-                    new_props.push((
-                        property_name,
-                        city_name.clone(),
-                        status_clone.clone(),
-                        folder_name,
-                        code,
-                        property_key,
-                    ));
-                }
-            }
-
-            Ok((new_props, found, existing, errors))
-        })
-        .await
-        .map_err(|e| format!("Task join error: {e}"))??;
-
-    result.found_properties = scan_found;
-    result.existing_properties = scan_existing;
-    result.errors = scan_errors;
-
-    // Batch-insert all new properties in a single transaction.
-    // SQLite is ~100x faster with batched transactions vs one-per-insert.
-    if !new_properties_to_insert.is_empty() {
-        let now = chrono::Utc::now().timestamp_millis();
-
-        let mut tx = pool
-            .begin()
-            .await
-            .map_err(|e| format!("Failed to start batch transaction: {}", e))?;
-
-        for (property_name, city_name, status_str, folder_name, code, property_key) in
-            &new_properties_to_insert
-        {
-            let folder_path = get_relative_folder_path(city_name, folder_name);
-
-            // Upsert city
-            if let Err(e) = sqlx::query(
-                r#"
-                INSERT INTO cities (name, usage_count, created_at)
-                VALUES (?, 1, ?)
-                ON CONFLICT(name) DO UPDATE SET usage_count = usage_count + 1
-                "#,
-            )
-            .bind(city_name)
-            .bind(now)
-            .execute(&mut *tx)
-            .await
-            {
-                result
-                    .errors
-                    .push(format!("Failed to update city for {}: {}", property_key, e));
-                continue;
-            }
-
-            // Insert property
-            match sqlx::query(
-                r#"
-                INSERT INTO properties (name, city, status, folder_path, notes, code, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                "#,
-            )
-            .bind(property_name)
-            .bind(city_name)
-            .bind(status_str)
-            .bind(&folder_path)
-            .bind("Imported from existing folder")
-            .bind(code.as_deref())
-            .bind(now)
-            .bind(now)
-            .execute(&mut *tx)
-            .await
-            {
-                Ok(_) => {
-                    result.new_properties += 1;
-                }
-                Err(e) => {
-                    result
-                        .errors
-                        .push(format!("Failed to add property {}: {}", property_key, e));
-                }
-            }
-        }
-
-        tx.commit()
-            .await
-            .map_err(|e| format!("Failed to commit batch transaction: {}", e))?;
-    }
-
-    Ok(result)
-}
-
-fn is_valid_property_folder(property_path: &Path) -> bool {
+// scan/repair commands moved to database/scan.rs and database/repair.rs
+pub(super) fn is_valid_property_folder(property_path: &Path) -> bool {
     // A valid property folder just needs to be a directory
     // INTERNET and WATERMARK folders will be created when user starts working on it
     property_path.is_dir()
@@ -1588,7 +985,7 @@ fn is_valid_property_folder(property_path: &Path) -> bool {
 /// Returns (property_name, code) where:
 /// - property_name: The name without the code suffix
 /// - code: The extracted code if present
-fn parse_folder_name(folder_name: &str) -> (String, Option<String>) {
+pub(super) fn parse_folder_name(folder_name: &str) -> (String, Option<String>) {
     // Check if folder name ends with pattern " (code)" where code is alphanumeric
     if let Some(open_paren) = folder_name.rfind(" (") {
         if folder_name.ends_with(')') {
