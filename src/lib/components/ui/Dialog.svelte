@@ -3,7 +3,7 @@
 
   interface Props {
     open: boolean;
-    onOpenChange?: (open: boolean) => void;
+    onOpenChange?: (_open: boolean) => void;
     children: import('svelte').Snippet;
   }
 

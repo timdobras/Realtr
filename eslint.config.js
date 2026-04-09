@@ -66,12 +66,8 @@ export default [
       ...tseslint.configs.recommended.rules,
       // Allow `_`-prefixed args/vars and unused catch bindings — both are
       // standard conventions for "intentionally ignored" identifiers.
-      // Degraded to `warn` because the codebase has ~17 pre-existing
-      // unused-but-not-prefixed identifiers in unrelated files. New
-      // violations still show up in `npm run lint` output and code review.
-      // Bump back to `error` after a dedicated cleanup pass.
       'no-unused-vars': [
-        'warn',
+        'error',
         {
           argsIgnorePattern: '^_',
           varsIgnorePattern: '^_',
@@ -100,12 +96,8 @@ export default [
     },
     rules: {
       ...svelte.configs.recommended.rules,
-      // Degraded to `warn` because the codebase has ~17 pre-existing
-      // unused-but-not-prefixed identifiers in unrelated files. New
-      // violations still show up in `npm run lint` output and code review.
-      // Bump back to `error` after a dedicated cleanup pass.
       'no-unused-vars': [
-        'warn',
+        'error',
         {
           argsIgnorePattern: '^_',
           varsIgnorePattern: '^_',

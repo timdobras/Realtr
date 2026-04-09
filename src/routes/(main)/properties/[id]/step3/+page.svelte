@@ -203,7 +203,7 @@
     }
   }
 
-  async function openImageInAdvancedEditor(filename: string, fromAggelia: boolean = false) {
+  async function openImageInAdvancedEditor(filename: string, _fromAggelia: boolean = false) {
     if (!property) return;
 
     try {

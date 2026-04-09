@@ -14,7 +14,6 @@
   const propertyId = $derived(Number($page.params.id));
   const property = $derived(activeProperty.property);
   const loading = $derived(activeProperty.loading);
-  const error = $derived(activeProperty.error);
 
   // Auto-load whenever the URL :id changes.
   $effect(() => {

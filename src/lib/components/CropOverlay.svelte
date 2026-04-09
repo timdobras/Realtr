@@ -15,7 +15,7 @@
     containerHeight: number;
     rotation?: number; // Fine rotation in degrees (-10 to 10)
     isEditing?: boolean; // If false, shows preview mode (no handles, not interactive)
-    onCropChange?: (x: number, y: number, width: number, height: number) => void;
+    onCropChange?: (_x: number, _y: number, _width: number, _height: number) => void;
     onCropCommit?: () => void;
   }
 
@@ -27,7 +27,7 @@
     zoom,
     panX,
     panY,
-    fitScalePercent,
+    fitScalePercent: _fitScalePercent,
     imageWidth,
     imageHeight,
     containerWidth,
@@ -149,18 +149,6 @@
     return {
       x: rect.left + normX * rect.width,
       y: rect.top + normY * rect.height
-    };
-  }
-
-  // Convert screen coords to normalized image coords
-  function screenToNormalized(screenX: number, screenY: number): { x: number; y: number } {
-    const rect = getImageRect();
-    if (rect.width === 0 || rect.height === 0) {
-      return { x: 0, y: 0 };
-    }
-    return {
-      x: (screenX - rect.left) / rect.width,
-      y: (screenY - rect.top) / rect.height
     };
   }
 

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { DatabaseService } from '$lib/services/databaseService';
   import type { Set, SetProperty } from '$lib/types/database';
   import { isValidDate } from '$lib/utils/dateUtils';

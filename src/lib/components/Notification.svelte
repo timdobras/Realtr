@@ -7,7 +7,7 @@
     item: {
       pause: () => void;
       resume: () => void;
-      resolve: (value: unknown) => void;
+      resolve: (_value: unknown) => void;
     };
   }
 

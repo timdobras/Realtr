@@ -1,7 +1,7 @@
 <script lang="ts">
   import { DatabaseService } from '$lib/services/databaseService';
   import type { Set } from '$lib/types/database';
-  import { formatDate, isValidDate } from '$lib/utils/dateUtils';
+  import { isValidDate } from '$lib/utils/dateUtils';
   import ConfirmDialog from './ConfirmDialog.svelte';
 
   interface Props {
@@ -12,7 +12,6 @@
 
   let { set, onDelete, onViewDetails }: Props = $props();
 
-  let isDeleting = $state(false);
   let showDeleteConfirm = $state(false);
   let showActions = $state(false);
   let openFolderError = $state('');
@@ -34,7 +33,6 @@
 
   async function confirmDelete() {
     try {
-      isDeleting = true;
       const result = await DatabaseService.deleteSet(set.id!, true);
       if (result.success) {
         showDeleteConfirm = false;
@@ -47,16 +45,7 @@
       console.error('Failed to delete set:', error);
       openFolderError = 'Failed to delete set';
       setTimeout(() => (openFolderError = ''), 3000);
-    } finally {
-      isDeleting = false;
     }
-  }
-
-  function formatDisplayDate(timestamp: number): string {
-    if (!isValidDate(timestamp)) {
-      return 'Unknown date';
-    }
-    return formatDate(timestamp);
   }
 
   function formatSetDate(timestamp: number): string {

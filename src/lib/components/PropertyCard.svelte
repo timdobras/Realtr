@@ -139,7 +139,7 @@
             </div>
           {/each}
           {#if thumbnails.length < 6}
-            {#each Array(6 - thumbnails.length) as _, i}
+            {#each Array(6 - thumbnails.length) as _}
               <div class="bg-background-200"></div>
             {/each}
           {/if}

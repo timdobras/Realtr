@@ -78,20 +78,6 @@
     return formatRelativeTime(timestamp);
   }
 
-  async function markAsCompleted(propertyId: number) {
-    try {
-      const result = await DatabaseService.updatePropertyStatus(propertyId, 'DONE');
-      if (!result.success) {
-        error = `Failed to update status: ${result.error}`;
-        return;
-      }
-      await loadDashboardData(); // Refresh data
-    } catch (err) {
-      console.error('Error updating property status:', err);
-      error = `Failed to update status: ${err}`;
-    }
-  }
-
   function promptCompleteSet() {
     showCompleteSetConfirm = true;
   }

@@ -39,13 +39,6 @@
       Math.abs(shadows) > 0
   );
 
-  // Format adjustment value with sign
-  function formatAdj(value: number, label: string): string {
-    if (Math.abs(value) < 1) return '';
-    const sign = value > 0 ? '+' : '';
-    return `${label}${sign}${value}`;
-  }
-
   let sliderPosition = $state(50);
   let containerRef: HTMLDivElement | null = $state(null);
   let isDragging = $state(false);

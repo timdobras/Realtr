@@ -19,7 +19,6 @@
   let cities = $state<City[]>([]);
   let isSubmitting = $state(false);
   let error = $state('');
-  let copiedPath = $state(false);
 
   onMount(async () => {
     try {
@@ -60,7 +59,6 @@
           );
           if (pathResult.success && pathResult.data?.full_path) {
             await navigator.clipboard.writeText(pathResult.data.full_path);
-            copiedPath = true;
           }
         } catch (copyErr) {
           console.error('Failed to copy path:', copyErr);
