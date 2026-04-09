@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { page } from '$app/stores';
   import { invoke } from '@tauri-apps/api/core';
   import { DatabaseService } from '$lib/services/databaseService';
-  import type { Property, AppConfig } from '$lib/types/database';
+  import { activeProperty } from '$lib/stores/activeProperty.svelte';
+  import type { AppConfig } from '$lib/types/database';
   import { showSuccess, showError } from '$lib/stores/notification';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import ImageGrid from '$lib/components/ImageGrid.svelte';
@@ -11,20 +11,31 @@
   import { openEditorWindow } from '$lib/utils/editorWindow';
   export const prerender = false;
 
-  let property: Property | null = $state(null);
-  // Only store filenames, not data URLs - LazyImage handles loading
+  // Property comes from the shared store loaded by the parent layout —
+  // no per-step refetch.
+  const property = $derived(activeProperty.property);
+  const loading = $derived(activeProperty.loading);
+  // Page-local errors (image loading, editor opening) merged with the
+  // store-level error from activeProperty so the UI shows whichever fired.
+  let pageError = $state('');
+  const error = $derived(activeProperty.error ?? pageError);
+
+  // Filenames only — LazyImage handles thumbnail loading.
   let originalImageFilenames: string[] = $state([]);
   let internetImageFilenames: string[] = $state([]);
-  let error = $state('');
-  let loading = $state(true);
   let copyingImages = $state(false);
   let copyProgress = $state({ current: 0, total: 0 });
   let showClearConfirm = $state(false);
-  let imageRefreshKey = $state(0); // Increment to force image refresh
+  let imageRefreshKey = $state(0);
   let useBuiltinEditor = $state(true);
 
-  // Get the id from the URL params
-  let propertyId = $derived(Number($page.params.id));
+  // Reload images whenever the active property changes (initial load,
+  // status update, or navigation between properties).
+  $effect(() => {
+    if (property) {
+      loadImages();
+    }
+  });
 
   // Only refresh images on focus if the window was blurred for >2s
   // (implies user went to an external editor, not just a quick alt-tab)
@@ -41,33 +52,15 @@
   onMount(async () => {
     window.addEventListener('blur', handleWindowBlur);
     window.addEventListener('focus', handleWindowFocus);
-    if (isNaN(propertyId) || propertyId < 1) {
-      error = 'Invalid property ID';
-      loading = false;
-      return;
-    }
 
+    // Editor preference is config-level, not property-level — fetch once.
     try {
-      loading = true;
-
-      // Load config to check editor preference
       const config = await invoke<AppConfig | null>('load_config');
       if (config) {
         useBuiltinEditor = config.use_builtin_editor ?? true;
       }
-
-      property = await DatabaseService.getPropertyById(propertyId);
-      if (!property) {
-        error = 'Property not found';
-        loading = false;
-        return;
-      }
-
-      await loadImages();
-    } catch (e) {
-      error = `Failed to load property: ${e}`;
-    } finally {
-      loading = false;
+    } catch {
+      // Non-fatal: fall back to built-in editor default.
     }
   });
 
@@ -88,7 +81,7 @@
       // Pre-generate thumbnails in parallel for faster display
       pregenerateThumbnails();
     } catch (e) {
-      error = `Failed to load images: ${e}`;
+      pageError = `Failed to load images: ${e}`;
     }
   }
 
@@ -182,10 +175,10 @@
       });
 
       if (!result.success) {
-        error = result.error || 'Failed to open image in editor';
+        pageError = result.error || 'Failed to open image in editor';
       }
     } catch (e) {
-      error = `Failed to open image: ${e}`;
+      pageError = `Failed to open image: ${e}`;
     }
   }
 

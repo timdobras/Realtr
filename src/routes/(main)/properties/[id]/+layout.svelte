@@ -1,25 +1,35 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { DatabaseService } from '$lib/services/databaseService';
-  import type { Property, PropertyStatus } from '$lib/types/database';
-  import { onMount } from 'svelte';
+  import { activeProperty } from '$lib/stores/activeProperty.svelte';
+  import type { PropertyStatus } from '$lib/types/database';
+  import { onDestroy } from 'svelte';
   export const prerender = false;
 
   let { children } = $props();
 
-  let property = $state<Property | null>(null);
-  let error = $state<String>('');
-  let loading = $state<Boolean>(true);
+  // Active property state lives in the shared store so step pages don't
+  // each have to refetch and so the status dropdown here stays in sync
+  // with whatever the step page is rendering.
+  const propertyId = $derived(Number($page.params.id));
+  const property = $derived(activeProperty.property);
+  const loading = $derived(activeProperty.loading);
+  const error = $derived(activeProperty.error);
+
+  // Auto-load whenever the URL :id changes.
+  $effect(() => {
+    activeProperty.load(propertyId);
+  });
+
+  onDestroy(() => activeProperty.clear());
+
   let isUpdatingStatus = $state(false);
   let statusError = $state<string | null>(null);
   let selectKey = $state(0); // Used to force dropdown reset on error
 
-  const propertyId = $derived(Number($page.params.id));
-
   async function handleStatusChange(newStatus: PropertyStatus) {
     if (!property || isUpdatingStatus) return;
 
-    // Clear any previous error
     statusError = null;
 
     try {
@@ -27,20 +37,18 @@
       const result = await DatabaseService.updatePropertyStatus(property.id!, newStatus);
 
       if (result.success) {
-        // Reload property to get updated data
-        property = await DatabaseService.getPropertyById(propertyId);
+        // Pull the fresh row through the store so step pages re-render too.
+        await activeProperty.refresh();
       } else {
-        // Show error to user and reset dropdown
         statusError = result.error || 'Failed to update status';
-        selectKey++; // Force dropdown to re-render with original value
-        // Auto-hide error after 5 seconds
+        selectKey++;
         setTimeout(() => {
           statusError = null;
         }, 5000);
       }
     } catch (err) {
       statusError = `Failed to update status: ${err}`;
-      selectKey++; // Force dropdown to re-render with original value
+      selectKey++;
       setTimeout(() => {
         statusError = null;
       }, 5000);
@@ -80,27 +88,7 @@
     return stepMatch ? parseInt(stepMatch[1]) : 0;
   });
 
-  onMount(async () => {
-    if (!propertyId) {
-      error = 'Invalid property ID';
-      loading = false;
-      return;
-    }
-
-    try {
-      loading = true;
-      property = await DatabaseService.getPropertyById(propertyId);
-      if (!property) {
-        error = 'Property not found';
-        loading = false;
-        return;
-      }
-    } catch (e) {
-      error = `Failed to load property: ${e}`;
-    } finally {
-      loading = false;
-    }
-  });
+  // Loading is handled by the activeProperty store via $effect above.
 </script>
 
 {#if loading}

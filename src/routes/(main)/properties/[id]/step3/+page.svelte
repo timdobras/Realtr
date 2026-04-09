@@ -1,8 +1,7 @@
 <script lang="ts">
-  import { page } from '$app/stores';
   import { invoke } from '@tauri-apps/api/core';
   import { DatabaseService } from '$lib/services/databaseService';
-  import type { Property } from '$lib/types/database';
+  import { activeProperty } from '$lib/stores/activeProperty.svelte';
   import { onMount, onDestroy } from 'svelte';
   import { showSuccess, showError } from '$lib/stores/notification';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
@@ -16,17 +15,25 @@
     inAggelia: boolean;
   }
 
-  let property: Property | null = $state(null);
+  // Property comes from the shared store loaded by the parent layout —
+  // no per-step refetch.
+  const property = $derived(activeProperty.property);
+  const loading = $derived(activeProperty.loading);
+  let pageError = $state('');
+  const error = $derived(activeProperty.error ?? pageError);
+
   let internetImages: ImageItem[] = $state([]);
   let aggeliaImages: ImageItem[] = $state([]);
-  let error = $state('');
-  let loading = $state(true);
   let copyingImages = $state(false);
   let showClearConfirm = $state(false);
-  let imageRefreshKey = $state(0); // Increment to force image refresh
+  let imageRefreshKey = $state(0);
 
-  // Get the id from the URL params
-  let propertyId = $derived(Number($page.params.id));
+  // Reload images whenever the active property changes.
+  $effect(() => {
+    if (property) {
+      loadImages();
+    }
+  });
 
   // Only refresh images on focus if the window was blurred for >2s
   let lastBlurTime = 0;
@@ -39,31 +46,9 @@
     }
   }
 
-  onMount(async () => {
+  onMount(() => {
     window.addEventListener('blur', handleWindowBlur);
     window.addEventListener('focus', handleWindowFocus);
-
-    if (!propertyId) {
-      error = 'Invalid property ID';
-      loading = false;
-      return;
-    }
-
-    try {
-      loading = true;
-      property = await DatabaseService.getPropertyById(propertyId);
-      if (!property) {
-        error = 'Property not found';
-        loading = false;
-        return;
-      }
-
-      await loadImages();
-    } catch (e) {
-      error = `Failed to load property: ${e}`;
-    } finally {
-      loading = false;
-    }
   });
 
   onDestroy(() => {
@@ -88,7 +73,7 @@
       // Pre-generate thumbnails in parallel for faster display
       pregenerateThumbnails();
     } catch (e) {
-      error = `Failed to load images: ${e}`;
+      pageError = `Failed to load images: ${e}`;
     }
   }
 
@@ -186,13 +171,13 @@
 
     const selectedImages = internetImages.filter((img) => img.selected);
     if (selectedImages.length === 0) {
-      error = 'Please select at least one image to copy to AGGELIA';
+      pageError = 'Please select at least one image to copy to AGGELIA';
       return;
     }
 
     try {
       copyingImages = true;
-      error = '';
+      pageError = '';
 
       const filenames = selectedImages.map((img) => img.filename);
 
@@ -223,17 +208,17 @@
 
     try {
       const result = await DatabaseService.openWithConfiguredEditor(
-        propertyId || 0,
+        property.id ?? 0,
         filename,
         'complex',
         'aggelia'
       );
 
       if (!result.success) {
-        error = result.error || 'Failed to open image in advanced editor';
+        pageError = result.error || 'Failed to open image in advanced editor';
       }
     } catch (e) {
-      error = `Failed to open image: ${e}`;
+      pageError = `Failed to open image: ${e}`;
     }
   }
 

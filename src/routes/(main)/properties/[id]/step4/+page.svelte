@@ -1,21 +1,23 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { invoke } from '@tauri-apps/api/core';
   import { DatabaseService } from '$lib/services/databaseService';
-  import type { Property } from '$lib/types/database';
+  import { activeProperty } from '$lib/stores/activeProperty.svelte';
   import { showSuccess, showError } from '$lib/stores/notification';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import ImageGrid from '$lib/components/ImageGrid.svelte';
   import ImageTile from '$lib/components/ImageTile.svelte';
 
-  // Just store filenames - LazyImage handles loading
-  let property: Property | null = $state(null);
+  // Property comes from the shared store loaded by the parent layout —
+  // no per-step refetch.
+  const property = $derived(activeProperty.property);
+  const loading = $derived(activeProperty.loading);
+  let pageError = $state('');
+  const error = $derived(activeProperty.error ?? pageError);
+
   let watermarkFilenames: string[] = $state([]);
   let watermarkAggeliaFilenames: string[] = $state([]);
-  let error = $state('');
-  let loading = $state(true);
   let processingWatermarksVar = $state(false);
   let watermarkConfig: {
     imagePath?: string;
@@ -28,10 +30,14 @@
   let showWatermarkConfirm = $state(false);
   let showClearConfirm = $state(false);
   let fillingTo25 = $state(false);
-  let imageRefreshKey = $state(0); // Increment to force image refresh
+  let imageRefreshKey = $state(0);
 
-  // Get the id from the URL params
-  let propertyId = $derived(Number($page.params.id));
+  // Reload watermark images whenever the active property changes.
+  $effect(() => {
+    if (property) {
+      loadWatermarkImages();
+    }
+  });
 
   // Only refresh images on focus if the window was blurred for >2s
   let lastBlurTime = 0;
@@ -63,32 +69,11 @@
     });
   }
 
-  onMount(async () => {
+  onMount(() => {
     window.addEventListener('blur', handleWindowBlur);
     window.addEventListener('focus', handleWindowFocus);
-
-    if (!propertyId) {
-      error = 'Invalid property ID';
-      loading = false;
-      return;
-    }
-
-    try {
-      loading = true;
-      property = await DatabaseService.getPropertyById(propertyId);
-      if (!property) {
-        error = 'Property not found';
-        loading = false;
-        return;
-      }
-
-      await loadWatermarkConfig();
-      await loadWatermarkImages();
-    } catch (e) {
-      error = `Failed to load property: ${e}`;
-    } finally {
-      loading = false;
-    }
+    // Watermark config is global, fetch once.
+    loadWatermarkConfig();
   });
 
   onDestroy(() => {
@@ -162,7 +147,7 @@
 
   function applyWatermarksToAllImages() {
     if (!property || !watermarkConfig?.imagePath) {
-      error = 'Watermark not configured. Please set up watermark in settings first.';
+      pageError = 'Watermark not configured. Please set up watermark in settings first.';
       return;
     }
 
@@ -175,7 +160,7 @@
 
     try {
       processingWatermarksVar = true;
-      error = '';
+      pageError = '';
 
       // Get count of images to process
       const internetImages: string[] = await invoke('list_internet_images', {
@@ -276,10 +261,10 @@
       });
 
       if (!result.success) {
-        error = result.error || 'Failed to open image';
+        pageError = result.error || 'Failed to open image';
       }
     } catch (e) {
-      error = `Failed to open image: ${e}`;
+      pageError = `Failed to open image: ${e}`;
     }
   }
 

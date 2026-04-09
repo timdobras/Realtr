@@ -45,10 +45,18 @@ export default [
       sourceType: 'module',
       // ESLint v9 flat config takes a map of globalName -> 'readonly'/'writable',
       // not the v8 env style ({ browser: true }). The previous config was a no-op
-      // and failed CI on every browser/Node global.
+      // and failed CI on every browser/Node global. Svelte 5 rune names are added
+      // explicitly so .svelte.ts store files don't trip no-undef.
       globals: {
         ...globals.browser,
-        ...globals.node
+        ...globals.node,
+        $state: 'readonly',
+        $derived: 'readonly',
+        $effect: 'readonly',
+        $props: 'readonly',
+        $bindable: 'readonly',
+        $inspect: 'readonly',
+        $host: 'readonly'
       }
     },
     plugins: {

@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { page } from '$app/stores';
   import { beforeNavigate } from '$app/navigation';
   import { invoke } from '@tauri-apps/api/core';
   import { dndzone } from 'svelte-dnd-action';
   import { flip } from 'svelte/animate';
   import { DatabaseService } from '$lib/services/databaseService';
-  import type { Property, AppConfig } from '$lib/types/database';
+  import { activeProperty } from '$lib/stores/activeProperty.svelte';
+  import type { AppConfig } from '$lib/types/database';
   import BatchEnhanceModal from '$lib/components/BatchEnhanceModal.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import LazyImage from '$lib/components/LazyImage.svelte';
@@ -20,19 +20,22 @@
     newName?: string;
   }
 
-  let property: Property | null = $state(null);
+  // Property comes from the shared store loaded by the parent layout —
+  // no per-step refetch.
+  const property = $derived(activeProperty.property);
+  const loading = $derived(activeProperty.loading);
+  let pageError = $state('');
+  const error = $derived(activeProperty.error ?? pageError);
+
   let internetImages: ImageItem[] = $state([]);
-  let error = $state('');
-  let loading = $state(true);
   let renamingImages = $state(false);
   let baseFileName = $state('');
   let dragDisabled = $state(false);
-  let isDragging = $state(false); // Track drag state
+  let isDragging = $state(false);
   let showEnhanceModal = $state(false);
-  let imageRefreshKey = $state(0); // Increment to force image refresh
+  let imageRefreshKey = $state(0);
 
-  // Image editor setting
-  let useBuiltinEditor = $state(true); // Default to built-in editor
+  let useBuiltinEditor = $state(true);
 
   // Track unsaved reorder changes
   let originalOrder: string[] = $state([]);
@@ -40,8 +43,12 @@
   let showUnsavedDialog = $state(false);
   let pendingNavigation: (() => void) | null = $state(null);
 
-  // Get the id from the URL params
-  let propertyId = $derived(Number($page.params.id));
+  // Reload INTERNET listing when the active property is (re)loaded.
+  $effect(() => {
+    if (property) {
+      loadInternetImages();
+    }
+  });
 
   // Only refresh images on focus if the window was blurred for >2s
   let lastBlurTime = 0;
@@ -54,7 +61,6 @@
     }
   }
 
-  // Check if current order differs from original
   function checkForChanges() {
     if (originalOrder.length === 0) return false;
     const currentOrder = internetImages.map((img) => img.id);
@@ -75,37 +81,17 @@
   });
 
   onMount(async () => {
-    // Listen for window focus/blur to refresh images after returning from external editor
     window.addEventListener('blur', handleWindowBlur);
     window.addEventListener('focus', handleWindowFocus);
 
-    if (!propertyId) {
-      error = 'Invalid property ID';
-      loading = false;
-      return;
-    }
-
+    // Editor preference is config-level, fetch once.
     try {
-      loading = true;
-
-      // Load config to check editor preference
       const config = await invoke<AppConfig | null>('load_config');
       if (config) {
         useBuiltinEditor = config.use_builtin_editor ?? true;
       }
-
-      property = await DatabaseService.getPropertyById(propertyId);
-      if (!property) {
-        error = 'Property not found';
-        loading = false;
-        return;
-      }
-
-      await loadInternetImages();
-    } catch (e) {
-      error = `Failed to load property: ${e}`;
-    } finally {
-      loading = false;
+    } catch {
+      // Non-fatal.
     }
   });
 
@@ -173,7 +159,7 @@
         );
       }
     } catch (e) {
-      error = `Failed to load images: ${e}`;
+      pageError = `Failed to load images: ${e}`;
     }
   }
 
@@ -275,10 +261,10 @@
       });
 
       if (!result.success) {
-        error = result.error || 'Failed to open image in editor';
+        pageError = result.error || 'Failed to open image in editor';
       }
     } catch (e) {
-      error = `Failed to open image: ${e}`;
+      pageError = `Failed to open image: ${e}`;
     }
   }
 
