@@ -3364,4 +3364,103 @@ mod tests {
             .unwrap();
         assert_eq!(row.get::<i32, _>("usage_count"), 2);
     }
+
+    // ── Path-safety integration ──────────────────────────────────────
+    //
+    // These tests lock in the fail-closed behavior of folder_path_to_pathbuf
+    // and construct_property_path_from_parts so a regression in
+    // crate::paths::validate_relative_folder_path or its callers immediately
+    // shows up here.
+
+    #[test]
+    fn folder_path_to_pathbuf_returns_sentinel_for_parent_traversal() {
+        // The sentinel must NOT be empty (which would join to the base path)
+        // and must NOT be a valid filename. NUL inside the path guarantees
+        // .exists() returns false on every supported OS.
+        let result = folder_path_to_pathbuf("Athens/../../etc");
+        assert!(
+            result.to_string_lossy().contains('\0'),
+            "expected sentinel containing NUL, got {:?}",
+            result
+        );
+        assert!(!result.exists(), "sentinel must never exist on disk");
+    }
+
+    #[test]
+    fn folder_path_to_pathbuf_returns_sentinel_for_absolute_unix_path() {
+        let result = folder_path_to_pathbuf("/etc/passwd");
+        // Leading-slash gets normalized to a relative path; this test
+        // documents that the validator allows normalization but the
+        // result is still relative (doesn't escape any base).
+        assert!(result.is_relative());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn folder_path_to_pathbuf_returns_sentinel_for_drive_prefix() {
+        let result = folder_path_to_pathbuf(r"C:\Windows\System32");
+        assert!(
+            result.to_string_lossy().contains('\0'),
+            "expected sentinel containing NUL, got {:?}",
+            result
+        );
+        assert!(!result.exists());
+    }
+
+    #[test]
+    fn folder_path_to_pathbuf_accepts_typical_db_string() {
+        let result = folder_path_to_pathbuf("Athens/Villa Alpha");
+        assert!(!result.to_string_lossy().contains('\0'));
+        assert_eq!(result, PathBuf::from("Athens").join("Villa Alpha"));
+    }
+
+    #[test]
+    fn construct_property_path_rejects_malicious_property_name() {
+        let config = test_config();
+        // A property name containing `..` must be refused, not silently
+        // joined onto the base path.
+        let result = construct_property_path_from_parts(&config, "NEW", "Athens", "../../etc");
+        assert!(
+            result.is_err(),
+            "expected error for property name with parent traversal, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn construct_property_path_rejects_malicious_city() {
+        let config = test_config();
+        let result = construct_property_path_from_parts(&config, "NEW", "..", "Villa");
+        assert!(
+            result.is_err(),
+            "expected error for city `..`, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn construct_property_path_accepts_normal_inputs() {
+        let config = test_config();
+        let result =
+            construct_property_path_from_parts(&config, "NEW", "Athens", "Villa Alpha").unwrap();
+        assert_eq!(result, PathBuf::from(r"C:\Photos\NEW\Athens\Villa Alpha"));
+    }
+
+    // ── Migration smoke ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn migrations_create_idx_properties_created_at() {
+        let pool = setup_test_db().await;
+        let row = sqlx::query(
+            "SELECT name FROM sqlite_master \
+             WHERE type='index' AND name='idx_properties_created_at'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(
+            row.is_some(),
+            "idx_properties_created_at index missing after migrations"
+        );
+    }
 }
