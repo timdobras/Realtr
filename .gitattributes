@@ -1,0 +1,6 @@
+# ts-rs writes generated TypeScript bindings with LF line endings.
+# On Windows, git's autocrlf would otherwise check them out as CRLF,
+# `cargo test export_bindings` would regenerate them as LF, and the
+# CI step that verifies bindings-vs-committed would diff every line.
+# Force LF for the entire generated tree to keep CI deterministic.
+src/lib/types/generated/** text eol=lf
