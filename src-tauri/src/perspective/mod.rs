@@ -96,7 +96,6 @@ impl PerspectiveCommandResult {
             message: Some(message.to_string()),
         }
     }
-
 }
 
 // ============================================================================

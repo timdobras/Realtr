@@ -1409,9 +1409,7 @@ mod tests {
 
             // Run analysis WITH preprocessing (CPU bilateral + CLAHE)
             let processor = ImageProcessor::Cpu;
-            let preprocessed = preprocess_for_detection_no_exif(
-                &scaled, &processor,
-            );
+            let preprocessed = preprocess_for_detection_no_exif(&scaled, &processor);
             eprintln!("  [PREPROCESSED - bilateral + CLAHE]");
             let (pre_result, _) = analyze_at_resolution(&preprocessed);
             eprintln!(
@@ -1432,8 +1430,7 @@ mod tests {
     #[ignore]
     fn test_visual_verify() {
         let test_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_images");
-        let output_dir =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("test_images_rotated");
+        let output_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_images_rotated");
 
         if !test_dir.exists() {
             eprintln!("No test_images directory, skipping");

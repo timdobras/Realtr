@@ -26,9 +26,7 @@ pub use thumbnails::{
     get_gallery_thumbnail_path, get_thumbnail_paths_batch, list_thumbnails,
     pregenerate_gallery_thumbnails,
 };
-pub use types::{
-    City, CommandResult, Property, ScanResult,
-};
+pub use types::{City, CommandResult, Property, ScanResult};
 pub use watermark::{
     clear_watermark_folders, copy_and_watermark_images, generate_watermark_preview,
     list_watermark_aggelia_images, list_watermark_images,
@@ -99,10 +97,7 @@ fn clear_files_in_dir(dir: &Path) -> (usize, Vec<String>) {
 /// Two-pass rename: old → temp, then temp → final.
 /// Avoids name conflicts when files swap positions (e.g. A→B, B→A).
 /// Returns (renamed_count, errors).
-fn rename_files_two_pass(
-    dir: &Path,
-    rename_map: &[(String, String)],
-) -> (usize, Vec<String>) {
+fn rename_files_two_pass(dir: &Path, rename_map: &[(String, String)]) -> (usize, Vec<String>) {
     let mut renamed = 0;
     let mut errors = Vec::new();
     let mut temp_renames = Vec::new();
@@ -148,10 +143,7 @@ fn rename_files_two_pass(
 
 /// Copy image files from `src_dir` to `dest_dir`, skipping files that already exist in dest.
 /// Returns (copied_count, errors).
-fn copy_new_images_to_dir(
-    src_dir: &Path,
-    dest_dir: &Path,
-) -> (usize, Vec<String>) {
+fn copy_new_images_to_dir(src_dir: &Path, dest_dir: &Path) -> (usize, Vec<String>) {
     let files_to_copy: Vec<(PathBuf, PathBuf)> = match fs::read_dir(src_dir) {
         Ok(entries) => entries
             .filter_map(|e| e.ok())
@@ -678,7 +670,11 @@ pub async fn set_property_code(
 
     // Extract the actual folder name from the stored folder_path (format: "city/folder_name")
     // This ensures we use the real folder name on disk, not a reconstructed one
-    let old_folder_name = folder_path.split('/').next_back().unwrap_or(&name).to_string();
+    let old_folder_name = folder_path
+        .split('/')
+        .next_back()
+        .unwrap_or(&name)
+        .to_string();
 
     // For folder names, replace "/" with "-" since "/" is not allowed in folder names
     // This allows codes like "204905/44538" to be saved as "204905-44538" in the folder name
