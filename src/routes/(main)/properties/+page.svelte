@@ -218,7 +218,6 @@
   });
 
   async function onPropertyAdded() {
-    showAddModal = false;
     await loadProperties();
   }
 
@@ -282,7 +281,19 @@
   let codeFilterLabel = $derived(
     CODE_FILTER_OPTIONS.find((o) => o.value === codeFilter)?.label ?? 'Code'
   );
+
+  function handleShortcut(e: KeyboardEvent) {
+    if (e.ctrlKey || e.metaKey || e.altKey || !e.shiftKey || e.repeat) return;
+    if (e.key.toLowerCase() !== 'n') return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (showAddModal) return;
+    e.preventDefault();
+    showAddModal = true;
+  }
 </script>
+
+<svelte:window onkeydown={handleShortcut} />
 
 <div class="bg-background-0 min-h-full">
   <!-- Header -->

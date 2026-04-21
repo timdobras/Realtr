@@ -25,11 +25,11 @@
   // Ref to the input element for setting value directly
   let inputRef = $state<HTMLInputElement | null>(null);
 
-  // Sync searchValue when value prop changes externally (e.g., when editing a property)
+  // Sync searchValue when value prop changes externally (editing a property, or
+  // parent resetting the field to an empty string after a successful submit).
   $effect(() => {
-    if (!isEditing && value && value !== searchValue) {
+    if (!isEditing && value !== searchValue) {
       searchValue = value;
-      // Also update the actual input element
       if (inputRef) {
         inputRef.value = value;
       }

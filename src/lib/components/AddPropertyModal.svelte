@@ -19,8 +19,10 @@
   let cities = $state<City[]>([]);
   let isSubmitting = $state(false);
   let error = $state('');
+  let nameInput = $state<HTMLInputElement | null>(null);
 
   onMount(async () => {
+    nameInput?.focus();
     try {
       cities = await DatabaseService.getCities();
     } catch (err) {
@@ -65,6 +67,11 @@
         }
 
         onPropertyAdded();
+        name = '';
+        city = '';
+        notes = '';
+        error = '';
+        nameInput?.focus();
       } else {
         error = result.error || 'Failed to create property';
       }
@@ -96,6 +103,7 @@
         <input
           type="text"
           bind:value={name}
+          bind:this={nameInput}
           oninput={(e) => {
             name = e.currentTarget.value.toUpperCase();
             e.currentTarget.value = name;
