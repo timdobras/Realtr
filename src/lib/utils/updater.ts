@@ -1,4 +1,5 @@
 import { showInfo } from '$lib/stores/notification';
+import { getVersion } from '@tauri-apps/api/app';
 import { ask } from '@tauri-apps/plugin-dialog';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check, type Update } from '@tauri-apps/plugin-updater';
@@ -91,7 +92,8 @@ export async function checkForUpdates(showNoUpdateDialog = false) {
       await relaunch();
     }
   } else if (showNoUpdateDialog) {
-    await ask('You are already running the latest version.', {
+    const currentVersion = await getVersion();
+    await ask(`You are already running the latest version (v${currentVersion}).`, {
       title: 'No Updates'
     });
   }
