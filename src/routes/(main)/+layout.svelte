@@ -1,11 +1,13 @@
 <script lang="ts">
   import { page } from '$app/stores';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { browser } from '$app/environment';
   import {
     checkForUpdatesSilently,
     updateAvailable,
-    promptInstallUpdate
+    promptInstallUpdate,
+    startPeriodicUpdateChecks,
+    isCheckingForUpdates
   } from '$lib/utils/updater';
   import { getVersion } from '@tauri-apps/api/app';
   import CustomTitleBar from '$lib/components/CustomTitleBar.svelte';
@@ -14,6 +16,7 @@
   let isDarkMode = $state(false);
   let currentPath = $derived($page.url.pathname);
   let appVersion = $state('');
+  let cancelPeriodicChecks: (() => void) | null = null;
 
   // Navigation with SVG icons
   const navItems = [
@@ -77,6 +80,12 @@
       }
     }
     setTimeout(() => checkForUpdatesSilently(), 5000);
+    cancelPeriodicChecks = startPeriodicUpdateChecks();
+  });
+
+  onDestroy(() => {
+    cancelPeriodicChecks?.();
+    cancelPeriodicChecks = null;
   });
 </script>
 
@@ -159,6 +168,16 @@
                 </svg>
                 <span>Update</span>
               </button>
+            {:else if $isCheckingForUpdates}
+              <span
+                class="text-foreground-400 flex items-center gap-1.5 text-xs"
+                title="Checking for updates"
+              >
+                <span
+                  class="border-foreground-400 inline-block h-2.5 w-2.5 animate-spin rounded-full border border-t-transparent"
+                ></span>
+                Checking...
+              </span>
             {/if}
           </div>
         </div>

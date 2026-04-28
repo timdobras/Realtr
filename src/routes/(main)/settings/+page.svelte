@@ -2,10 +2,12 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { open } from '@tauri-apps/plugin-dialog';
+  import { getVersion } from '@tauri-apps/api/app';
   import { DatabaseService } from '$lib/services/databaseService';
   import type { ScanResult, WatermarkConfig } from '$lib/types/database';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { showSuccess, showError, showInfo } from '$lib/stores/notification';
+  import { checkForUpdates, isCheckingForUpdates } from '$lib/utils/updater';
 
   // TypeScript interfaces
   interface AppConfig {
@@ -60,9 +62,14 @@
       id: 'database' as const,
       label: 'Database',
       icon: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />'
+    },
+    {
+      id: 'updates' as const,
+      label: 'Updates',
+      icon: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />'
     }
   ];
-  let activeTab = $state<'folders' | 'editors' | 'watermark' | 'database'>('folders');
+  let activeTab = $state<'folders' | 'editors' | 'watermark' | 'database' | 'updates'>('folders');
 
   // Folder configuration
   const folderConfigs: {
@@ -207,10 +214,26 @@
   let scanResult = $state<ScanResult | null>(null);
   let showScanResult = $state(false);
 
+  // Updates state
+  let appVersion = $state('');
+
   // Load config on mount
   onMount(async () => {
     await loadConfig();
+    try {
+      appVersion = await getVersion();
+    } catch {
+      appVersion = '';
+    }
   });
+
+  async function runUpdateCheck(): Promise<void> {
+    try {
+      await checkForUpdates(true);
+    } catch (error) {
+      showError(`Update check failed: ${error}`);
+    }
+  }
 
   async function loadConfig(): Promise<void> {
     try {
@@ -1038,6 +1061,48 @@
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- Updates Tab -->
+      {:else if activeTab === 'updates'}
+        <div class="max-w-3xl space-y-5">
+          <div>
+            <h2 class="text-foreground-900 text-sm font-semibold">Application Updates</h2>
+            <p class="text-foreground-600 mt-0.5 text-xs">
+              Check for new releases and install updates from GitHub
+            </p>
+          </div>
+
+          <div class="bg-background-50 border-background-200 border p-4">
+            <div class="mb-3 flex items-center justify-between">
+              <div>
+                <h3 class="text-foreground-900 text-sm font-semibold">Current version</h3>
+                <p class="text-foreground-600 mt-0.5 font-mono text-xs">
+                  {appVersion ? `v${appVersion}` : 'Unknown'}
+                </p>
+              </div>
+              <button
+                onclick={runUpdateCheck}
+                disabled={$isCheckingForUpdates}
+                class="bg-accent-500 hover:bg-accent-600 flex-shrink-0 px-4 py-2 text-sm font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {#if $isCheckingForUpdates}
+                  <span class="flex items-center gap-2">
+                    <div
+                      class="h-3 w-3 animate-spin rounded-full border border-white border-t-transparent"
+                    ></div>
+                    Checking...
+                  </span>
+                {:else}
+                  Check for updates
+                {/if}
+              </button>
+            </div>
+            <p class="text-foreground-500 text-xs">
+              Updates are checked automatically on startup and every 6 hours while the app is
+              running.
+            </p>
           </div>
         </div>
       {/if}
