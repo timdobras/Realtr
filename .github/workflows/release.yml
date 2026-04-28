@@ -81,4 +81,4 @@ jobs:
           releaseName: 'Realtr v${{ steps.version.outputs.VERSION }}'
           releaseBody: 'Download and install this version.'
           releaseDraft: false
-          prerelease: true
+          prerelease: false
