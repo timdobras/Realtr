@@ -19,7 +19,8 @@ const MAX_BODY_CHARS = 500;
 const DEFAULT_PERIODIC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 function formatUpdateMessage(update: Update): string {
-  const header = `A new version (${update.version}) is available.`;
+  const released = update.date ? ` (released ${update.date.slice(0, 10)})` : '';
+  const header = `A new version (${update.version}) is available${released}.`;
   const body = update.body?.trim();
   if (!body) {
     return `${header} Would you like to update now?`;
