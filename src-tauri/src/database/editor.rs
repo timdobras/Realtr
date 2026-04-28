@@ -7,7 +7,7 @@
 use tokio::process::Command;
 
 #[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x080_0000;
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 use crate::database::get_property_base_path;
 use crate::database::types::CommandResult;
@@ -185,7 +185,11 @@ pub async fn open_image_in_editor(
     // on non-UTF8 Windows paths.
     let result = if let Some(editor_path) = &config.fast_editor_path {
         // Use custom fast editor
-        Command::new(editor_path).arg(&image_path).spawn()
+        let mut cmd = Command::new(editor_path);
+        cmd.arg(&image_path);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.spawn()
     } else if cfg!(target_os = "windows") {
         Command::new("cmd")
             .arg("/C")
@@ -269,7 +273,11 @@ pub async fn open_image_in_advanced_editor(
     // Use configured complex editor or system default. See note in
     // open_image_in_editor — passing &PathBuf avoids to_str() unwraps.
     let result = if let Some(editor_path) = &config.complex_editor_path {
-        Command::new(editor_path).arg(&image_path).spawn()
+        let mut cmd = Command::new(editor_path);
+        cmd.arg(&image_path);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.spawn()
     } else if cfg!(target_os = "windows") {
         Command::new("cmd")
             .arg("/C")
