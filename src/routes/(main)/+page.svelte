@@ -12,8 +12,18 @@
     completed: 0,
     todayProcessed: 0,
     doneWithCode: 0,
-    doneWithoutCode: 0
+    doneWithoutCode: 0,
+    propertiesWithCodes: 0,
+    totalCodes: 0
   });
+
+  function parseCodes(code: string | null | undefined): string[] {
+    if (!code) return [];
+    return code
+      .split(',')
+      .map((c) => c.trim())
+      .filter((c) => c.length > 0);
+  }
 
   let recentProperties = $state<Property[]>([]);
   let isLoading = $state(true);
@@ -47,6 +57,15 @@
       const doneWithCode = doneProperties.filter((p) => p.code && p.code.trim() !== '').length;
       const doneWithoutCode = doneProperties.length - doneWithCode;
 
+      // Calculate code counts across all properties (comma-separated codes; '/' stays in one code)
+      let propertiesWithCodes = 0;
+      let totalCodes = 0;
+      for (const p of properties) {
+        const codes = parseCodes(p.code);
+        if (codes.length > 0) propertiesWithCodes += 1;
+        totalCodes += codes.length;
+      }
+
       // Calculate today's processed (completed today)
       const todayProcessed = completed.filter(
         (p) => isValidDate(p.updated_at) && isToday(p.updated_at)
@@ -58,7 +77,9 @@
         completed: completed.length,
         todayProcessed,
         doneWithCode,
-        doneWithoutCode
+        doneWithoutCode,
+        propertiesWithCodes,
+        totalCodes
       };
 
       // Get recent properties (last 5)
@@ -150,6 +171,18 @@
       <div class="bg-background-50 border-background-200 border p-4">
         <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">Today</p>
         <p class="text-foreground-900 mt-1 text-2xl font-semibold">{stats.todayProcessed}</p>
+      </div>
+
+      <!-- Properties With Codes -->
+      <div class="bg-background-50 border-background-200 border p-4">
+        <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">With Codes</p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{stats.propertiesWithCodes}</p>
+      </div>
+
+      <!-- Total Codes -->
+      <div class="bg-background-50 border-background-200 border p-4">
+        <p class="text-foreground-600 text-xs font-medium tracking-wide uppercase">Total Codes</p>
+        <p class="text-foreground-900 mt-1 text-2xl font-semibold">{stats.totalCodes}</p>
       </div>
     </div>
 
