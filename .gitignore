@@ -10,6 +10,10 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 ~/.tauri/myapp.key
 
+# Tauri updater signing key (NEVER commit)
+tauri-key.key
+tauri-key.key.pub
+
 # Windows NUL device artifacts
 nul
 src-tauri/nul
